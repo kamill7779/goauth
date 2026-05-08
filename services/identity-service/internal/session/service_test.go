@@ -11,6 +11,7 @@ import (
 	"example.com/identity-service/internal/config"
 	"example.com/identity-service/internal/store"
 	"github.com/golang-jwt/jwt/v5"
+	"gorm.io/gorm"
 )
 
 func newTestService(t *testing.T) (*Service, *store.User) {
@@ -94,7 +95,7 @@ func TestIssueTokensStoresRefreshTokenAsHashOnly(t *testing.T) {
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
-		TenantID: 42,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -140,7 +141,7 @@ func TestRefreshRotatesToken(t *testing.T) {
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
-		TenantID: 42,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -172,7 +173,7 @@ func TestReusingRotatedTokenRevokesFamily(t *testing.T) {
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
-		TenantID: 42,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -201,7 +202,7 @@ func TestLogoutRevokesSingleSession(t *testing.T) {
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
-		TenantID: 42,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -277,7 +278,7 @@ func TestRefreshReuseWritesAuditLog(t *testing.T) {
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
-		TenantID: 42,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -298,4 +299,57 @@ func TestRefreshReuseWritesAuditLog(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("refresh reuse audit log count = %d, want 1", count)
 	}
+}
+
+func TestRefreshRejectsStaleTokenVersion(t *testing.T) {
+	service, user := newTestService(t)
+	tenantRecord := createTenantAndMember(t, service, user.ID)
+	pair := issueSessionPair(t, service, *user, tenantRecord.ID)
+
+	if err := service.db.Model(&store.User{}).Where("id = ?", user.ID).
+		Update("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+		t.Fatalf("bump token version: %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected stale token version to fail")
+	}
+}
+
+func TestRefreshRejectsDisabledMembership(t *testing.T) {
+	service, user := newTestService(t)
+	tenantRecord := createTenantAndMember(t, service, user.ID)
+	pair := issueSessionPair(t, service, *user, tenantRecord.ID)
+
+	if err := service.db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ?", tenantRecord.ID, user.ID).
+		Update("status", store.MemberStatusDisabled).Error; err != nil {
+		t.Fatalf("disable member: %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected disabled membership to fail")
+	}
+}
+
+func createTenantAndMember(t *testing.T, service *Service, userID int64) store.Tenant {
+	t.Helper()
+
+	tenantRecord := store.Tenant{
+		Name:   "Acme",
+		Slug:   "acme",
+		Status: store.TenantStatusActive,
+	}
+	if err := service.db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	member := store.TenantMember{
+		TenantID: tenantRecord.ID,
+		UserID:   userID,
+		Status:   store.MemberStatusActive,
+	}
+	if err := service.db.Create(&member).Error; err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	return tenantRecord
 }

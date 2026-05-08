@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
@@ -16,7 +17,7 @@ func TestMeRouteReturnsClaimsForValidBearerToken(t *testing.T) {
 	service, user := newTestService(t)
 	pair, err := service.IssueTokens(t.Context(), IssueTokensInput{
 		User:     *user,
-		TenantID: 7,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -56,8 +57,8 @@ func TestMeRouteReturnsClaimsForValidBearerToken(t *testing.T) {
 	if payload.Data.Email != user.Email {
 		t.Fatalf("email = %q, want %q", payload.Data.Email, user.Email)
 	}
-	if payload.Data.Tenant != 7 {
-		t.Fatalf("tenant = %d, want 7", payload.Data.Tenant)
+	if payload.Data.Tenant != 0 {
+		t.Fatalf("tenant = %d, want 0", payload.Data.Tenant)
 	}
 }
 
@@ -84,7 +85,7 @@ func TestRefreshSetsOIDCAuthorizeCookie(t *testing.T) {
 	service, user := newTestService(t)
 	pair, err := service.IssueTokens(t.Context(), IssueTokensInput{
 		User:     *user,
-		TenantID: 7,
+		TenantID: 0,
 		ClientID: "web-client",
 	})
 	if err != nil {
@@ -122,4 +123,42 @@ func TestRefreshSetsOIDCAuthorizeCookie(t *testing.T) {
 	if !found {
 		t.Fatal("expected oidc authorize cookie to be set")
 	}
+}
+
+func TestRefreshRejectsDisabledUser(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	pair := issueSessionPair(t, service, *user, 0)
+
+	if err := service.db.Model(&store.User{}).Where("id = ?", user.ID).Update("status", store.UserStatusDisabled).Error; err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+
+	router := gin.New()
+	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", strings.NewReader(`{"refresh_token":"`+pair.RefreshToken+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+}
+
+func issueSessionPair(t *testing.T, service *Service, user store.User, tenantID int64) *TokenPair {
+	t.Helper()
+
+	pair, err := service.IssueTokens(t.Context(), IssueTokensInput{
+		User:     user,
+		TenantID: tenantID,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+	return pair
 }

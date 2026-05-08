@@ -68,6 +68,8 @@ func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
 func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, privateKey *rsa.PrivateKey) *gin.Engine {
 	sessionService := session.NewService(db, cfg, privateKey)
 	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
+	authMiddleware := session.AuthMiddleware(sessionService, &privateKey.PublicKey)
+	systemMiddleware := session.SystemUserMiddleware(sessionService)
 	auditService := audit.NewService(db)
 	sessionService.SetAuditRecorder(auditService)
 	oidcService := oidc.NewService(db, cfg, privateKey)
@@ -82,7 +84,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		})
 		idpService := idp.NewService(db, githubProvider)
 		idpService.SetAuditRecorder(auditService)
-		registrars = append(registrars, idp.NewHandler(idpService, sessionService, session.AuthMiddleware(&privateKey.PublicKey)))
+		registrars = append(registrars, idp.NewHandler(idpService, sessionService, authMiddleware))
 	}
 
 	router := httpserver.NewRouter(cfg, registrars...)
@@ -97,9 +99,9 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	oidc.RegisterRoutes(router, oidcService)
 	httpserver.RegisterRoutes(
 		router,
-		rbac.NewHandler(rbacService),
-		tenant.NewHandler(tenantService),
-		user.NewHandler(userService),
+		rbac.NewHandler(rbacService, authMiddleware, systemMiddleware),
+		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
+		user.NewHandler(userService, authMiddleware, systemMiddleware),
 	)
 
 	if redisClient != nil {

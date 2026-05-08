@@ -4,6 +4,7 @@ import (
 	"crypto/rsa"
 	"errors"
 	stdhttp "net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -12,8 +13,13 @@ import (
 
 const contextClaimsKey = "session_claims"
 
-func AuthMiddleware(publicKey *rsa.PublicKey) gin.HandlerFunc {
+func AuthMiddleware(service *Service, publicKey *rsa.PublicKey) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if service == nil || publicKey == nil {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid auth configuration"})
+			return
+		}
+
 		header := c.GetHeader("Authorization")
 		tokenString, ok := strings.CutPrefix(header, "Bearer ")
 		if !ok || strings.TrimSpace(tokenString) == "" {
@@ -38,7 +44,45 @@ func AuthMiddleware(publicKey *rsa.PublicKey) gin.HandlerFunc {
 			return
 		}
 
+		if err := service.validateAccessClaims(c.Request.Context(), *claims); err != nil {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+
 		c.Set(contextClaimsKey, *claims)
+		c.Next()
+	}
+}
+
+func SystemUserMiddleware(service *Service) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if service == nil {
+			c.AbortWithStatusJSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+
+		claims, ok := ClaimsFromContext(c)
+		if !ok {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+			return
+		}
+
+		userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+		if err != nil {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+
+		ok, err = service.isSystemUser(c.Request.Context(), userID)
+		if err != nil {
+			c.AbortWithStatusJSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !ok {
+			c.AbortWithStatusJSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+
 		c.Next()
 	}
 }
