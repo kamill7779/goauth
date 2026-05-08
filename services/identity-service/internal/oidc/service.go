@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -102,11 +101,7 @@ func RegisterRoutes(router gin.IRoutes, service *Service) {
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.GET("/.well-known/openid-configuration", h.discovery)
 	router.GET("/oauth2/jwks", h.jwks)
-	if h.service.publicKey != nil {
-		router.GET("/oauth2/authorize", session.AuthMiddleware(h.service.publicKey), h.authorize)
-	} else {
-		router.GET("/oauth2/authorize", h.authorize)
-	}
+	router.GET("/oauth2/authorize", h.authorize)
 	router.POST("/oauth2/token", h.token)
 	router.GET("/oauth2/userinfo", h.userInfo)
 	router.POST("/oauth2/introspect", h.introspect)

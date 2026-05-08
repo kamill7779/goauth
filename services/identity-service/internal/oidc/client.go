@@ -227,11 +227,11 @@ func isSupportedTokenEndpointAuthMethod(value string) bool {
 
 func parseBasicAuthHeader(header string) (string, string, bool) {
 	header = strings.TrimSpace(header)
-	if !strings.HasPrefix(header, "Basic ") {
+	if len(header) < len("Basic ") || !strings.EqualFold(header[:len("Basic ")], "Basic ") {
 		return "", "", false
 	}
 
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Basic "))
+	decoded, err := base64.StdEncoding.DecodeString(header[len("Basic "):])
 	if err != nil {
 		return "", "", false
 	}

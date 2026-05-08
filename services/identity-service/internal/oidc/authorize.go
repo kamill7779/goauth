@@ -52,8 +52,14 @@ func (h *Handler) authorize(c *gin.Context) {
 		return
 	}
 
-	sessionClaims, ok := session.ClaimsFromContext(c)
-	if !ok {
+	cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName)
+	if err != nil || strings.TrimSpace(cookieValue) == "" {
+		oauthError(c, http.StatusUnauthorized, "login_required")
+		return
+	}
+
+	sessionClaims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey)
+	if err != nil {
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
