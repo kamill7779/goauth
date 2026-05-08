@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"log"
+	"strings"
 
 	"example.com/identity-service/internal/auth"
 	"example.com/identity-service/internal/cache"
@@ -67,7 +68,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
 
 	var registrars []httpserver.Registrar
-	if cfg.GitHubOAuthEnabled {
+	if githubIDPConfigured(cfg) {
 		githubProvider := githubidp.New(githubidp.Config{
 			ClientID:     cfg.GitHubClientID,
 			ClientSecret: cfg.GitHubClientSecret,
@@ -94,4 +95,11 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	}
 
 	return router
+}
+
+func githubIDPConfigured(cfg config.Config) bool {
+	return cfg.GitHubOAuthEnabled &&
+		strings.TrimSpace(cfg.GitHubClientID) != "" &&
+		strings.TrimSpace(cfg.GitHubClientSecret) != "" &&
+		strings.TrimSpace(cfg.GitHubRedirectURI) != ""
 }
