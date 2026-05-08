@@ -69,6 +69,10 @@ func (h *Handler) authorize(c *gin.Context) {
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
+	if !h.service.hasActiveSession(ctx, userID, sessionClaims.SessionID) {
+		oauthError(c, http.StatusUnauthorized, "login_required")
+		return
+	}
 	user, err := h.service.loadUser(ctx, userID)
 	if err != nil || user.Status != store.UserStatusActive {
 		oauthError(c, http.StatusUnauthorized, "login_required")

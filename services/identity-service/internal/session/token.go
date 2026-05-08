@@ -185,3 +185,13 @@ func hashToken(token string) string {
 func (s *Service) RefreshTokenTTL() time.Duration {
 	return s.refreshTokenTTL
 }
+
+func (s *Service) OIDCAuthorizeCookieTTL() time.Duration {
+	if s.accessTokenTTL > 0 {
+		return s.accessTokenTTL
+	}
+	if s.refreshTokenTTL > 0 {
+		return s.refreshTokenTTL
+	}
+	return 15 * time.Minute
+}

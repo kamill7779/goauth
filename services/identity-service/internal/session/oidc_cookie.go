@@ -32,6 +32,7 @@ func (s *Service) IssueOIDCAuthorizeCookie(user store.User, tenantID int64, sess
 	}
 
 	issuedAt := s.now()
+	expiresAt := issuedAt.Add(s.OIDCAuthorizeCookieTTL())
 	claims := OIDCAuthorizeClaims{
 		Purpose:   oidcAuthorizeCookiePurpose,
 		TenantID:  tenantID,
@@ -40,7 +41,7 @@ func (s *Service) IssueOIDCAuthorizeCookie(user store.User, tenantID int64, sess
 			Subject:   strconv.FormatInt(user.ID, 10),
 			IssuedAt:  jwt.NewNumericDate(issuedAt),
 			NotBefore: jwt.NewNumericDate(issuedAt),
-			ExpiresAt: jwt.NewNumericDate(issuedAt.Add(s.refreshTokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
 	}
 
@@ -71,6 +72,10 @@ func (s *Service) IssueOIDCAuthorizeCookieBySessionID(ctx context.Context, sessi
 }
 
 func ParseOIDCAuthorizeCookie(raw string, publicKey *rsa.PublicKey) (*OIDCAuthorizeClaims, error) {
+	if publicKey == nil {
+		return nil, errors.New("missing public key")
+	}
+
 	token, err := jwt.ParseWithClaims(raw, &OIDCAuthorizeClaims{}, func(token *jwt.Token) (any, error) {
 		if token.Method != jwt.SigningMethodRS256 {
 			return nil, errors.New("unexpected signing method")

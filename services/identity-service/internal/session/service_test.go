@@ -109,6 +109,31 @@ func TestIssueTokensStoresRefreshTokenAsHashOnly(t *testing.T) {
 	}
 }
 
+func TestIssueOIDCAuthorizeCookieUsesShortLivedExpiry(t *testing.T) {
+	service, user := newTestService(t)
+
+	value, err := service.IssueOIDCAuthorizeCookie(*user, 42, "browser-session")
+	if err != nil {
+		t.Fatalf("IssueOIDCAuthorizeCookie() error = %v", err)
+	}
+
+	claims, err := ParseOIDCAuthorizeCookie(value, &service.privateKey.PublicKey)
+	if err != nil {
+		t.Fatalf("ParseOIDCAuthorizeCookie() error = %v", err)
+	}
+	if claims.SessionID != "browser-session" {
+		t.Fatalf("SessionID = %q, want browser-session", claims.SessionID)
+	}
+	if claims.ExpiresAt == nil || claims.IssuedAt == nil {
+		t.Fatal("expected issued and expiry timestamps")
+	}
+
+	got := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
+	if got != service.accessTokenTTL {
+		t.Fatalf("cookie ttl = %s, want %s", got, service.accessTokenTTL)
+	}
+}
+
 func TestRefreshRotatesToken(t *testing.T) {
 	service, user := newTestService(t)
 

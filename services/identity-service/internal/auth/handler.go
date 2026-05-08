@@ -118,7 +118,7 @@ func (h *Handler) login(c *gin.Context) {
 		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.session.RefreshTokenTTL().Seconds()))
+	session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
 
 	httpserver.Success(c, stdhttp.StatusOK, pair)
 }

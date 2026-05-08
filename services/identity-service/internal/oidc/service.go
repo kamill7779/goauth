@@ -134,6 +134,20 @@ func (s *Service) loadUser(ctx context.Context, userID int64) (*store.User, erro
 	return &user, nil
 }
 
+func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	if userID == 0 || sessionID == "" {
+		return false
+	}
+
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&store.RefreshToken{}).
+		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, sessionID, s.now()).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
 func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 	if s.publicKey == nil {
 		return nil, errors.New("missing public key")
