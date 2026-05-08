@@ -10,10 +10,14 @@ import (
 	"example.com/identity-service/internal/config"
 	httpserver "example.com/identity-service/internal/http"
 	"example.com/identity-service/internal/mailer"
+	"example.com/identity-service/internal/oidc"
 	"example.com/identity-service/internal/rbac"
 	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"example.com/identity-service/internal/tenant"
+	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 func main() {
@@ -21,8 +25,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-
-	router := httpserver.NewRouter(cfg)
 
 	db, err := store.OpenDB(cfg)
 	if err != nil {
@@ -36,8 +38,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("load signing key: %v", err)
 	}
-	sessionService := session.NewService(db, cfg, privateKey)
-	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
 
 	redisClient, err := cache.OpenRedis(cfg)
 	if err != nil {
@@ -45,11 +45,25 @@ func main() {
 		redisClient = nil
 	}
 
+	router := buildRouter(cfg, db, privateKey, redisClient)
+
+	if err := router.Run(cfg.HTTPAddr); err != nil {
+		log.Fatalf("run server: %v", err)
+	}
+}
+
+func buildRouter(cfg config.Config, db *gorm.DB, privateKey *rsa.PrivateKey, redisClient *redis.Client) *gin.Engine {
+	router := httpserver.NewRouter(cfg)
+
+	sessionService := session.NewService(db, cfg, privateKey)
+	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
+	oidcService := oidc.NewService(db, cfg, privateKey)
 	rbacService := rbac.NewService(db, redisClient)
 	tenantService := tenant.NewService(db, rbacService)
 
 	authGroup := router.Group("/v1/auth")
 	sessionHandler.RegisterRoutes(authGroup)
+	oidc.RegisterRoutes(router, oidcService)
 	rbac.NewHandler(rbacService).RegisterRoutes(router)
 	tenant.NewHandler(tenantService).RegisterRoutes(router)
 
@@ -59,9 +73,7 @@ func main() {
 		authHandler.RegisterRoutes(authGroup)
 	}
 
-	if err := router.Run(cfg.HTTPAddr); err != nil {
-		log.Fatalf("run server: %v", err)
-	}
+	return router
 }
 
 func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
