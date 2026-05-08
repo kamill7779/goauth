@@ -82,6 +82,30 @@ func TestAdminAndAuthzRoutesRejectNonSystemUser(t *testing.T) {
 	}
 }
 
+func TestAdminRoutesRejectRootEmailAliasWithoutSystemRole(t *testing.T) {
+	router, db, sessionService, _, _ := newIntegrationRouter(t)
+	rootAlias := &store.User{
+		Email:        "root@tenant.test",
+		DisplayName:  "root alias",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := db.Create(rootAlias).Error; err != nil {
+		t.Fatalf("db.Create(rootAlias) error = %v", err)
+	}
+	pair := issueIntegrationTokens(t, sessionService, *rootAlias, 0)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/admin/users", nil)
+	request.Header.Set("Authorization", "Bearer "+pair.AccessToken)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+}
+
 func TestMyPermissionsUsesAuthenticatedUserInsteadOfQueryOverride(t *testing.T) {
 	router, db, sessionService, regularUser, otherUser := newIntegrationRouter(t)
 	tenantID := seedTenantPermission(t, db, regularUser.ID)

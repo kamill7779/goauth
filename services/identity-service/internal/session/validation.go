@@ -62,10 +62,12 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 
 func (s *Service) isSystemUser(ctx context.Context, userID int64) (bool, error) {
 	var user store.User
-	if err := s.db.WithContext(ctx).First(&user, userID).Error; err != nil {
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
+		First(&user).Error; err != nil {
 		return false, err
 	}
-	if strings.EqualFold(user.Email, "root@example.com") || strings.HasPrefix(strings.ToLower(user.Email), "root@") {
+	if strings.EqualFold(user.Email, "root@example.com") {
 		return true, nil
 	}
 
@@ -74,6 +76,7 @@ func (s *Service) isSystemUser(ctx context.Context, userID int64) (bool, error) 
 		Table("roles").
 		Joins("JOIN member_roles ON member_roles.role_id = roles.id").
 		Joins("JOIN tenant_members ON tenant_members.id = member_roles.member_id").
+		Where("tenant_members.status = ? AND tenant_members.deleted_at IS NULL", store.MemberStatusActive).
 		Where("tenant_members.user_id = ?", userID).
 		Where("roles.is_system = ? OR roles.code IN ?", true, []string{"root", "system-admin", "system_admin"}).
 		Count(&count).Error; err != nil {

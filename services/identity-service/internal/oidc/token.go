@@ -142,7 +142,7 @@ func (h *Handler) introspect(c *gin.Context) {
 	}
 
 	if claims, err := h.service.parseAccessToken(rawToken); err == nil {
-		if claims.ClientID != client.ClientID {
+		if claims.ClientID != client.ClientID || h.service.validateAccessClaims(c.Request.Context(), *claims) != nil {
 			c.JSON(http.StatusOK, gin.H{"active": false})
 			return
 		}
@@ -164,7 +164,7 @@ func (h *Handler) introspect(c *gin.Context) {
 	var refreshToken store.RefreshToken
 	if err := h.service.db.WithContext(c.Request.Context()).
 		Where("token_hash = ?", h.service.hashToken(rawToken)).
-		First(&refreshToken).Error; err == nil && refreshToken.ClientID == client.ClientID && refreshToken.RevokedAt == nil && refreshToken.ExpiresAt.After(h.service.now()) {
+		First(&refreshToken).Error; err == nil && refreshToken.ClientID == client.ClientID && h.service.validateRefreshToken(c.Request.Context(), refreshToken) {
 		c.JSON(http.StatusOK, gin.H{
 			"active":     true,
 			"sub":        strconv.FormatInt(refreshToken.UserID, 10),
@@ -265,14 +265,15 @@ func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *sto
 	}
 
 	refreshRecord := store.RefreshToken{
-		TokenHash: s.hashToken(refreshToken),
-		FamilyID:  familyID,
-		SessionID: sessionID,
-		UserID:    user.ID,
-		TenantID:  client.TenantID,
-		ClientID:  client.ClientID,
-		ExpiresAt: s.now().Add(s.refreshTokenTTL),
-		CreatedAt: s.now(),
+		TokenHash:    s.hashToken(refreshToken),
+		FamilyID:     familyID,
+		SessionID:    sessionID,
+		UserID:       user.ID,
+		TenantID:     client.TenantID,
+		TokenVersion: user.TokenVersion,
+		ClientID:     client.ClientID,
+		ExpiresAt:    s.now().Add(s.refreshTokenTTL),
+		CreatedAt:    s.now(),
 	}
 	if err := db.WithContext(ctx).Create(&refreshRecord).Error; err != nil {
 		return nil, err
@@ -297,10 +298,11 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 	scopes := scopeSet(scope)
 
 	claims := accessClaims{
-		Scope:     scope,
-		ClientID:  clientID,
-		TenantID:  tenantID,
-		SessionID: sessionID,
+		Scope:        scope,
+		ClientID:     clientID,
+		TenantID:     tenantID,
+		SessionID:    sessionID,
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   strconv.FormatInt(user.ID, 10),

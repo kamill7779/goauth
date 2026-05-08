@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +54,7 @@ type accessClaims struct {
 	ClientID      string `json:"client_id,omitempty"`
 	TenantID      int64  `json:"tid,omitempty"`
 	SessionID     string `json:"sid,omitempty"`
+	TokenVersion  int    `json:"ver,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -145,6 +147,16 @@ func (s *Service) loadUser(ctx context.Context, userID int64) (*store.User, erro
 	return &user, nil
 }
 
+func (s *Service) loadActiveUser(ctx context.Context, userID int64) (*store.User, error) {
+	var user store.User
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
+		First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
 func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	if userID == 0 || sessionID == "" {
@@ -167,9 +179,49 @@ func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantI
 	var count int64
 	err := s.db.WithContext(ctx).
 		Model(&store.TenantMember{}).
-		Where("user_id = ? AND tenant_id = ? AND status = ?", userID, tenantID, store.MemberStatusActive).
+		Where("user_id = ? AND tenant_id = ? AND status = ? AND deleted_at IS NULL", userID, tenantID, store.MemberStatusActive).
 		Count(&count).Error
 	return err == nil && count > 0
+}
+
+func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims) error {
+	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil {
+		return err
+	}
+
+	user, err := s.loadActiveUser(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.TokenVersion != claims.TokenVersion {
+		return gorm.ErrRecordNotFound
+	}
+	if !s.hasActiveSession(ctx, userID, claims.SessionID) {
+		return gorm.ErrRecordNotFound
+	}
+	if claims.TenantID != 0 && !s.hasActiveTenantMembership(ctx, userID, claims.TenantID) {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
+func (s *Service) validateRefreshToken(ctx context.Context, token store.RefreshToken) bool {
+	if token.RevokedAt != nil || token.ExpiresAt.Before(s.now()) {
+		return false
+	}
+
+	user, err := s.loadActiveUser(ctx, token.UserID)
+	if err != nil {
+		return false
+	}
+	if user.TokenVersion != token.TokenVersion {
+		return false
+	}
+	if token.TenantID != 0 && !s.hasActiveTenantMembership(ctx, token.UserID, token.TenantID) {
+		return false
+	}
+	return true
 }
 
 func (s *Service) resolvePostLogoutRedirectURI(ctx context.Context, clientID, redirectURI string) (string, error) {

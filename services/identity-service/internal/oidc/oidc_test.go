@@ -355,6 +355,29 @@ func TestUserInfoReturnsClaimsForValidAccessToken(t *testing.T) {
 	}
 }
 
+func TestUserInfoRejectsStaleTokenVersion(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 1)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("userinfo-stale-verifier"), "nonce-userinfo-stale")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "userinfo-stale-verifier")
+
+	if err := db.Model(&store.User{}).
+		Where("id = ?", user.ID).
+		Update("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+		t.Fatalf("bump token version: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+	request.Header.Set("Authorization", "Bearer "+tokenSet.AccessToken)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_token")
+}
+
 func TestIDTokenAndUserInfoRespectGrantedScope(t *testing.T) {
 	_, router, db, privateKey, user, client := newTestProvider(t)
 	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 1)
@@ -713,6 +736,22 @@ func TestIntrospectRestrictsTokensToOwningClient(t *testing.T) {
 	}
 }
 
+func TestIntrospectReturnsInactiveForDisabledMembership(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 1)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("inactive-membership-verifier"), "nonce-inactive-membership")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "inactive-membership-verifier")
+
+	if err := db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ?", client.TenantID, user.ID).
+		Update("status", store.MemberStatusDisabled).Error; err != nil {
+		t.Fatalf("disable tenant member: %v", err)
+	}
+
+	assertIntrospectInactive(t, router, client.ClientID, "super-secret", tokenSet.AccessToken)
+	assertIntrospectInactive(t, router, client.ClientID, "super-secret", tokenSet.RefreshToken)
+}
+
 type exchangedTokens struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
@@ -939,4 +978,32 @@ func basicAuthHeader(clientID, clientSecret string) string {
 
 func basicAuthHeaderWithScheme(scheme, clientID, clientSecret string) string {
 	return scheme + " " + base64.StdEncoding.EncodeToString([]byte(clientID+":"+clientSecret))
+}
+
+func assertIntrospectInactive(t *testing.T, router http.Handler, clientID, clientSecret, token string) {
+	t.Helper()
+
+	form := url.Values{
+		"token":         {token},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/introspect", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload struct {
+		Active bool `json:"active"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.Active {
+		t.Fatalf("token %q introspected as active, want inactive", token)
+	}
 }

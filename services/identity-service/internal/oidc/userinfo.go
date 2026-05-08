@@ -20,6 +20,10 @@ func (h *Handler) userInfo(c *gin.Context) {
 		oauthError(c, http.StatusUnauthorized, "invalid_token")
 		return
 	}
+	if err := h.service.validateAccessClaims(c.Request.Context(), *claims); err != nil {
+		oauthError(c, http.StatusUnauthorized, "invalid_token")
+		return
+	}
 
 	response := gin.H{
 		"sub": claims.Subject,
