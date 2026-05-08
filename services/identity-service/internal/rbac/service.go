@@ -65,7 +65,8 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 		Joins("JOIN member_roles ON member_roles.role_id = roles.id").
 		Joins("JOIN tenant_members ON tenant_members.id = member_roles.member_id").
 		Joins("JOIN users ON users.id = tenant_members.user_id").
-		Where("users.id = ? AND tenant_members.tenant_id = ?", userID, tenantID).
+		Where("users.id = ? AND tenant_members.tenant_id = ? AND roles.tenant_id = ?", userID, tenantID, tenantID).
+		Where("roles.tenant_id = tenant_members.tenant_id").
 		Where("users.status = ? AND tenant_members.status = ?", store.UserStatusActive, store.MemberStatusActive).
 		Where("users.deleted_at IS NULL AND tenant_members.deleted_at IS NULL").
 		Order("permissions.code ASC").

@@ -2,6 +2,7 @@ package tenant_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"example.com/identity-service/internal/audit"
@@ -199,5 +200,140 @@ func TestRoleAssignmentChangesWriteAuditLogs(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("role assignment audit log count = %d, want 2", count)
+	}
+}
+
+func TestAssignRolesRejectsCrossTenantRoles(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	user := store.User{
+		Email:        "cross-tenant@example.com",
+		DisplayName:  "cross-tenant",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := service.DB().Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	tenantA, err := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Tenant A", Slug: "tenant-a"})
+	if err != nil {
+		t.Fatalf("CreateTenant(tenantA) error = %v", err)
+	}
+	tenantB, err := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Tenant B", Slug: "tenant-b"})
+	if err != nil {
+		t.Fatalf("CreateTenant(tenantB) error = %v", err)
+	}
+
+	member, err := service.AddMember(ctx, tenant.AddMemberInput{
+		TenantID: tenantA.ID,
+		UserID:   user.ID,
+		Status:   store.MemberStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("AddMember() error = %v", err)
+	}
+	role, err := service.CreateRole(ctx, tenant.CreateRoleInput{
+		TenantID: tenantB.ID,
+		Name:     "Other Tenant Admin",
+		Code:     "other-admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+
+	err = service.AssignRoles(ctx, member.ID, []int64{role.ID})
+	if err == nil {
+		t.Fatal("AssignRoles() error = nil, want tenant mismatch error")
+	}
+	if !strings.Contains(err.Error(), "tenant") {
+		t.Fatalf("AssignRoles() error = %v, want tenant mismatch error", err)
+	}
+
+	var count int64
+	if err := service.DB().Model(&store.MemberRole{}).
+		Where("member_id = ? AND role_id = ?", member.ID, role.ID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count member roles: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("member role count = %d, want 0", count)
+	}
+}
+
+func TestTenantAndRoleLifecycleWritesAuditLogs(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	tenantRecord, err := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	if err != nil {
+		t.Fatalf("CreateTenant() error = %v", err)
+	}
+
+	updatedName := "Acme Updated"
+	updatedSlug := "acme-updated"
+	updatedStatus := store.TenantStatusDisabled
+	if _, err := service.UpdateTenant(ctx, tenantRecord.ID, tenant.UpdateTenantInput{
+		Name:   &updatedName,
+		Slug:   &updatedSlug,
+		Status: &updatedStatus,
+	}); err != nil {
+		t.Fatalf("UpdateTenant() error = %v", err)
+	}
+
+	role, err := service.CreateRole(ctx, tenant.CreateRoleInput{
+		TenantID: tenantRecord.ID,
+		Name:     "Admin",
+		Code:     "admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+
+	updatedRoleName := "Editor"
+	updatedRoleCode := "editor"
+	updatedRoleDescription := "Updated role"
+	if _, err := service.UpdateRole(ctx, role.ID, tenant.UpdateRoleInput{
+		Name:        &updatedRoleName,
+		Code:        &updatedRoleCode,
+		Description: &updatedRoleDescription,
+	}); err != nil {
+		t.Fatalf("UpdateRole() error = %v", err)
+	}
+
+	permission := store.Permission{Resource: "project", Action: "read", Code: "project:read"}
+	if err := service.DB().Create(&permission).Error; err != nil {
+		t.Fatalf("create permission: %v", err)
+	}
+
+	if err := service.GrantPermissions(ctx, role.ID, []int64{permission.ID}); err != nil {
+		t.Fatalf("GrantPermissions() error = %v", err)
+	}
+	if err := service.RevokePermission(ctx, role.ID, permission.ID); err != nil {
+		t.Fatalf("RevokePermission() error = %v", err)
+	}
+	if err := service.DeleteRole(ctx, role.ID); err != nil {
+		t.Fatalf("DeleteRole() error = %v", err)
+	}
+
+	actions := []string{
+		"tenant_created",
+		"tenant_updated",
+		"role_created",
+		"role_updated",
+		"role_deleted",
+		"role_permissions_granted",
+		"role_permission_revoked",
+	}
+
+	var count int64
+	if err := service.DB().Model(&store.AuditLog{}).
+		Where("action IN ?", actions).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != int64(len(actions)) {
+		t.Fatalf("lifecycle audit log count = %d, want %d", count, len(actions))
 	}
 }

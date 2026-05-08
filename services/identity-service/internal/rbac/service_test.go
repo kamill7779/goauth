@@ -197,6 +197,37 @@ func TestUserCanHaveDifferentRolesAcrossTenants(t *testing.T) {
 	}
 }
 
+func TestListPermissionsIgnoresCrossTenantRoleBindings(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	user := createUser(t, env.db, "mixed@example.com", store.UserStatusActive)
+	tenantA, _ := env.tenant.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Tenant A", Slug: "tenant-a"})
+	tenantB, _ := env.tenant.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Tenant B", Slug: "tenant-b"})
+	memberA, _ := env.tenant.AddMember(ctx, tenant.AddMemberInput{TenantID: tenantA.ID, UserID: user.ID, Status: store.MemberStatusActive})
+	roleA, _ := env.tenant.CreateRole(ctx, tenant.CreateRoleInput{TenantID: tenantA.ID, Name: "Reader", Code: "reader"})
+	roleB, _ := env.tenant.CreateRole(ctx, tenant.CreateRoleInput{TenantID: tenantB.ID, Name: "Writer", Code: "writer"})
+	readPermission := createPermission(t, env.db, "project:read")
+	writePermission := createPermission(t, env.db, "project:write")
+	_ = env.tenant.GrantPermissions(ctx, roleA.ID, []int64{readPermission.ID})
+	_ = env.tenant.GrantPermissions(ctx, roleB.ID, []int64{writePermission.ID})
+
+	if err := env.db.Create(&store.MemberRole{MemberID: memberA.ID, RoleID: roleA.ID}).Error; err != nil {
+		t.Fatalf("db.Create(member role A) error = %v", err)
+	}
+	if err := env.db.Create(&store.MemberRole{MemberID: memberA.ID, RoleID: roleB.ID}).Error; err != nil {
+		t.Fatalf("db.Create(member role B) error = %v", err)
+	}
+
+	perms, err := env.rbac.ListPermissions(ctx, user.ID, tenantA.ID)
+	if err != nil {
+		t.Fatalf("ListPermissions() error = %v", err)
+	}
+	if !slices.Equal(perms, []string{"project:read"}) {
+		t.Fatalf("perms = %#v, want [project:read]", perms)
+	}
+}
+
 func TestPermissionCacheInvalidatesAfterRoleChanges(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
