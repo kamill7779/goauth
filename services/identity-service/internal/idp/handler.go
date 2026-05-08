@@ -7,10 +7,16 @@ import (
 	"errors"
 	stdhttp "net/http"
 	"strconv"
+	"strings"
 
 	httpserver "example.com/identity-service/internal/http"
 	"example.com/identity-service/internal/session"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	githubOAuthStateCookieName    = "goauth_github_oauth_state"
+	githubOAuthStateCookieMaxAgeS = 10 * 60
 )
 
 type SessionIssuer interface {
@@ -59,14 +65,10 @@ func (h *Handler) start(c *gin.Context) {
 		return
 	}
 
-	state := c.Query("state")
-	if state == "" {
-		var err error
-		state, err = h.newState()
-		if err != nil {
-			c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+	state, err := h.newState()
+	if err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	authURL, err := h.service.Start("github", state, AuthCodeOptions{
@@ -77,6 +79,7 @@ func (h *Handler) start(c *gin.Context) {
 		return
 	}
 
+	setGitHubOAuthStateCookie(c, state)
 	c.Redirect(stdhttp.StatusFound, authURL)
 }
 
@@ -91,6 +94,18 @@ func (h *Handler) callback(c *gin.Context) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "missing code"})
 		return
 	}
+
+	stateCookie, err := c.Cookie(githubOAuthStateCookieName)
+	if err != nil || strings.TrimSpace(stateCookie) == "" {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid state"})
+		return
+	}
+	state := strings.TrimSpace(c.Query("state"))
+	if state == "" || state != strings.TrimSpace(stateCookie) {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid state"})
+		return
+	}
+	defer clearGitHubOAuthStateCookie(c)
 
 	result, err := h.service.Authenticate(c.Request.Context(), "github", code, c.Query("redirect_uri"))
 	if err != nil {
@@ -231,4 +246,14 @@ func randomState() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(bytes), nil
+}
+
+func setGitHubOAuthStateCookie(c *gin.Context, value string) {
+	c.SetSameSite(stdhttp.SameSiteLaxMode)
+	c.SetCookie(githubOAuthStateCookieName, value, githubOAuthStateCookieMaxAgeS, "/", "", true, true)
+}
+
+func clearGitHubOAuthStateCookie(c *gin.Context) {
+	c.SetSameSite(stdhttp.SameSiteLaxMode)
+	c.SetCookie(githubOAuthStateCookieName, "", -1, "/", "", true, true)
 }

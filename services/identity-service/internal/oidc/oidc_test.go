@@ -491,6 +491,33 @@ func TestLogoutRevokesSessionAndClearsOIDCCookie(t *testing.T) {
 	}
 }
 
+func TestLogoutRejectsSessionIDThatDoesNotMatchCurrentOIDCCookie(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	currentCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
+	_, victimSessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID+"&post_logout_redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&session_id="+victimSessionID, nil)
+	request.AddCookie(currentCookie)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_request")
+
+	var count int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("session_id = ? AND revoked_at IS NULL", victimSessionID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if count == 0 {
+		t.Fatal("expected victim session to remain active")
+	}
+}
+
 func TestCreateClientRejectsUnsupportedTokenEndpointAuthMethod(t *testing.T) {
 	service, _, _, _, _, _ := newTestProvider(t)
 
