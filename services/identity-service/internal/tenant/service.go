@@ -2,7 +2,9 @@ package tenant
 
 import (
 	"context"
+	"strconv"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/rbac"
 	"example.com/identity-service/internal/store"
 	"gorm.io/gorm"
@@ -10,8 +12,9 @@ import (
 )
 
 type Service struct {
-	db   *gorm.DB
-	rbac *rbac.Service
+	db    *gorm.DB
+	rbac  *rbac.Service
+	audit audit.Recorder
 }
 
 type CreateTenantInput struct {
@@ -49,9 +52,18 @@ type UpdateRoleInput struct {
 
 func NewService(db *gorm.DB, rbacService *rbac.Service) *Service {
 	return &Service{
-		db:   db,
-		rbac: rbacService,
+		db:    db,
+		rbac:  rbacService,
+		audit: audit.NoopRecorder{},
 	}
+}
+
+func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
+	if recorder == nil {
+		s.audit = audit.NoopRecorder{}
+		return
+	}
+	s.audit = recorder
 }
 
 func (s *Service) DB() *gorm.DB {
@@ -119,6 +131,18 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.T
 	if err := s.db.WithContext(ctx).Create(member).Error; err != nil {
 		return nil, err
 	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    input.TenantID,
+		Action:      audit.ActionTenantMembershipAdded,
+		TargetType:  audit.TargetTypeTenantMember,
+		TargetID:    strconv.FormatInt(member.ID, 10),
+		Metadata: map[string]any{
+			"user_id": member.UserID,
+		},
+	}); err != nil {
+		return nil, err
+	}
 	return member, nil
 }
 
@@ -141,9 +165,28 @@ func (s *Service) RemoveMember(ctx context.Context, tenantID, userID int64) erro
 		}
 	}
 
-	return s.db.WithContext(ctx).
+	if err := s.db.WithContext(ctx).
 		Where("tenant_id = ? AND user_id = ?", tenantID, userID).
-		Delete(&store.TenantMember{}).Error
+		Delete(&store.TenantMember{}).Error; err != nil {
+		return err
+	}
+
+	for _, member := range members {
+		if err := s.audit.Record(ctx, audit.Entry{
+			ActorUserID: 0,
+			TenantID:    tenantID,
+			Action:      audit.ActionTenantMembershipRemoved,
+			TargetType:  audit.TargetTypeTenantMember,
+			TargetID:    strconv.FormatInt(member.ID, 10),
+			Metadata: map[string]any{
+				"user_id": member.UserID,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) ListRoles(ctx context.Context, tenantID int64) ([]store.Role, error) {
@@ -245,7 +288,7 @@ func (s *Service) RevokePermission(ctx context.Context, roleID, permissionID int
 }
 
 func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int64) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, roleID := range roleIDs {
 			record := store.MemberRole{
 				MemberID: memberID,
@@ -256,19 +299,51 @@ func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int
 			}
 		}
 		if s.rbac != nil {
-			return s.rbac.InvalidateMemberPermissions(ctx, memberID)
+			if err := s.rbac.InvalidateMemberPermissions(ctx, memberID); err != nil {
+				return err
+			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	for _, roleID := range roleIDs {
+		if err := s.audit.Record(ctx, audit.Entry{
+			Action:     audit.ActionRoleAssigned,
+			TargetType: audit.TargetTypeRole,
+			TargetID:   strconv.FormatInt(roleID, 10),
+			Metadata: map[string]any{
+				"member_id": memberID,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) RemoveRole(ctx context.Context, memberID, roleID int64) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if s.rbac != nil {
 			if err := s.rbac.InvalidateMemberPermissions(ctx, memberID); err != nil {
 				return err
 			}
 		}
-		return tx.Where("member_id = ? AND role_id = ?", memberID, roleID).Delete(&store.MemberRole{}).Error
+		if err := tx.Where("member_id = ? AND role_id = ?", memberID, roleID).Delete(&store.MemberRole{}).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		Action:     audit.ActionRoleRemoved,
+		TargetType: audit.TargetTypeRole,
+		TargetID:   strconv.FormatInt(roleID, 10),
+		Metadata: map[string]any{
+			"member_id": memberID,
+		},
 	})
 }

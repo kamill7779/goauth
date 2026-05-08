@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/mailer"
 	"example.com/identity-service/internal/store"
 	"github.com/redis/go-redis/v9"
@@ -46,6 +47,7 @@ type Service struct {
 	db     *gorm.DB
 	redis  *redis.Client
 	mailer MailSender
+	audit  audit.Recorder
 	now    func() time.Time
 }
 
@@ -58,8 +60,17 @@ func NewService(db *gorm.DB, redisClient *redis.Client, mailSender MailSender) *
 		db:     db,
 		redis:  redisClient,
 		mailer: mailSender,
+		audit:  audit.NoopRecorder{},
 		now:    time.Now,
 	}
+}
+
+func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
+	if recorder == nil {
+		s.audit = audit.NoopRecorder{}
+		return
+	}
+	s.audit = recorder
 }
 
 func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (string, error) {
@@ -128,6 +139,17 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, err
 	if err := CheckPassword(user.PasswordHash, input.Password); err != nil {
 		return nil, ErrInvalidCredential
 	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: user.ID,
+		Action:      audit.ActionLogin,
+		TargetType:  audit.TargetTypeUser,
+		TargetID:    audit.UserTargetID(user.ID),
+		Metadata: map[string]any{
+			"email": user.Email,
+		},
+	}); err != nil {
+		return nil, err
+	}
 	return &user, nil
 }
 
@@ -149,6 +171,14 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 		return err
 	}
 
+	var user store.User
+	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrInvalidCredential
+		}
+		return err
+	}
+
 	hash, err := HashPassword(input.NewPassword)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
@@ -156,6 +186,7 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 
 	result := s.db.WithContext(ctx).Model(&store.User{}).Where("email = ?", email).Updates(map[string]any{
 		"password_hash": hash,
+		"token_version": gorm.Expr("token_version + 1"),
 		"updated_at":    s.now(),
 	})
 	if result.Error != nil {
@@ -166,6 +197,17 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 	}
 
 	_ = s.redis.Del(ctx, emailCodeKey(EmailCodePurposePasswordReset, email)).Err()
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: user.ID,
+		Action:      audit.ActionPasswordReset,
+		TargetType:  audit.TargetTypeUser,
+		TargetID:    audit.UserTargetID(user.ID),
+		Metadata: map[string]any{
+			"source": "self_service",
+		},
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"example.com/identity-service/internal/audit"
 	"github.com/alicebob/miniredis/v2"
 
 	"example.com/identity-service/internal/cache"
@@ -142,5 +143,80 @@ func TestLoginRejectsDisabledUser(t *testing.T) {
 		Password: "p@ssw0rd!",
 	}); err == nil {
 		t.Fatal("expected disabled user login to fail")
+	}
+}
+
+func TestLoginWritesAuditLog(t *testing.T) {
+	service, _, _ := newTestService(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+
+	hash, err := HashPassword("p@ssw0rd!")
+	if err != nil {
+		t.Fatalf("HashPassword() error = %v", err)
+	}
+
+	user := store.User{
+		Email:        "active@example.com",
+		DisplayName:  "active",
+		PasswordHash: hash,
+		Status:       store.UserStatusActive,
+	}
+	if err := service.db.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if _, err := service.Login(context.Background(), LoginInput{
+		Email:    user.Email,
+		Password: "p@ssw0rd!",
+	}); err != nil {
+		t.Fatalf("Login() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.AuditLog{}).Where("action = ?", audit.ActionLogin).Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("login audit log count = %d, want 1", count)
+	}
+}
+
+func TestResetPasswordWritesAuditLog(t *testing.T) {
+	service, _, _ := newTestService(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "reset@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+	user, err := service.Register(context.Background(), RegisterInput{
+		Email:       "reset@example.com",
+		DisplayName: "reset",
+		Password:    "old-password",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	resetCode, err := service.SendEmailCode(context.Background(), EmailCodePurposePasswordReset, user.Email)
+	if err != nil {
+		t.Fatalf("SendEmailCode(reset) error = %v", err)
+	}
+	if err := service.ResetPassword(context.Background(), ResetPasswordInput{
+		Email:       user.Email,
+		NewPassword: "new-password",
+		EmailCode:   resetCode,
+	}); err != nil {
+		t.Fatalf("ResetPassword() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.AuditLog{}).Where("action = ?", audit.ActionPasswordReset).Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("password reset audit log count = %d, want 1", count)
 	}
 }

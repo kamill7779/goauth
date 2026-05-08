@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"log"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/auth"
 	"example.com/identity-service/internal/cache"
 	"example.com/identity-service/internal/config"
@@ -14,6 +15,7 @@ import (
 	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"example.com/identity-service/internal/tenant"
+	"example.com/identity-service/internal/user"
 )
 
 func main() {
@@ -38,6 +40,8 @@ func main() {
 	}
 	sessionService := session.NewService(db, cfg, privateKey)
 	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
+	auditService := audit.NewService(db)
+	sessionService.SetAuditRecorder(auditService)
 
 	redisClient, err := cache.OpenRedis(cfg)
 	if err != nil {
@@ -47,14 +51,21 @@ func main() {
 
 	rbacService := rbac.NewService(db, redisClient)
 	tenantService := tenant.NewService(db, rbacService)
+	tenantService.SetAuditRecorder(auditService)
+	userService := user.NewService(db, auditService)
 
 	authGroup := router.Group("/v1/auth")
 	sessionHandler.RegisterRoutes(authGroup)
-	rbac.NewHandler(rbacService).RegisterRoutes(router)
-	tenant.NewHandler(tenantService).RegisterRoutes(router)
+	httpserver.RegisterRoutes(
+		router,
+		rbac.NewHandler(rbacService),
+		tenant.NewHandler(tenantService),
+		user.NewHandler(userService),
+	)
 
 	if redisClient != nil {
 		authService := auth.NewService(db, redisClient, mailer.NoopSender{})
+		authService.SetAuditRecorder(auditService)
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.RegisterRoutes(authGroup)
 	}
