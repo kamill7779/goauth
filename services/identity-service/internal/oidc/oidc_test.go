@@ -1,0 +1,396 @@
+package oidc
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"example.com/identity-service/internal/config"
+	"example.com/identity-service/internal/store"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+)
+
+func TestDiscoveryDocumentIncludesRequiredEndpoints(t *testing.T) {
+	_, router, _, _, _, _ := newTestProvider(t)
+
+	request := httptest.NewRequest(http.MethodGet, "/.well-known/openid-configuration", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Issuer                string `json:"issuer"`
+		AuthorizationEndpoint string `json:"authorization_endpoint"`
+		TokenEndpoint         string `json:"token_endpoint"`
+		UserInfoEndpoint      string `json:"userinfo_endpoint"`
+		JWKSURI               string `json:"jwks_uri"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+
+	if payload.Issuer != "https://identity.example.com" {
+		t.Fatalf("issuer = %q, want https://identity.example.com", payload.Issuer)
+	}
+	if payload.AuthorizationEndpoint != "https://identity.example.com/oauth2/authorize" {
+		t.Fatalf("authorization_endpoint = %q", payload.AuthorizationEndpoint)
+	}
+	if payload.TokenEndpoint != "https://identity.example.com/oauth2/token" {
+		t.Fatalf("token_endpoint = %q", payload.TokenEndpoint)
+	}
+	if payload.UserInfoEndpoint != "https://identity.example.com/oauth2/userinfo" {
+		t.Fatalf("userinfo_endpoint = %q", payload.UserInfoEndpoint)
+	}
+	if payload.JWKSURI != "https://identity.example.com/oauth2/jwks" {
+		t.Fatalf("jwks_uri = %q", payload.JWKSURI)
+	}
+}
+
+func TestAuthorizeValidatesClientAndRedirectURI(t *testing.T) {
+	_, router, _, _, user, client := newTestProvider(t)
+
+	t.Run("unknown client", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id=missing&redirect_uri=https://client.example.com/callback&scope=openid&user_id="+strconv.FormatInt(user.ID, 10), nil)
+
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+		assertJSONError(t, recorder.Body.Bytes(), "invalid_client")
+	})
+
+	t.Run("invalid redirect uri", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri=https://evil.example.com/callback&scope=openid&user_id="+strconv.FormatInt(user.ID, 10), nil)
+
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+		}
+		assertJSONError(t, recorder.Body.Bytes(), "invalid_request")
+	})
+}
+
+func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
+	service, router, db, _, user, client := newTestProvider(t)
+	verifier := "test-verifier-1234567890"
+	challenge := pkceChallengeS256(verifier)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope="+url.QueryEscape("openid profile email offline_access")+"&state=state-123&nonce=nonce-123&code_challenge="+challenge+"&code_challenge_method=S256&user_id="+strconv.FormatInt(user.ID, 10), nil)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+
+	location, err := recorder.Result().Location()
+	if err != nil {
+		t.Fatalf("Location() error = %v", err)
+	}
+	code := location.Query().Get("code")
+	if code == "" {
+		t.Fatal("expected authorization code in redirect")
+	}
+	if location.Query().Get("state") != "state-123" {
+		t.Fatalf("state = %q, want state-123", location.Query().Get("state"))
+	}
+
+	var record store.OAuthAuthorizationCode
+	if err := db.First(&record).Error; err != nil {
+		t.Fatalf("load authorization code: %v", err)
+	}
+	if record.CodeHash == code {
+		t.Fatal("authorization code stored in plaintext")
+	}
+	if record.CodeHash != service.hashAuthorizationCode(code) {
+		t.Fatalf("code hash = %q, want %q", record.CodeHash, service.hashAuthorizationCode(code))
+	}
+}
+
+func TestTokenEndpointRejectsInvalidPKCEVerifier(t *testing.T) {
+	_, router, _, _, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("good-verifier"), "nonce-pkce")
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://client.example.com/callback"},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+		"code_verifier": {"bad-verifier"},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_grant")
+}
+
+func TestTokenEndpointReturnsIDAccessAndRefreshTokens(t *testing.T) {
+	_, router, _, _, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("correct-verifier"), "nonce-token")
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://client.example.com/callback"},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+		"code_verifier": {"correct-verifier"},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload struct {
+		AccessToken  string `json:"access_token"`
+		IDToken      string `json:"id_token"`
+		RefreshToken string `json:"refresh_token"`
+		TokenType    string `json:"token_type"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.AccessToken == "" {
+		t.Fatal("missing access token")
+	}
+	if payload.IDToken == "" {
+		t.Fatal("missing id token")
+	}
+	if payload.RefreshToken == "" {
+		t.Fatal("missing refresh token")
+	}
+	if payload.TokenType != "Bearer" {
+		t.Fatalf("token_type = %q, want Bearer", payload.TokenType)
+	}
+}
+
+func TestUserInfoReturnsClaimsForValidAccessToken(t *testing.T) {
+	_, router, _, _, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("userinfo-verifier"), "nonce-userinfo")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "userinfo-verifier")
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+	request.Header.Set("Authorization", "Bearer "+tokenSet.AccessToken)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload struct {
+		Sub           string `json:"sub"`
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
+		Name          string `json:"name"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.Sub != strconv.FormatInt(user.ID, 10) {
+		t.Fatalf("sub = %q, want %d", payload.Sub, user.ID)
+	}
+	if payload.Email != user.Email {
+		t.Fatalf("email = %q, want %q", payload.Email, user.Email)
+	}
+	if !payload.EmailVerified {
+		t.Fatal("email_verified = false, want true")
+	}
+	if payload.Name != user.DisplayName {
+		t.Fatalf("name = %q, want %q", payload.Name, user.DisplayName)
+	}
+}
+
+func TestRevokeRevokesRefreshToken(t *testing.T) {
+	service, router, db, _, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("revoke-verifier"), "nonce-revoke")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "revoke-verifier")
+
+	form := url.Values{
+		"token":           {tokenSet.RefreshToken},
+		"token_type_hint": {"refresh_token"},
+		"client_id":       {client.ClientID},
+		"client_secret":   {"super-secret"},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/revoke", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var refreshToken store.RefreshToken
+	if err := db.Where("token_hash = ?", service.hashToken(tokenSet.RefreshToken)).First(&refreshToken).Error; err != nil {
+		t.Fatalf("load refresh token: %v", err)
+	}
+	if refreshToken.RevokedAt == nil {
+		t.Fatal("expected refresh token to be revoked")
+	}
+}
+
+type exchangedTokens struct {
+	AccessToken  string `json:"access_token"`
+	IDToken      string `json:"id_token"`
+	RefreshToken string `json:"refresh_token"`
+}
+
+func newTestProvider(t *testing.T) (*Service, *gin.Engine, *gorm.DB, *rsa.PrivateKey, *store.User, *store.OAuthClient) {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+
+	db, err := store.OpenDB(config.Config{})
+	if err != nil {
+		t.Fatalf("store.OpenDB() error = %v", err)
+	}
+	if err := store.AutoMigrate(db); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+
+	service := NewService(db, config.Config{
+		PublicIssuerURL: "https://identity.example.com",
+		JWTKeyID:        "test-key",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 30 * 24 * time.Hour,
+	}, privateKey)
+
+	now := time.Now().UTC()
+	user := &store.User{
+		Email:           "oidc-user@example.com",
+		DisplayName:     "OIDC User",
+		PasswordHash:    "hash",
+		Status:          store.UserStatusActive,
+		EmailVerifiedAt: &now,
+	}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("db.Create(user) error = %v", err)
+	}
+
+	client, err := service.CreateClient(context.Background(), CreateClientInput{
+		TenantID:                1,
+		ClientID:                "oidc-web",
+		ClientSecret:            "super-secret",
+		Name:                    "OIDC Web",
+		RedirectURIs:            []string{"https://client.example.com/callback"},
+		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		TokenEndpointAuthMethod: "client_secret_post",
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+
+	router := gin.New()
+	RegisterRoutes(router, service)
+	return service, router, db, privateKey, user, client
+}
+
+func authorizeCode(t *testing.T, router http.Handler, userID int64, clientID, redirectURI, challenge, nonce string) string {
+	t.Helper()
+
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+clientID+"&redirect_uri="+url.QueryEscape(redirectURI)+"&scope="+url.QueryEscape("openid profile email offline_access")+"&state=test-state&nonce="+nonce+"&code_challenge="+challenge+"&code_challenge_method=S256&user_id="+strconv.FormatInt(userID, 10), nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d, want %d body=%s", recorder.Code, http.StatusFound, recorder.Body.String())
+	}
+
+	location, err := recorder.Result().Location()
+	if err != nil {
+		t.Fatalf("Location() error = %v", err)
+	}
+	return location.Query().Get("code")
+}
+
+func exchangeCode(t *testing.T, router http.Handler, clientID, clientSecret, code, redirectURI, verifier string) exchangedTokens {
+	t.Helper()
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"code_verifier": {verifier},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("token status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload exchangedTokens
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return payload
+}
+
+func pkceChallengeS256(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func assertJSONError(t *testing.T, body []byte, want string) {
+	t.Helper()
+
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload.Error != want {
+		t.Fatalf("error = %q, want %q", payload.Error, want)
+	}
+}
