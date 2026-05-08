@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/config"
 	"example.com/identity-service/internal/store"
 	"github.com/golang-jwt/jwt/v5"
@@ -216,5 +217,60 @@ func TestLogoutAllIncrementsUserTokenVersion(t *testing.T) {
 	}
 	if updated.TokenVersion != user.TokenVersion+1 {
 		t.Fatalf("TokenVersion = %d, want %d", updated.TokenVersion, user.TokenVersion+1)
+	}
+}
+
+func TestLogoutWritesAuditLog(t *testing.T) {
+	service, user := newTestService(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	if err := service.Logout(context.Background(), pair.SessionID); err != nil {
+		t.Fatalf("Logout() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.AuditLog{}).Where("action = ?", audit.ActionLogout).Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("logout audit log count = %d, want 1", count)
+	}
+}
+
+func TestRefreshReuseWritesAuditLog(t *testing.T) {
+	service, user := newTestService(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected reused refresh token to fail")
+	}
+
+	var count int64
+	if err := service.db.Model(&store.AuditLog{}).Where("action = ?", audit.ActionRefreshTokenReuseDetected).Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("refresh reuse audit log count = %d, want 1", count)
 	}
 }

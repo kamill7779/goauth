@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/auth"
 	"example.com/identity-service/internal/cache"
 	"example.com/identity-service/internal/config"
@@ -17,6 +18,7 @@ import (
 	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"example.com/identity-service/internal/tenant"
+	"example.com/identity-service/internal/user"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -48,7 +50,6 @@ func main() {
 	}
 
 	router := buildRouter(cfg, db, redisClient, privateKey)
-
 	if err := router.Run(cfg.HTTPAddr); err != nil {
 		log.Fatalf("run server: %v", err)
 	}
@@ -66,6 +67,8 @@ func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
 func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, privateKey *rsa.PrivateKey) *gin.Engine {
 	sessionService := session.NewService(db, cfg, privateKey)
 	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
+	auditService := audit.NewService(db)
+	sessionService.SetAuditRecorder(auditService)
 
 	var registrars []httpserver.Registrar
 	if githubIDPConfigured(cfg) {
@@ -82,14 +85,21 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 
 	rbacService := rbac.NewService(db, redisClient)
 	tenantService := tenant.NewService(db, rbacService)
+	tenantService.SetAuditRecorder(auditService)
+	userService := user.NewService(db, auditService)
 
 	authGroup := router.Group("/v1/auth")
 	sessionHandler.RegisterRoutes(authGroup)
-	rbac.NewHandler(rbacService).RegisterRoutes(router)
-	tenant.NewHandler(tenantService).RegisterRoutes(router)
+	httpserver.RegisterRoutes(
+		router,
+		rbac.NewHandler(rbacService),
+		tenant.NewHandler(tenantService),
+		user.NewHandler(userService),
+	)
 
 	if redisClient != nil {
 		authService := auth.NewService(db, redisClient, mailer.NoopSender{})
+		authService.SetAuditRecorder(auditService)
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.RegisterRoutes(authGroup)
 	}

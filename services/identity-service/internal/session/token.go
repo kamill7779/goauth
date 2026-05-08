@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"time"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/config"
 	"example.com/identity-service/internal/store"
 	"github.com/golang-jwt/jwt/v5"
@@ -31,6 +32,7 @@ type Service struct {
 	keyID           string
 	accessTokenTTL  time.Duration
 	refreshTokenTTL time.Duration
+	audit           audit.Recorder
 	now             func() time.Time
 }
 
@@ -64,8 +66,17 @@ func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Ser
 		keyID:           cfg.JWTKeyID,
 		accessTokenTTL:  cfg.AccessTokenTTL,
 		refreshTokenTTL: cfg.RefreshTokenTTL,
+		audit:           audit.NoopRecorder{},
 		now:             time.Now,
 	}
+}
+
+func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
+	if recorder == nil {
+		s.audit = audit.NoopRecorder{}
+		return
+	}
+	s.audit = recorder
 }
 
 func LoadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {

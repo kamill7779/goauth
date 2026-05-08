@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"example.com/identity-service/internal/audit"
 	"github.com/alicebob/miniredis/v2"
 
 	"example.com/identity-service/internal/cache"
@@ -35,7 +36,9 @@ func newTenantService(t *testing.T) *tenant.Service {
 		_ = redisClient.Close()
 	})
 
-	return tenant.NewService(db, rbac.NewService(db, redisClient))
+	service := tenant.NewService(db, rbac.NewService(db, redisClient))
+	service.SetAuditRecorder(audit.NewService(db))
+	return service
 }
 
 func TestCreateTenantAndAddMember(t *testing.T) {
@@ -109,5 +112,92 @@ func TestGrantAndRevokeRolePermissions(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatalf("role permission count = %d, want 0", count)
+	}
+}
+
+func TestMembershipChangesWriteAuditLogs(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	tenantRecord, _ := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	user := store.User{
+		Email:        "member@example.com",
+		DisplayName:  "member",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := service.DB().Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	if _, err := service.AddMember(ctx, tenant.AddMemberInput{
+		TenantID: tenantRecord.ID,
+		UserID:   user.ID,
+		Status:   store.MemberStatusActive,
+	}); err != nil {
+		t.Fatalf("AddMember() error = %v", err)
+	}
+	if err := service.RemoveMember(ctx, tenantRecord.ID, user.ID); err != nil {
+		t.Fatalf("RemoveMember() error = %v", err)
+	}
+
+	var count int64
+	if err := service.DB().Model(&store.AuditLog{}).
+		Where("action IN ?", []string{audit.ActionTenantMembershipAdded, audit.ActionTenantMembershipRemoved}).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("membership audit log count = %d, want 2", count)
+	}
+}
+
+func TestRoleAssignmentChangesWriteAuditLogs(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	user := store.User{
+		Email:        "role@example.com",
+		DisplayName:  "role",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := service.DB().Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	tenantRecord, _ := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	member, err := service.AddMember(ctx, tenant.AddMemberInput{
+		TenantID: tenantRecord.ID,
+		UserID:   user.ID,
+		Status:   store.MemberStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("AddMember() error = %v", err)
+	}
+	role, err := service.CreateRole(ctx, tenant.CreateRoleInput{
+		TenantID: tenantRecord.ID,
+		Name:     "Admin",
+		Code:     "admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+
+	if err := service.AssignRoles(ctx, member.ID, []int64{role.ID}); err != nil {
+		t.Fatalf("AssignRoles() error = %v", err)
+	}
+	if err := service.RemoveRole(ctx, member.ID, role.ID); err != nil {
+		t.Fatalf("RemoveRole() error = %v", err)
+	}
+
+	var count int64
+	if err := service.DB().Model(&store.AuditLog{}).
+		Where("action IN ?", []string{audit.ActionRoleAssigned, audit.ActionRoleRemoved}).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("role assignment audit log count = %d, want 2", count)
 	}
 }

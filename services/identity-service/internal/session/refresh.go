@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -19,6 +20,19 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 
 	if current.RevokedAt != nil {
 		if err := s.revokeFamily(ctx, current.FamilyID); err != nil {
+			return nil, err
+		}
+		if err := s.audit.Record(ctx, audit.Entry{
+			ActorUserID: current.UserID,
+			TenantID:    current.TenantID,
+			Action:      audit.ActionRefreshTokenReuseDetected,
+			TargetType:  audit.TargetTypeTokenFamily,
+			TargetID:    current.FamilyID,
+			Metadata: map[string]any{
+				"session_id": current.SessionID,
+				"client_id":  current.ClientID,
+			},
+		}); err != nil {
 			return nil, err
 		}
 		return nil, ErrRefreshTokenReuse
@@ -100,11 +114,35 @@ func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user st
 }
 
 func (s *Service) Logout(ctx context.Context, sessionID string) error {
+	var token store.RefreshToken
+	if err := s.db.WithContext(ctx).
+		Where("session_id = ?", sessionID).
+		Order("id ASC").
+		First(&token).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+
 	now := s.now()
-	return s.db.WithContext(ctx).
+	if err := s.db.WithContext(ctx).
 		Model(&store.RefreshToken{}).
 		Where("session_id = ? AND revoked_at IS NULL", sessionID).
-		Update("revoked_at", now).Error
+		Update("revoked_at", now).Error; err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: token.UserID,
+		TenantID:    token.TenantID,
+		Action:      audit.ActionLogout,
+		TargetType:  audit.TargetTypeSession,
+		TargetID:    sessionID,
+		Metadata: map[string]any{
+			"client_id": token.ClientID,
+		},
+	})
 }
 
 func (s *Service) LogoutAll(ctx context.Context, userID int64) error {

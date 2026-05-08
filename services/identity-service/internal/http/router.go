@@ -11,6 +11,10 @@ type Registrar interface {
 	RegisterRoutes(router gin.IRouter)
 }
 
+type RouteRegistrar interface {
+	RegisterRoutes(*gin.Engine)
+}
+
 func NewRouter(_ config.Config, registrars ...Registrar) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Logger(), gin.Recovery())
@@ -29,4 +33,13 @@ func NewRouter(_ config.Config, registrars ...Registrar) *gin.Engine {
 	}
 
 	return router
+}
+
+func RegisterRoutes(router *gin.Engine, registrars ...RouteRegistrar) {
+	for _, registrar := range registrars {
+		if registrar == nil {
+			continue
+		}
+		registrar.RegisterRoutes(router)
+	}
 }
