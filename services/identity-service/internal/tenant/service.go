@@ -2,6 +2,7 @@ package tenant
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"example.com/identity-service/internal/audit"
@@ -9,6 +10,17 @@ import (
 	"example.com/identity-service/internal/store"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+)
+
+const (
+	auditActionTenantCreated          = "tenant_created"
+	auditActionTenantUpdated          = "tenant_updated"
+	auditActionRoleCreated            = "role_created"
+	auditActionRoleUpdated            = "role_updated"
+	auditActionRoleDeleted            = "role_deleted"
+	auditActionRolePermissionsGranted = "role_permissions_granted"
+	auditActionRolePermissionRevoked  = "role_permission_revoked"
+	auditTargetTypeTenant             = "tenant"
 )
 
 type Service struct {
@@ -90,6 +102,20 @@ func (s *Service) CreateTenant(ctx context.Context, input CreateTenantInput) (*s
 	if err := s.db.WithContext(ctx).Create(record).Error; err != nil {
 		return nil, err
 	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    record.ID,
+		Action:      auditActionTenantCreated,
+		TargetType:  auditTargetTypeTenant,
+		TargetID:    strconv.FormatInt(record.ID, 10),
+		Metadata: map[string]any{
+			"name":   record.Name,
+			"slug":   record.Slug,
+			"status": record.Status,
+		},
+	}); err != nil {
+		return nil, err
+	}
 	return record, nil
 }
 
@@ -113,6 +139,18 @@ func (s *Service) UpdateTenant(ctx context.Context, id int64, input UpdateTenant
 	var record store.Tenant
 	if err := s.db.WithContext(ctx).First(&record, id).Error; err != nil {
 		return nil, err
+	}
+	if len(updates) > 0 {
+		if err := s.audit.Record(ctx, audit.Entry{
+			ActorUserID: 0,
+			TenantID:    record.ID,
+			Action:      auditActionTenantUpdated,
+			TargetType:  auditTargetTypeTenant,
+			TargetID:    strconv.FormatInt(record.ID, 10),
+			Metadata:    updates,
+		}); err != nil {
+			return nil, err
+		}
 	}
 	return &record, nil
 }
@@ -210,6 +248,21 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (*store
 	if err := s.db.WithContext(ctx).Create(role).Error; err != nil {
 		return nil, err
 	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    role.TenantID,
+		Action:      auditActionRoleCreated,
+		TargetType:  audit.TargetTypeRole,
+		TargetID:    strconv.FormatInt(role.ID, 10),
+		Metadata: map[string]any{
+			"name":        role.Name,
+			"code":        role.Code,
+			"description": role.Description,
+			"is_system":   role.IsSystem,
+		},
+	}); err != nil {
+		return nil, err
+	}
 	return role, nil
 }
 
@@ -237,17 +290,34 @@ func (s *Service) UpdateRole(ctx context.Context, id int64, input UpdateRoleInpu
 	if err := s.db.WithContext(ctx).First(&role, id).Error; err != nil {
 		return nil, err
 	}
+	if len(updates) > 0 {
+		if err := s.audit.Record(ctx, audit.Entry{
+			ActorUserID: 0,
+			TenantID:    role.TenantID,
+			Action:      auditActionRoleUpdated,
+			TargetType:  audit.TargetTypeRole,
+			TargetID:    strconv.FormatInt(role.ID, 10),
+			Metadata:    updates,
+		}); err != nil {
+			return nil, err
+		}
+	}
 	return &role, nil
 }
 
 func (s *Service) DeleteRole(ctx context.Context, id int64) error {
+	var role store.Role
+	if err := s.db.WithContext(ctx).First(&role, id).Error; err != nil {
+		return err
+	}
+
 	if s.rbac != nil {
 		if err := s.rbac.InvalidateRolePermissions(ctx, id); err != nil {
 			return err
 		}
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("role_id = ?", id).Delete(&store.RolePermission{}).Error; err != nil {
 			return err
 		}
@@ -255,11 +325,34 @@ func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 			return err
 		}
 		return tx.Delete(&store.Role{}, id).Error
+	}); err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    role.TenantID,
+		Action:      auditActionRoleDeleted,
+		TargetType:  audit.TargetTypeRole,
+		TargetID:    strconv.FormatInt(role.ID, 10),
+		Metadata: map[string]any{
+			"name": role.Name,
+			"code": role.Code,
+		},
 	})
 }
 
 func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permissionIDs []int64) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if len(permissionIDs) == 0 {
+		return nil
+	}
+
+	role, err := s.roleByID(ctx, roleID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, permissionID := range permissionIDs {
 			record := store.RolePermission{
 				RoleID:       roleID,
@@ -273,21 +366,60 @@ func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permission
 			return s.rbac.InvalidateRolePermissions(ctx, roleID)
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    role.TenantID,
+		Action:      auditActionRolePermissionsGranted,
+		TargetType:  audit.TargetTypeRole,
+		TargetID:    strconv.FormatInt(role.ID, 10),
+		Metadata: map[string]any{
+			"permission_ids": permissionIDs,
+		},
 	})
 }
 
 func (s *Service) RevokePermission(ctx context.Context, roleID, permissionID int64) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	role, err := s.roleByID(ctx, roleID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if s.rbac != nil {
 			if err := s.rbac.InvalidateRolePermissions(ctx, roleID); err != nil {
 				return err
 			}
 		}
 		return tx.Where("role_id = ? AND permission_id = ?", roleID, permissionID).Delete(&store.RolePermission{}).Error
+	}); err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    role.TenantID,
+		Action:      auditActionRolePermissionRevoked,
+		TargetType:  audit.TargetTypeRole,
+		TargetID:    strconv.FormatInt(role.ID, 10),
+		Metadata: map[string]any{
+			"permission_id": permissionID,
+		},
 	})
 }
 
 func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int64) error {
+	member, err := s.memberByID(ctx, memberID)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureRolesBelongToTenant(ctx, member.TenantID, roleIDs); err != nil {
+		return err
+	}
+
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, roleID := range roleIDs {
 			record := store.MemberRole{
@@ -319,6 +451,50 @@ func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int
 		}); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Service) memberByID(ctx context.Context, memberID int64) (*store.TenantMember, error) {
+	var member store.TenantMember
+	if err := s.db.WithContext(ctx).First(&member, memberID).Error; err != nil {
+		return nil, err
+	}
+	return &member, nil
+}
+
+func (s *Service) roleByID(ctx context.Context, roleID int64) (*store.Role, error) {
+	var role store.Role
+	if err := s.db.WithContext(ctx).First(&role, roleID).Error; err != nil {
+		return nil, err
+	}
+	return &role, nil
+}
+
+func (s *Service) ensureRolesBelongToTenant(ctx context.Context, tenantID int64, roleIDs []int64) error {
+	if len(roleIDs) == 0 {
+		return nil
+	}
+
+	uniqueRoleIDs := make([]int64, 0, len(roleIDs))
+	seen := make(map[int64]struct{}, len(roleIDs))
+	for _, roleID := range roleIDs {
+		if _, ok := seen[roleID]; ok {
+			continue
+		}
+		seen[roleID] = struct{}{}
+		uniqueRoleIDs = append(uniqueRoleIDs, roleID)
+	}
+
+	var count int64
+	if err := s.db.WithContext(ctx).
+		Model(&store.Role{}).
+		Where("tenant_id = ? AND id IN ?", tenantID, uniqueRoleIDs).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count != int64(len(uniqueRoleIDs)) {
+		return fmt.Errorf("roles must belong to the member tenant")
 	}
 	return nil
 }
