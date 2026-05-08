@@ -148,6 +148,39 @@ func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID 
 	return err == nil && count > 0
 }
 
+func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantID int64) bool {
+	if userID == 0 || tenantID == 0 {
+		return false
+	}
+
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("user_id = ? AND tenant_id = ? AND status = ?", userID, tenantID, store.MemberStatusActive).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+func (s *Service) resolvePostLogoutRedirectURI(ctx context.Context, clientID, redirectURI string) (string, error) {
+	redirectURI = strings.TrimSpace(redirectURI)
+	if redirectURI == "" {
+		return "", nil
+	}
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return "", errInvalidClientCredentials
+	}
+
+	client, err := s.loadClient(ctx, clientID)
+	if err != nil {
+		return "", err
+	}
+	if client.Status != store.UserStatusActive || !s.validateRedirectURI(client, redirectURI) {
+		return "", errInvalidClientCredentials
+	}
+	return redirectURI, nil
+}
+
 func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 	if s.publicKey == nil {
 		return nil, errors.New("missing public key")

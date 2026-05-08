@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -68,6 +69,10 @@ func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthC
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
+	if record.TenantID != client.TenantID {
+		oauthError(c, http.StatusBadRequest, "invalid_grant")
+		return
+	}
 	if record.ConsumedAt != nil || record.ExpiresAt.Before(h.service.now()) {
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
@@ -79,6 +84,10 @@ func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthC
 
 	user, err := h.service.loadUser(ctx, record.UserID)
 	if err != nil || user.Status != store.UserStatusActive {
+		oauthError(c, http.StatusBadRequest, "invalid_grant")
+		return
+	}
+	if !h.service.hasActiveTenantMembership(ctx, user.ID, client.TenantID) {
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
@@ -195,16 +204,29 @@ func (h *Handler) revoke(c *gin.Context) {
 }
 
 func (h *Handler) logout(c *gin.Context) {
+	ctx := c.Request.Context()
 	sessionID := strings.TrimSpace(c.Query("session_id"))
+	if sessionID == "" {
+		if cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName); err == nil && strings.TrimSpace(cookieValue) != "" {
+			if claims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey); err == nil {
+				sessionID = strings.TrimSpace(claims.SessionID)
+			}
+		}
+	}
 	if sessionID != "" {
 		now := h.service.now()
-		_ = h.service.db.WithContext(c.Request.Context()).
+		_ = h.service.db.WithContext(ctx).
 			Model(&store.RefreshToken{}).
 			Where("session_id = ? AND revoked_at IS NULL", sessionID).
 			Update("revoked_at", now).Error
 	}
+	session.ClearOIDCAuthorizeCookie(c)
 
-	redirectURI := strings.TrimSpace(c.Query("post_logout_redirect_uri"))
+	redirectURI, err := h.service.resolvePostLogoutRedirectURI(ctx, c.Query("client_id"), c.Query("post_logout_redirect_uri"))
+	if err != nil {
+		oauthError(c, http.StatusBadRequest, "invalid_request")
+		return
+	}
 	if redirectURI != "" {
 		c.Redirect(http.StatusFound, redirectURI)
 		return

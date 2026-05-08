@@ -111,6 +111,12 @@ func TestRefreshSetsOIDCAuthorizeCookie(t *testing.T) {
 			if cookie.Value == "" {
 				t.Fatal("oidc authorize cookie is empty")
 			}
+			if !cookie.Secure {
+				t.Fatal("expected oidc authorize cookie to be secure")
+			}
+			if !cookie.HttpOnly {
+				t.Fatal("expected oidc authorize cookie to be httpOnly")
+			}
 		}
 	}
 	if !found {

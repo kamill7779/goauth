@@ -144,6 +144,32 @@ func TestAuthorizeRejectsMissingAuthenticatedSession(t *testing.T) {
 	})
 }
 
+func TestAuthorizeRejectsUserWithoutTenantMembership(t *testing.T) {
+	service, router, db, privateKey, user, _ := newTestProvider(t)
+	client := mustCreateClient(t, service, CreateClientInput{
+		TenantID:                2,
+		ClientID:                "tenant-2-client",
+		ClientSecret:            "tenant-2-secret",
+		Name:                    "Tenant 2 Client",
+		RedirectURIs:            []string{"https://tenant2.example.com/callback"},
+		AllowedScopes:           []string{"openid", "profile", "email"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_post",
+	})
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://tenant2.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain", nil)
+	request.AddCookie(authorizeCookie)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "access_denied")
+}
+
 func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
 	service, router, db, privateKey, user, client := newTestProvider(t)
 	verifier := "test-verifier-1234567890"
@@ -206,6 +232,38 @@ func TestTokenEndpointRejectsInvalidPKCEVerifier(t *testing.T) {
 
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_grant")
+}
+
+func TestTokenEndpointRejectsCodeWhenTenantMembershipIsRevoked(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("tenant-verifier"), "nonce-tenant")
+
+	if err := db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ?", client.TenantID, user.ID).
+		Update("status", store.MemberStatusDisabled).Error; err != nil {
+		t.Fatalf("disable tenant member: %v", err)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://client.example.com/callback"},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+		"code_verifier": {"tenant-verifier"},
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
 	}
 	assertJSONError(t, recorder.Body.Bytes(), "invalid_grant")
 }
@@ -370,6 +428,65 @@ func TestRevokeRevokesRefreshToken(t *testing.T) {
 	}
 	if refreshToken.RevokedAt == nil {
 		t.Fatal("expected refresh token to be revoked")
+	}
+}
+
+func TestLogoutRejectsUnregisteredRedirectURI(t *testing.T) {
+	_, router, _, _, _, client := newTestProvider(t)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID+"&post_logout_redirect_uri="+url.QueryEscape("https://evil.example.com/logout"), nil)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_request")
+}
+
+func TestLogoutRevokesSessionAndClearsOIDCCookie(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID+"&post_logout_redirect_uri="+url.QueryEscape("https://client.example.com/callback"), nil)
+	request.AddCookie(authorizeCookie)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusFound, recorder.Body.String())
+	}
+	location, err := recorder.Result().Location()
+	if err != nil {
+		t.Fatalf("Location() error = %v", err)
+	}
+	if location.String() != "https://client.example.com/callback" {
+		t.Fatalf("redirect = %q, want https://client.example.com/callback", location.String())
+	}
+
+	foundCookie := false
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name == session.OIDCAuthorizeCookieName {
+			foundCookie = true
+			if cookie.Value != "" {
+				t.Fatalf("cookie value = %q, want empty", cookie.Value)
+			}
+		}
+	}
+	if !foundCookie {
+		t.Fatal("expected oidc authorize cookie to be cleared")
+	}
+
+	var count int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("session_id = ? AND revoked_at IS NULL", sessionID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("active refresh token count = %d, want 0", count)
 	}
 }
 
@@ -581,6 +698,13 @@ func newTestProvider(t *testing.T) (*Service, *gin.Engine, *gorm.DB, *rsa.Privat
 	if err := db.Create(user).Error; err != nil {
 		t.Fatalf("db.Create(user) error = %v", err)
 	}
+	if err := db.Create(&store.TenantMember{
+		TenantID: 1,
+		UserID:   user.ID,
+		Status:   store.MemberStatusActive,
+	}).Error; err != nil {
+		t.Fatalf("db.Create(tenant member) error = %v", err)
+	}
 
 	client, err := service.CreateClient(context.Background(), CreateClientInput{
 		TenantID:                1,
@@ -735,9 +859,10 @@ func issueOIDCAuthorizeCookie(t *testing.T, db *gorm.DB, privateKey *rsa.Private
 		t.Fatalf("IssueOIDCAuthorizeCookie() error = %v", err)
 	}
 	return &http.Cookie{
-		Name:  session.OIDCAuthorizeCookieName,
-		Value: value,
-		Path:  "/",
+		Name:   session.OIDCAuthorizeCookieName,
+		Value:  value,
+		Path:   "/",
+		Secure: true,
 	}, pair.SessionID
 }
 

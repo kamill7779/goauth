@@ -98,5 +98,10 @@ func ParseOIDCAuthorizeCookie(raw string, publicKey *rsa.PublicKey) (*OIDCAuthor
 
 func SetOIDCAuthorizeCookie(c *gin.Context, value string, maxAgeSeconds int) {
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
-	c.SetCookie(OIDCAuthorizeCookieName, value, maxAgeSeconds, "/", "", false, true)
+	c.SetCookie(OIDCAuthorizeCookieName, value, maxAgeSeconds, "/", "", true, true)
+}
+
+func ClearOIDCAuthorizeCookie(c *gin.Context) {
+	c.SetSameSite(stdhttp.SameSiteLaxMode)
+	c.SetCookie(OIDCAuthorizeCookieName, "", -1, "/", "", true, true)
 }

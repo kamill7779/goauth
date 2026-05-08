@@ -73,6 +73,10 @@ func (h *Handler) authorize(c *gin.Context) {
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
+	if !h.service.hasActiveTenantMembership(ctx, userID, client.TenantID) {
+		oauthError(c, http.StatusForbidden, "access_denied")
+		return
+	}
 	user, err := h.service.loadUser(ctx, userID)
 	if err != nil || user.Status != store.UserStatusActive {
 		oauthError(c, http.StatusUnauthorized, "login_required")
