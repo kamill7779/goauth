@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -51,12 +52,17 @@ func (h *Handler) authorize(c *gin.Context) {
 		return
 	}
 
-	userID, err := strconv.ParseInt(strings.TrimSpace(c.Query("user_id")), 10, 64)
-	if err != nil || userID == 0 {
+	sessionClaims, ok := session.ClaimsFromContext(c)
+	if !ok {
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
 
+	userID, err := strconv.ParseInt(strings.TrimSpace(sessionClaims.Subject), 10, 64)
+	if err != nil || userID == 0 {
+		oauthError(c, http.StatusUnauthorized, "login_required")
+		return
+	}
 	user, err := h.service.loadUser(ctx, userID)
 	if err != nil || user.Status != store.UserStatusActive {
 		oauthError(c, http.StatusUnauthorized, "login_required")

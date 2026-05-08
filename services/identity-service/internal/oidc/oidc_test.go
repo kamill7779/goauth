@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"example.com/identity-service/internal/config"
+	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 )
 
@@ -62,11 +64,13 @@ func TestDiscoveryDocumentIncludesRequiredEndpoints(t *testing.T) {
 }
 
 func TestAuthorizeValidatesClientAndRedirectURI(t *testing.T) {
-	_, router, _, _, user, client := newTestProvider(t)
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authHeader := issueSessionAuthorization(t, db, privateKey, *user)
 
 	t.Run("unknown client", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id=missing&redirect_uri=https://client.example.com/callback&scope=openid&user_id="+strconv.FormatInt(user.ID, 10), nil)
+		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id=missing&redirect_uri=https://client.example.com/callback&scope=openid", nil)
+		request.Header.Set("Authorization", authHeader)
 
 		router.ServeHTTP(recorder, request)
 
@@ -78,7 +82,8 @@ func TestAuthorizeValidatesClientAndRedirectURI(t *testing.T) {
 
 	t.Run("invalid redirect uri", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri=https://evil.example.com/callback&scope=openid&user_id="+strconv.FormatInt(user.ID, 10), nil)
+		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri=https://evil.example.com/callback&scope=openid", nil)
+		request.Header.Set("Authorization", authHeader)
 
 		router.ServeHTTP(recorder, request)
 
@@ -89,13 +94,28 @@ func TestAuthorizeValidatesClientAndRedirectURI(t *testing.T) {
 	})
 }
 
-func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
-	service, router, db, _, user, client := newTestProvider(t)
-	verifier := "test-verifier-1234567890"
-	challenge := pkceChallengeS256(verifier)
+func TestAuthorizeRejectsMissingAuthenticatedSession(t *testing.T) {
+	_, router, _, _, _, client := newTestProvider(t)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope="+url.QueryEscape("openid profile email offline_access")+"&state=state-123&nonce=nonce-123&code_challenge="+challenge+"&code_challenge_method=S256&user_id="+strconv.FormatInt(user.ID, 10), nil)
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain", nil)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+}
+
+func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	verifier := "test-verifier-1234567890"
+	challenge := pkceChallengeS256(verifier)
+	authHeader := issueSessionAuthorization(t, db, privateKey, *user)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope="+url.QueryEscape("openid profile email offline_access")+"&state=state-123&nonce=nonce-123&code_challenge="+challenge+"&code_challenge_method=S256", nil)
+	request.Header.Set("Authorization", authHeader)
 
 	router.ServeHTTP(recorder, request)
 
@@ -128,8 +148,8 @@ func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
 }
 
 func TestTokenEndpointRejectsInvalidPKCEVerifier(t *testing.T) {
-	_, router, _, _, user, client := newTestProvider(t)
-	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("good-verifier"), "nonce-pkce")
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("good-verifier"), "nonce-pkce")
 
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -153,8 +173,8 @@ func TestTokenEndpointRejectsInvalidPKCEVerifier(t *testing.T) {
 }
 
 func TestTokenEndpointReturnsIDAccessAndRefreshTokens(t *testing.T) {
-	_, router, _, _, user, client := newTestProvider(t)
-	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("correct-verifier"), "nonce-token")
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("correct-verifier"), "nonce-token")
 
 	form := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -199,8 +219,8 @@ func TestTokenEndpointReturnsIDAccessAndRefreshTokens(t *testing.T) {
 }
 
 func TestUserInfoReturnsClaimsForValidAccessToken(t *testing.T) {
-	_, router, _, _, user, client := newTestProvider(t)
-	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("userinfo-verifier"), "nonce-userinfo")
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("userinfo-verifier"), "nonce-userinfo")
 	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "userinfo-verifier")
 
 	recorder := httptest.NewRecorder()
@@ -236,9 +256,53 @@ func TestUserInfoReturnsClaimsForValidAccessToken(t *testing.T) {
 	}
 }
 
+func TestIDTokenAndUserInfoRespectGrantedScope(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/callback", "openid", pkceChallengeS256("scope-verifier"), "nonce-scope")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "scope-verifier")
+
+	token, err := jwt.Parse(tokenSet.IDToken, func(token *jwt.Token) (any, error) {
+		return &privateKey.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatalf("jwt.Parse() error = %v", err)
+	}
+
+	claims := token.Claims.(jwt.MapClaims)
+	if _, ok := claims["email"]; ok {
+		t.Fatalf("email claim present for openid-only token: %#v", claims)
+	}
+	if _, ok := claims["name"]; ok {
+		t.Fatalf("name claim present for openid-only token: %#v", claims)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+	request.Header.Set("Authorization", "Bearer "+tokenSet.AccessToken)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := payload["email"]; ok {
+		t.Fatalf("userinfo email present for openid-only scope: %#v", payload)
+	}
+	if _, ok := payload["name"]; ok {
+		t.Fatalf("userinfo name present for openid-only scope: %#v", payload)
+	}
+	if payload["sub"] != strconv.FormatInt(user.ID, 10) {
+		t.Fatalf("userinfo sub = %v, want %d", payload["sub"], user.ID)
+	}
+}
+
 func TestRevokeRevokesRefreshToken(t *testing.T) {
-	service, router, db, _, user, client := newTestProvider(t)
-	code := authorizeCode(t, router, user.ID, client.ClientID, "https://client.example.com/callback", pkceChallengeS256("revoke-verifier"), "nonce-revoke")
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("revoke-verifier"), "nonce-revoke")
 	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "revoke-verifier")
 
 	form := url.Values{
@@ -264,6 +328,151 @@ func TestRevokeRevokesRefreshToken(t *testing.T) {
 	}
 	if refreshToken.RevokedAt == nil {
 		t.Fatal("expected refresh token to be revoked")
+	}
+}
+
+func TestCreateClientRejectsUnsupportedTokenEndpointAuthMethod(t *testing.T) {
+	service, _, _, _, _, _ := newTestProvider(t)
+
+	_, err := service.CreateClient(context.Background(), CreateClientInput{
+		TenantID:                1,
+		ClientID:                "bad-client",
+		ClientSecret:            "super-secret",
+		Name:                    "Bad Client",
+		RedirectURIs:            []string{"https://client.example.com/callback"},
+		AllowedScopes:           []string{"openid"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "private_key_jwt",
+	})
+	if err == nil {
+		t.Fatal("expected unsupported token endpoint auth method to fail")
+	}
+}
+
+func TestTokenEndpointRequiresConfiguredClientAuthenticationMethod(t *testing.T) {
+	service, router, db, privateKey, user, _ := newTestProvider(t)
+	client := mustCreateClient(t, service, CreateClientInput{
+		TenantID:                1,
+		ClientID:                "basic-client",
+		ClientSecret:            "basic-secret",
+		Name:                    "Basic Client",
+		RedirectURIs:            []string{"https://client.example.com/basic"},
+		AllowedScopes:           []string{"openid", "profile", "email"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/basic", "openid profile email", pkceChallengeS256("basic-verifier"), "nonce-basic")
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://client.example.com/basic"},
+		"client_id":     {client.ClientID},
+		"client_secret": {"basic-secret"},
+		"code_verifier": {"basic-verifier"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_client")
+}
+
+func TestIntrospectAndRevokeRequireConfiguredClientAuthenticationMethod(t *testing.T) {
+	service, router, db, privateKey, user, _ := newTestProvider(t)
+	client := mustCreateClient(t, service, CreateClientInput{
+		TenantID:                1,
+		ClientID:                "basic-client-2",
+		ClientSecret:            "basic-secret-2",
+		Name:                    "Basic Client 2",
+		RedirectURIs:            []string{"https://client.example.com/basic-2"},
+		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_basic",
+	})
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), client.ClientID, "https://client.example.com/basic-2", "openid profile email offline_access", pkceChallengeS256("basic2-verifier"), "nonce-basic2")
+	tokenSet := exchangeCodeBasic(t, router, client.ClientID, "basic-secret-2", code, "https://client.example.com/basic-2", "basic2-verifier")
+
+	introspectForm := url.Values{
+		"token":         {tokenSet.AccessToken},
+		"client_id":     {client.ClientID},
+		"client_secret": {"basic-secret-2"},
+	}
+	introspectRecorder := httptest.NewRecorder()
+	introspectRequest := httptest.NewRequest(http.MethodPost, "/oauth2/introspect", strings.NewReader(introspectForm.Encode()))
+	introspectRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(introspectRecorder, introspectRequest)
+
+	if introspectRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("introspect status = %d, want %d body=%s", introspectRecorder.Code, http.StatusUnauthorized, introspectRecorder.Body.String())
+	}
+	assertJSONError(t, introspectRecorder.Body.Bytes(), "invalid_client")
+
+	revokeForm := url.Values{
+		"token":         {tokenSet.RefreshToken},
+		"client_id":     {client.ClientID},
+		"client_secret": {"basic-secret-2"},
+	}
+	revokeRecorder := httptest.NewRecorder()
+	revokeRequest := httptest.NewRequest(http.MethodPost, "/oauth2/revoke", strings.NewReader(revokeForm.Encode()))
+	revokeRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(revokeRecorder, revokeRequest)
+
+	if revokeRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("revoke status = %d, want %d body=%s", revokeRecorder.Code, http.StatusUnauthorized, revokeRecorder.Body.String())
+	}
+	assertJSONError(t, revokeRecorder.Body.Bytes(), "invalid_client")
+}
+
+func TestIntrospectRestrictsTokensToOwningClient(t *testing.T) {
+	service, router, db, privateKey, user, clientA := newTestProvider(t)
+	clientB := mustCreateClient(t, service, CreateClientInput{
+		TenantID:                1,
+		ClientID:                "oidc-other",
+		ClientSecret:            "other-secret",
+		Name:                    "OIDC Other",
+		RedirectURIs:            []string{"https://other.example.com/callback"},
+		AllowedScopes:           []string{"openid", "profile", "email", "offline_access"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_post",
+	})
+
+	code := authorizeCode(t, router, issueSessionAuthorization(t, db, privateKey, *user), clientA.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("introspect-verifier"), "nonce-introspect")
+	tokenSet := exchangeCode(t, router, clientA.ClientID, "super-secret", code, "https://client.example.com/callback", "introspect-verifier")
+
+	for name, token := range map[string]string{
+		"access token":  tokenSet.AccessToken,
+		"refresh token": tokenSet.RefreshToken,
+	} {
+		t.Run(name, func(t *testing.T) {
+			form := url.Values{
+				"token":         {token},
+				"client_id":     {clientB.ClientID},
+				"client_secret": {"other-secret"},
+			}
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/oauth2/introspect", strings.NewReader(form.Encode()))
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			router.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+
+			var payload struct {
+				Active bool `json:"active"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+				t.Fatalf("json.Unmarshal() error = %v", err)
+			}
+			if payload.Active {
+				t.Fatal("expected token from another client to introspect as inactive")
+			}
+		})
 	}
 }
 
@@ -329,10 +538,11 @@ func newTestProvider(t *testing.T) (*Service, *gin.Engine, *gorm.DB, *rsa.Privat
 	return service, router, db, privateKey, user, client
 }
 
-func authorizeCode(t *testing.T, router http.Handler, userID int64, clientID, redirectURI, challenge, nonce string) string {
+func authorizeCode(t *testing.T, router http.Handler, authHeader, clientID, redirectURI, scope, challenge, nonce string) string {
 	t.Helper()
 
-	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+clientID+"&redirect_uri="+url.QueryEscape(redirectURI)+"&scope="+url.QueryEscape("openid profile email offline_access")+"&state=test-state&nonce="+nonce+"&code_challenge="+challenge+"&code_challenge_method=S256&user_id="+strconv.FormatInt(userID, 10), nil)
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+clientID+"&redirect_uri="+url.QueryEscape(redirectURI)+"&scope="+url.QueryEscape(scope)+"&state=test-state&nonce="+nonce+"&code_challenge="+challenge+"&code_challenge_method=S256", nil)
+	request.Header.Set("Authorization", authHeader)
 	recorder := httptest.NewRecorder()
 
 	router.ServeHTTP(recorder, request)
@@ -376,6 +586,33 @@ func exchangeCode(t *testing.T, router http.Handler, clientID, clientSecret, cod
 	return payload
 }
 
+func exchangeCodeBasic(t *testing.T, router http.Handler, clientID, clientSecret, code, redirectURI, verifier string) exchangedTokens {
+	t.Helper()
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {redirectURI},
+		"code_verifier": {verifier},
+	}
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Authorization", basicAuthHeader(clientID, clientSecret))
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("token status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload exchangedTokens
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return payload
+}
+
 func pkceChallengeS256(verifier string) string {
 	sum := sha256.Sum256([]byte(verifier))
 	return base64.RawURLEncoding.EncodeToString(sum[:])
@@ -393,4 +630,37 @@ func assertJSONError(t *testing.T, body []byte, want string) {
 	if payload.Error != want {
 		t.Fatalf("error = %q, want %q", payload.Error, want)
 	}
+}
+
+func issueSessionAuthorization(t *testing.T, db *gorm.DB, privateKey *rsa.PrivateKey, user store.User) string {
+	t.Helper()
+
+	sessionService := session.NewService(db, config.Config{
+		JWTKeyID:        "test-key",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 30 * 24 * time.Hour,
+	}, privateKey)
+	pair, err := sessionService.IssueTokens(context.Background(), session.IssueTokensInput{
+		User:     user,
+		TenantID: 1,
+		ClientID: "browser-session",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+	return "Bearer " + pair.AccessToken
+}
+
+func mustCreateClient(t *testing.T, service *Service, input CreateClientInput) *store.OAuthClient {
+	t.Helper()
+
+	client, err := service.CreateClient(context.Background(), input)
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+	return client
+}
+
+func basicAuthHeader(clientID, clientSecret string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(clientID+":"+clientSecret))
 }

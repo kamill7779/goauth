@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"example.com/identity-service/internal/config"
+	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -21,6 +22,8 @@ const (
 	defaultAuthorizationCodeTTL = 10 * time.Minute
 	defaultAccessTokenTTL       = 15 * time.Minute
 	defaultRefreshTokenTTL      = 30 * 24 * time.Hour
+	authMethodClientSecretBasic = "client_secret_basic"
+	authMethodClientSecretPost  = "client_secret_post"
 )
 
 var errInvalidClientCredentials = errors.New("invalid client credentials")
@@ -42,9 +45,9 @@ type Handler struct {
 }
 
 type accessClaims struct {
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"email_verified"`
-	Name          string `json:"name"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified bool   `json:"email_verified,omitempty"`
+	Name          string `json:"name,omitempty"`
 	Scope         string `json:"scope,omitempty"`
 	ClientID      string `json:"client_id,omitempty"`
 	TenantID      int64  `json:"tid,omitempty"`
@@ -53,9 +56,9 @@ type accessClaims struct {
 }
 
 type idTokenClaims struct {
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"email_verified"`
-	Name          string `json:"name"`
+	Email         string `json:"email,omitempty"`
+	EmailVerified bool   `json:"email_verified,omitempty"`
+	Name          string `json:"name,omitempty"`
 	Nonce         string `json:"nonce,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -99,7 +102,11 @@ func RegisterRoutes(router gin.IRoutes, service *Service) {
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.GET("/.well-known/openid-configuration", h.discovery)
 	router.GET("/oauth2/jwks", h.jwks)
-	router.GET("/oauth2/authorize", h.authorize)
+	if h.service.publicKey != nil {
+		router.GET("/oauth2/authorize", session.AuthMiddleware(h.service.publicKey), h.authorize)
+	} else {
+		router.GET("/oauth2/authorize", h.authorize)
+	}
 	router.POST("/oauth2/token", h.token)
 	router.GET("/oauth2/userinfo", h.userInfo)
 	router.POST("/oauth2/introspect", h.introspect)
@@ -152,4 +159,18 @@ func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 		return nil, errors.New("invalid token")
 	}
 	return claims, nil
+}
+
+func scopeSet(scope string) map[string]struct{} {
+	values := splitScope(scope)
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[value] = struct{}{}
+	}
+	return result
+}
+
+func hasScope(scopes map[string]struct{}, value string) bool {
+	_, ok := scopes[value]
+	return ok
 }

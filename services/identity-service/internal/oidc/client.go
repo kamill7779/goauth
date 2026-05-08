@@ -60,7 +60,10 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 
 	authMethod := strings.TrimSpace(input.TokenEndpointAuthMethod)
 	if authMethod == "" {
-		authMethod = "client_secret_post"
+		authMethod = authMethodClientSecretPost
+	}
+	if !isSupportedTokenEndpointAuthMethod(authMethod) {
+		return nil, errors.New("unsupported token endpoint auth method")
 	}
 
 	client := &store.OAuthClient{
@@ -151,25 +154,46 @@ func (s *Service) validateScope(client *store.OAuthClient, scope string) error {
 func (s *Service) authenticateClientFromRequest(c *gin.Context) (*store.OAuthClient, error) {
 	clientID := strings.TrimSpace(c.PostForm("client_id"))
 	clientSecret := c.PostForm("client_secret")
+	basicClientID, basicClientSecret, basicProvided := parseBasicAuthHeader(c.GetHeader("Authorization"))
 
-	if header := strings.TrimSpace(c.GetHeader("Authorization")); strings.HasPrefix(header, "Basic ") {
-		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Basic "))
-		if err == nil {
-			if username, password, ok := strings.Cut(string(decoded), ":"); ok {
-				if clientID == "" {
-					clientID = username
-				}
-				if clientSecret == "" {
-					clientSecret = password
-				}
-			}
-		}
+	if clientID == "" {
+		clientID = basicClientID
 	}
-
-	if clientID == "" || clientSecret == "" {
+	if clientID == "" {
 		return nil, errInvalidClientCredentials
 	}
-	return s.authenticateClient(c.Request.Context(), clientID, clientSecret)
+
+	client, err := s.loadClient(c.Request.Context(), clientID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errInvalidClientCredentials
+		}
+		return nil, err
+	}
+
+	var secret string
+	switch client.TokenEndpointAuthMethod {
+	case authMethodClientSecretBasic:
+		if !basicProvided || basicClientID != client.ClientID || clientSecret != "" || strings.TrimSpace(c.PostForm("client_id")) != "" {
+			return nil, errInvalidClientCredentials
+		}
+		secret = basicClientSecret
+	case authMethodClientSecretPost:
+		if basicProvided || strings.TrimSpace(c.PostForm("client_id")) != client.ClientID || clientSecret == "" {
+			return nil, errInvalidClientCredentials
+		}
+		secret = clientSecret
+	default:
+		return nil, errInvalidClientCredentials
+	}
+
+	if err := auth.CheckPassword(client.ClientSecretHash, secret); err != nil {
+		return nil, errInvalidClientCredentials
+	}
+	if client.Status != store.UserStatusActive {
+		return nil, errInvalidClientCredentials
+	}
+	return client, nil
 }
 
 func splitScope(scope string) []string {
@@ -190,6 +214,32 @@ func supportsGrantType(client *store.OAuthClient, grantType string) bool {
 		}
 	}
 	return false
+}
+
+func isSupportedTokenEndpointAuthMethod(value string) bool {
+	switch value {
+	case authMethodClientSecretBasic, authMethodClientSecretPost:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseBasicAuthHeader(header string) (string, string, bool) {
+	header = strings.TrimSpace(header)
+	if !strings.HasPrefix(header, "Basic ") {
+		return "", "", false
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Basic "))
+	if err != nil {
+		return "", "", false
+	}
+	username, password, ok := strings.Cut(string(decoded), ":")
+	if !ok || strings.TrimSpace(username) == "" || password == "" {
+		return "", "", false
+	}
+	return username, password, true
 }
 
 func encodeStringSlice(values []string) (datatypes.JSON, error) {

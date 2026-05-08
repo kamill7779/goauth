@@ -21,10 +21,16 @@ func (h *Handler) userInfo(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"sub":            claims.Subject,
-		"email":          claims.Email,
-		"email_verified": claims.EmailVerified,
-		"name":           claims.Name,
-	})
+	response := gin.H{
+		"sub": claims.Subject,
+	}
+	scopes := scopeSet(claims.Scope)
+	if hasScope(scopes, "email") {
+		response["email"] = claims.Email
+		response["email_verified"] = claims.EmailVerified
+	}
+	if hasScope(scopes, "profile") {
+		response["name"] = claims.Name
+	}
+	c.JSON(http.StatusOK, response)
 }

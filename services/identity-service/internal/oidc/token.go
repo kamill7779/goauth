@@ -120,7 +120,8 @@ func (h *Handler) introspect(c *gin.Context) {
 		oauthError(c, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	if _, err := h.service.authenticateClientFromRequest(c); err != nil {
+	client, err := h.service.authenticateClientFromRequest(c)
+	if err != nil {
 		oauthError(c, http.StatusUnauthorized, "invalid_client")
 		return
 	}
@@ -132,6 +133,10 @@ func (h *Handler) introspect(c *gin.Context) {
 	}
 
 	if claims, err := h.service.parseAccessToken(rawToken); err == nil {
+		if claims.ClientID != client.ClientID {
+			c.JSON(http.StatusOK, gin.H{"active": false})
+			return
+		}
 		exp := int64(0)
 		if claims.ExpiresAt != nil {
 			exp = claims.ExpiresAt.Unix()
@@ -150,7 +155,7 @@ func (h *Handler) introspect(c *gin.Context) {
 	var refreshToken store.RefreshToken
 	if err := h.service.db.WithContext(c.Request.Context()).
 		Where("token_hash = ?", h.service.hashToken(rawToken)).
-		First(&refreshToken).Error; err == nil && refreshToken.RevokedAt == nil && refreshToken.ExpiresAt.After(h.service.now()) {
+		First(&refreshToken).Error; err == nil && refreshToken.ClientID == client.ClientID && refreshToken.RevokedAt == nil && refreshToken.ExpiresAt.After(h.service.now()) {
 		c.JSON(http.StatusOK, gin.H{
 			"active":     true,
 			"sub":        strconv.FormatInt(refreshToken.UserID, 10),
@@ -225,7 +230,7 @@ func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *sto
 	if err != nil {
 		return nil, err
 	}
-	idToken, err := s.signIDToken(user, client.ClientID, record.Nonce)
+	idToken, err := s.signIDToken(user, client.ClientID, record.Nonce, record.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -260,15 +265,13 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 	if err != nil {
 		return "", err
 	}
+	scopes := scopeSet(scope)
 
 	claims := accessClaims{
-		Email:         user.Email,
-		EmailVerified: user.EmailVerifiedAt != nil,
-		Name:          user.DisplayName,
-		Scope:         scope,
-		ClientID:      clientID,
-		TenantID:      tenantID,
-		SessionID:     sessionID,
+		Scope:     scope,
+		ClientID:  clientID,
+		TenantID:  tenantID,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   strconv.FormatInt(user.ID, 10),
@@ -279,6 +282,13 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 			ID:        jti,
 		},
 	}
+	if hasScope(scopes, "email") {
+		claims.Email = user.Email
+		claims.EmailVerified = user.EmailVerifiedAt != nil
+	}
+	if hasScope(scopes, "profile") {
+		claims.Name = user.DisplayName
+	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	if s.keyID != "" {
@@ -287,13 +297,11 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 	return token.SignedString(s.privateKey)
 }
 
-func (s *Service) signIDToken(user *store.User, clientID, nonce string) (string, error) {
+func (s *Service) signIDToken(user *store.User, clientID, nonce, scope string) (string, error) {
 	issuedAt := s.now()
+	scopes := scopeSet(scope)
 	claims := idTokenClaims{
-		Email:         user.Email,
-		EmailVerified: user.EmailVerifiedAt != nil,
-		Name:          user.DisplayName,
-		Nonce:         nonce,
+		Nonce: nonce,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   strconv.FormatInt(user.ID, 10),
@@ -302,6 +310,13 @@ func (s *Service) signIDToken(user *store.User, clientID, nonce string) (string,
 			NotBefore: jwt.NewNumericDate(issuedAt),
 			ExpiresAt: jwt.NewNumericDate(issuedAt.Add(s.accessTokenTTL)),
 		},
+	}
+	if hasScope(scopes, "email") {
+		claims.Email = user.Email
+		claims.EmailVerified = user.EmailVerifiedAt != nil
+	}
+	if hasScope(scopes, "profile") {
+		claims.Name = user.DisplayName
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
