@@ -10,8 +10,10 @@ import (
 	"example.com/identity-service/internal/config"
 	httpserver "example.com/identity-service/internal/http"
 	"example.com/identity-service/internal/mailer"
+	"example.com/identity-service/internal/rbac"
 	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
+	"example.com/identity-service/internal/tenant"
 )
 
 func main() {
@@ -37,13 +39,21 @@ func main() {
 	sessionService := session.NewService(db, cfg, privateKey)
 	sessionHandler := session.NewHandler(sessionService)
 
-	authGroup := router.Group("/v1/auth")
-	sessionHandler.RegisterRoutes(authGroup)
-
 	redisClient, err := cache.OpenRedis(cfg)
 	if err != nil {
 		log.Printf("auth routes disabled until redis is available: %v", err)
-	} else {
+		redisClient = nil
+	}
+
+	rbacService := rbac.NewService(db, redisClient)
+	tenantService := tenant.NewService(db, rbacService)
+
+	authGroup := router.Group("/v1/auth")
+	sessionHandler.RegisterRoutes(authGroup)
+	rbac.NewHandler(rbacService).RegisterRoutes(router)
+	tenant.NewHandler(tenantService).RegisterRoutes(router)
+
+	if redisClient != nil {
 		authService := auth.NewService(db, redisClient, mailer.NoopSender{})
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.RegisterRoutes(authGroup)
