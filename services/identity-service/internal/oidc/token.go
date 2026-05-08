@@ -205,13 +205,20 @@ func (h *Handler) revoke(c *gin.Context) {
 
 func (h *Handler) logout(c *gin.Context) {
 	ctx := c.Request.Context()
-	sessionID := strings.TrimSpace(c.Query("session_id"))
-	if sessionID == "" {
-		if cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName); err == nil && strings.TrimSpace(cookieValue) != "" {
-			if claims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey); err == nil {
-				sessionID = strings.TrimSpace(claims.SessionID)
-			}
+	requestedSessionID := strings.TrimSpace(c.Query("session_id"))
+	cookieSessionID := ""
+	if cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName); err == nil && strings.TrimSpace(cookieValue) != "" {
+		if claims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey); err == nil {
+			cookieSessionID = strings.TrimSpace(claims.SessionID)
 		}
+	}
+	sessionID := cookieSessionID
+	if requestedSessionID != "" {
+		if cookieSessionID == "" || requestedSessionID != cookieSessionID {
+			oauthError(c, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		sessionID = requestedSessionID
 	}
 	if sessionID != "" {
 		now := h.service.now()

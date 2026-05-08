@@ -20,6 +20,7 @@ var (
 	ErrProviderAlreadyBound  = errors.New("provider already linked to user")
 	ErrIdentityNotFound      = errors.New("identity not found")
 	ErrEmailRequired         = errors.New("external profile email required")
+	ErrUserDisabled          = errors.New("user disabled")
 )
 
 type AuthenticateResult struct {
@@ -82,68 +83,84 @@ func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirect
 	if err != nil {
 		return nil, err
 	}
+	var user *store.User
+	var createdIdentity *store.UserIdentity
+	created := false
 	if identity != nil {
-		user, err := s.findUserByID(ctx, identity.UserID)
+		user, err = s.findUserByID(ctx, identity.UserID)
 		if err != nil {
 			return nil, err
 		}
-		return &AuthenticateResult{
-			User:      user,
-			Identity:  identity,
-			TokenSet:  token,
-			Profile:   profile,
-			Provider:  provider.Slug(),
-			WasLinked: true,
-		}, nil
+		if user.Status == store.UserStatusDisabled {
+			return nil, ErrUserDisabled
+		}
+	} else {
+		email := normalizeEmail(profile.Email)
+		if email == "" {
+			return nil, ErrEmailRequired
+		}
+
+		user, err = s.findUserByEmail(ctx, email)
+		if err != nil {
+			return nil, err
+		}
+		if user != nil {
+			return nil, ErrLocalLoginRequired
+		}
+
+		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			now := s.now()
+			user = &store.User{
+				Email:           email,
+				PasswordHash:    "!external:" + provider.Slug(),
+				DisplayName:     chooseDisplayName(profile, email),
+				AvatarURL:       strings.TrimSpace(profile.AvatarURL),
+				Status:          store.UserStatusActive,
+				EmailVerifiedAt: nil,
+			}
+			if profile.EmailVerified {
+				user.EmailVerifiedAt = &now
+			}
+			if err := tx.Create(user).Error; err != nil {
+				return err
+			}
+
+			createdIdentity = newIdentity(user.ID, provider.Slug(), profile)
+			return tx.Create(createdIdentity).Error
+		})
+		if err != nil {
+			return nil, err
+		}
+		created = true
 	}
 
-	email := normalizeEmail(profile.Email)
-	if email == "" {
-		return nil, ErrEmailRequired
-	}
-
-	user, err := s.findUserByEmail(ctx, email)
-	if err != nil {
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: user.ID,
+		Action:      audit.ActionLogin,
+		TargetType:  audit.TargetTypeUser,
+		TargetID:    audit.UserTargetID(user.ID),
+		Metadata: map[string]any{
+			"provider": provider.Slug(),
+			"created":  created,
+		},
+	}); err != nil {
 		return nil, err
 	}
-	if user != nil {
-		return nil, ErrLocalLoginRequired
+
+	result := &AuthenticateResult{
+		User:      user,
+		TokenSet:  token,
+		Profile:   profile,
+		Provider:  provider.Slug(),
+		WasLinked: identity != nil,
 	}
-
-	var createdUser *store.User
-	var createdIdentity *store.UserIdentity
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		now := s.now()
-		createdUser = &store.User{
-			Email:           email,
-			PasswordHash:    "!external:" + provider.Slug(),
-			DisplayName:     chooseDisplayName(profile, email),
-			AvatarURL:       strings.TrimSpace(profile.AvatarURL),
-			Status:          store.UserStatusActive,
-			EmailVerifiedAt: nil,
-		}
-		if profile.EmailVerified {
-			createdUser.EmailVerifiedAt = &now
-		}
-		if err := tx.Create(createdUser).Error; err != nil {
-			return err
-		}
-
-		createdIdentity = newIdentity(createdUser.ID, provider.Slug(), profile)
-		return tx.Create(createdIdentity).Error
-	})
-	if err != nil {
-		return nil, err
+	if identity != nil {
+		result.Identity = identity
+	} else {
+		result.Identity = createdIdentity
+		result.Created = true
 	}
-
-	return &AuthenticateResult{
-		User:     createdUser,
-		Identity: createdIdentity,
-		Created:  true,
-		TokenSet: token,
-		Profile:  profile,
-		Provider: provider.Slug(),
-	}, nil
+	return result, nil
 }
 
 func (s *Service) Bind(ctx context.Context, userID int64, providerSlug, code, redirectURI string) (*store.UserIdentity, error) {
