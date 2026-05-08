@@ -37,7 +37,7 @@ func main() {
 		log.Fatalf("load signing key: %v", err)
 	}
 	sessionService := session.NewService(db, cfg, privateKey)
-	sessionHandler := session.NewHandler(sessionService)
+	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
 
 	redisClient, err := cache.OpenRedis(cfg)
 	if err != nil {

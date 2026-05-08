@@ -1,6 +1,7 @@
 package session
 
 import (
+	"crypto/rsa"
 	stdhttp "net/http"
 
 	httpserver "example.com/identity-service/internal/http"
@@ -8,18 +9,26 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service   *Service
+	publicKey *rsa.PublicKey
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
+	return &Handler{
+		service:   service,
+		publicKey: publicKey,
+	}
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/refresh", h.refresh)
 	router.POST("/logout", h.logout)
 	router.POST("/logout-all", h.logoutAll)
-	router.GET("/me", h.me)
+	if h.publicKey != nil {
+		router.GET("/me", AuthMiddleware(h.publicKey), h.me)
+	} else {
+		router.GET("/me", h.me)
+	}
 }
 
 func (h *Handler) refresh(c *gin.Context) {
