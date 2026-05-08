@@ -9,15 +9,27 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service          *Service
+	authMiddleware   gin.HandlerFunc
+	systemMiddleware gin.HandlerFunc
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFunc) *Handler {
+	return &Handler{
+		service:          service,
+		authMiddleware:   authMiddleware,
+		systemMiddleware: systemMiddleware,
+	}
 }
 
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin := router.Group("/v1/admin")
+	if h.authMiddleware != nil {
+		admin.Use(h.authMiddleware)
+	}
+	if h.systemMiddleware != nil {
+		admin.Use(h.systemMiddleware)
+	}
 
 	admin.GET("/tenants", h.listTenants)
 	admin.POST("/tenants", h.createTenant)

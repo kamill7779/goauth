@@ -131,13 +131,14 @@ func (s *Service) issueTokenPair(ctx context.Context, user store.User, tenantID 
 	}
 
 	record := store.RefreshToken{
-		TokenHash: hashToken(refreshToken),
-		FamilyID:  familyID,
-		SessionID: sessionID,
-		UserID:    user.ID,
-		TenantID:  tenantID,
-		ClientID:  clientID,
-		ExpiresAt: s.now().Add(s.refreshTokenTTL),
+		TokenHash:    hashToken(refreshToken),
+		FamilyID:     familyID,
+		SessionID:    sessionID,
+		UserID:       user.ID,
+		TenantID:     tenantID,
+		TokenVersion: user.TokenVersion,
+		ClientID:     clientID,
+		ExpiresAt:    s.now().Add(s.refreshTokenTTL),
 	}
 	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
 		return nil, err

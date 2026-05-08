@@ -10,19 +10,33 @@ import (
 )
 
 type Handler struct {
-	service *Service
+	service          *Service
+	authMiddleware   gin.HandlerFunc
+	systemMiddleware gin.HandlerFunc
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFunc) *Handler {
+	return &Handler{
+		service:          service,
+		authMiddleware:   authMiddleware,
+		systemMiddleware: systemMiddleware,
+	}
 }
 
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
-	authz := router.Group("/v1/authz")
+	v1 := router.Group("/v1")
+	if h.authMiddleware != nil {
+		v1.Use(h.authMiddleware)
+	}
+
+	authz := v1.Group("/authz")
+	if h.systemMiddleware != nil {
+		authz.Use(h.systemMiddleware)
+	}
 	authz.POST("/check", h.check)
 	authz.POST("/check-batch", h.checkBatch)
 
-	router.GET("/v1/tenants/:tenant_id/my-permissions", h.myPermissions)
+	v1.GET("/tenants/:tenant_id/my-permissions", h.myPermissions)
 }
 
 func (h *Handler) check(c *gin.Context) {
@@ -68,24 +82,30 @@ func (h *Handler) checkBatch(c *gin.Context) {
 }
 
 func (h *Handler) myPermissions(c *gin.Context) {
+	claims, ok := session.ClaimsFromContext(c)
+	if !ok {
+		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		return
+	}
+
+	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil {
+		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+
 	tenantID, err := strconv.ParseInt(c.Param("tenant_id"), 10, 64)
 	if err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid tenant_id"})
 		return
 	}
-
-	userID := int64(0)
-	if claims, ok := session.ClaimsFromContext(c); ok {
-		if parsed, err := strconv.ParseInt(claims.Subject, 10, 64); err == nil {
-			userID = parsed
-		}
+	if claims.TenantID == 0 {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+		return
 	}
-	if userID == 0 {
-		userID, err = strconv.ParseInt(c.Query("user_id"), 10, 64)
-		if err != nil {
-			c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "missing user identity"})
-			return
-		}
+	if claims.TenantID != tenantID {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+		return
 	}
 
 	permissions, err := h.service.ListPermissions(c.Request.Context(), userID, tenantID)

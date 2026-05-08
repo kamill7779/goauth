@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/rsa"
 	stdhttp "net/http"
+	"strconv"
 
 	httpserver "example.com/identity-service/internal/http"
 	"github.com/gin-gonic/gin"
@@ -23,10 +24,12 @@ func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/refresh", h.refresh)
 	router.POST("/logout", h.logout)
-	router.POST("/logout-all", h.logoutAll)
 	if h.publicKey != nil {
-		router.GET("/me", AuthMiddleware(h.publicKey), h.me)
+		auth := AuthMiddleware(h.service, h.publicKey)
+		router.POST("/logout-all", auth, h.logoutAll)
+		router.GET("/me", auth, h.me)
 	} else {
+		router.POST("/logout-all", h.logoutAll)
 		router.GET("/me", h.me)
 	}
 }
@@ -71,13 +74,29 @@ func (h *Handler) logout(c *gin.Context) {
 
 func (h *Handler) logoutAll(c *gin.Context) {
 	var request struct {
-		UserID int64 `json:"user_id"`
+		UserID *int64 `json:"user_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := h.service.LogoutAll(c.Request.Context(), request.UserID); err != nil {
+
+	claims, ok := ClaimsFromContext(c)
+	if !ok {
+		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		return
+	}
+	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
+	if err != nil {
+		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+		return
+	}
+	if request.UserID != nil && *request.UserID != userID {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+		return
+	}
+
+	if err := h.service.LogoutAll(c.Request.Context(), userID); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

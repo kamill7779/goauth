@@ -41,14 +41,22 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 		return nil, ErrInvalidRefreshToken
 	}
 
-	var user store.User
-	if err := s.db.WithContext(ctx).First(&user, current.UserID).Error; err != nil {
-		return nil, err
+	user, err := s.loadActiveUser(ctx, current.UserID)
+	if err != nil {
+		return nil, ErrInvalidRefreshToken
+	}
+	if user.TokenVersion != current.TokenVersion {
+		return nil, ErrInvalidRefreshToken
+	}
+	if current.TenantID != 0 {
+		if err := s.hasActiveMembership(ctx, current.UserID, current.TenantID); err != nil {
+			return nil, ErrInvalidRefreshToken
+		}
 	}
 
 	var pair *TokenPair
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		nextPair, err := s.issueTokenPairWithDB(ctx, tx, user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
 		if err != nil {
 			return err
 		}
@@ -94,13 +102,14 @@ func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user st
 	}
 
 	record := store.RefreshToken{
-		TokenHash: hashToken(refreshToken),
-		FamilyID:  familyID,
-		SessionID: sessionID,
-		UserID:    user.ID,
-		TenantID:  tenantID,
-		ClientID:  clientID,
-		ExpiresAt: s.now().Add(s.refreshTokenTTL),
+		TokenHash:    hashToken(refreshToken),
+		FamilyID:     familyID,
+		SessionID:    sessionID,
+		UserID:       user.ID,
+		TenantID:     tenantID,
+		TokenVersion: user.TokenVersion,
+		ClientID:     clientID,
+		ExpiresAt:    s.now().Add(s.refreshTokenTTL),
 	}
 	if err := db.WithContext(ctx).Create(&record).Error; err != nil {
 		return nil, err
