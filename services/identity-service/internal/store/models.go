@@ -8,8 +8,12 @@ import (
 )
 
 const (
-	UserStatusActive   = "active"
-	UserStatusDisabled = "disabled"
+	UserStatusActive     = "active"
+	UserStatusDisabled   = "disabled"
+	TenantStatusActive   = "active"
+	TenantStatusDisabled = "disabled"
+	MemberStatusActive   = "active"
+	MemberStatusDisabled = "disabled"
 )
 
 type User struct {
