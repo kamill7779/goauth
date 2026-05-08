@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/config"
 	"example.com/identity-service/internal/store"
 )
@@ -187,5 +188,41 @@ func TestBindLinksGitHubIdentityForLoggedInUser(t *testing.T) {
 	}
 	if stored.AvatarURL != "https://avatars.example.test/octocat.png" {
 		t.Fatalf("stored.AvatarURL = %q, want avatar URL", stored.AvatarURL)
+	}
+}
+
+func TestBindAndUnbindRecordAuditLogs(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	service.SetAuditRecorder(audit.NewService(service.db))
+	user := createTestUser(t, service, "octocat@example.com")
+
+	if _, err := service.Bind(context.Background(), user.ID, "github", "bind-code", "https://app.example.com/callback"); err != nil {
+		t.Fatalf("Bind() error = %v", err)
+	}
+	if err := service.Unbind(context.Background(), user.ID, "github"); err != nil {
+		t.Fatalf("Unbind() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.AuditLog{}).
+		Where("action = ?", audit.ActionExternalIdentityChanged).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count audit logs: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("external identity audit log count = %d, want 2", count)
 	}
 }

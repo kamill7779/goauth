@@ -10,6 +10,48 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func newTestRouter(t *testing.T, cfg config.Config) *gin.Engine {
+	t.Helper()
+
+	db, err := store.OpenDB(config.Config{})
+	if err != nil {
+		t.Fatalf("store.OpenDB() error = %v", err)
+	}
+	if err := store.AutoMigrate(db); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+
+	return buildRouter(cfg, db, nil, privateKey)
+}
+
+func TestBuildRouterRegistersOIDCRoutes(t *testing.T) {
+	router := newTestRouter(t, config.Config{
+		PublicIssuerURL: "https://identity.example.com",
+	})
+
+	routes := collectRoutes(router)
+	expected := []string{
+		"GET /.well-known/openid-configuration",
+		"GET /oauth2/jwks",
+		"GET /oauth2/authorize",
+		"POST /oauth2/token",
+		"GET /oauth2/userinfo",
+		"POST /oauth2/introspect",
+		"POST /oauth2/revoke",
+		"GET /oauth2/logout",
+	}
+	for _, route := range expected {
+		if !routes[route] {
+			t.Fatalf("route %s registered = false, want true", route)
+		}
+	}
+}
+
 func TestBuildRouterSkipsGitHubIDPRoutesWhenDisabled(t *testing.T) {
 	router := newTestRouter(t, config.Config{
 		GitHubOAuthEnabled: false,
@@ -71,33 +113,18 @@ func TestBuildRouterRegistersGitHubIDPRoutesWhenEnabledWithCompleteConfig(t *tes
 	assertGitHubRoutesRegistered(t, router, true)
 }
 
-func newTestRouter(t *testing.T, cfg config.Config) *gin.Engine {
-	t.Helper()
-
-	db, err := store.OpenDB(config.Config{})
-	if err != nil {
-		t.Fatalf("store.OpenDB() error = %v", err)
+func collectRoutes(router *gin.Engine) map[string]bool {
+	routes := map[string]bool{}
+	for _, route := range router.Routes() {
+		routes[route.Method+" "+route.Path] = true
 	}
-	if err := store.AutoMigrate(db); err != nil {
-		t.Fatalf("store.AutoMigrate() error = %v", err)
-	}
-
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("rsa.GenerateKey() error = %v", err)
-	}
-
-	return buildRouter(cfg, db, nil, privateKey)
+	return routes
 }
 
 func assertGitHubRoutesRegistered(t *testing.T, router *gin.Engine, want bool) {
 	t.Helper()
 
-	routes := map[string]bool{}
-	for _, route := range router.Routes() {
-		routes[route.Method+" "+route.Path] = true
-	}
-
+	routes := collectRoutes(router)
 	expected := []string{
 		"GET /v1/external/github/start",
 		"GET /v1/external/github/callback",

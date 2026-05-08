@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"example.com/identity-service/internal/audit"
 	"example.com/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -33,6 +35,7 @@ type AuthenticateResult struct {
 type Service struct {
 	db        *gorm.DB
 	providers map[string]Provider
+	audit     audit.Recorder
 	now       func() time.Time
 }
 
@@ -48,8 +51,17 @@ func NewService(db *gorm.DB, providers ...Provider) *Service {
 	return &Service{
 		db:        db,
 		providers: providerMap,
+		audit:     audit.NoopRecorder{},
 		now:       time.Now,
 	}
+}
+
+func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
+	if recorder == nil {
+		s.audit = audit.NoopRecorder{}
+		return
+	}
+	s.audit = recorder
 }
 
 func (s *Service) Start(providerSlug, state string, opts AuthCodeOptions) (string, error) {
@@ -170,17 +182,53 @@ func (s *Service) Bind(ctx context.Context, userID int64, providerSlug, code, re
 	if err := s.db.WithContext(ctx).Create(identity).Error; err != nil {
 		return nil, err
 	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		ActorUserID: userID,
+		TargetType:  audit.TargetTypeIdentity,
+		TargetID:    strconv.FormatInt(identity.ID, 10),
+		Action:      audit.ActionExternalIdentityChanged,
+		Metadata: map[string]any{
+			"change":            "bound",
+			"provider":          identity.Provider,
+			"provider_user_id":  identity.ProviderUserID,
+			"identity_user_id":  identity.UserID,
+			"identity_username": identity.Username,
+		},
+	})
 	return identity, nil
 }
 
 func (s *Service) Unbind(ctx context.Context, userID int64, providerSlug string) error {
-	result := s.db.WithContext(ctx).Where("user_id = ? AND provider = ?", userID, providerSlug).Delete(&store.UserIdentity{})
+	var identity store.UserIdentity
+	if err := s.db.WithContext(ctx).
+		Where("user_id = ? AND provider = ?", userID, providerSlug).
+		First(&identity).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrIdentityNotFound
+		}
+		return err
+	}
+
+	result := s.db.WithContext(ctx).Where("id = ?", identity.ID).Delete(&store.UserIdentity{})
 	if result.Error != nil {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
 		return ErrIdentityNotFound
 	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		ActorUserID: userID,
+		TargetType:  audit.TargetTypeIdentity,
+		TargetID:    strconv.FormatInt(identity.ID, 10),
+		Action:      audit.ActionExternalIdentityChanged,
+		Metadata: map[string]any{
+			"change":            "unbound",
+			"provider":          identity.Provider,
+			"provider_user_id":  identity.ProviderUserID,
+			"identity_user_id":  identity.UserID,
+			"identity_username": identity.Username,
+		},
+	})
 	return nil
 }
 

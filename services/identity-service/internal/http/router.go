@@ -12,6 +12,10 @@ type Registrar interface {
 }
 
 type RouteRegistrar interface {
+	RegisterRoutes(gin.IRoutes)
+}
+
+type EngineRegistrar interface {
 	RegisterRoutes(*gin.Engine)
 }
 
@@ -35,7 +39,16 @@ func NewRouter(_ config.Config, registrars ...Registrar) *gin.Engine {
 	return router
 }
 
-func RegisterRoutes(router *gin.Engine, registrars ...RouteRegistrar) {
+func RegisterIRoutes(router gin.IRoutes, registrars ...RouteRegistrar) {
+	for _, registrar := range registrars {
+		if registrar == nil {
+			continue
+		}
+		registrar.RegisterRoutes(router)
+	}
+}
+
+func RegisterRoutes(router *gin.Engine, registrars ...EngineRegistrar) {
 	for _, registrar := range registrars {
 		if registrar == nil {
 			continue

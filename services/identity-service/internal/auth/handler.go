@@ -113,6 +113,12 @@ func (h *Handler) login(c *gin.Context) {
 		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	cookieValue, err := h.session.IssueOIDCAuthorizeCookie(*user, 0, pair.SessionID)
+	if err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
 
 	httpserver.Success(c, stdhttp.StatusOK, pair)
 }

@@ -14,6 +14,7 @@ import (
 	"example.com/identity-service/internal/idp"
 	githubidp "example.com/identity-service/internal/idp/github"
 	"example.com/identity-service/internal/mailer"
+	"example.com/identity-service/internal/oidc"
 	"example.com/identity-service/internal/rbac"
 	"example.com/identity-service/internal/session"
 	"example.com/identity-service/internal/store"
@@ -69,6 +70,8 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
 	auditService := audit.NewService(db)
 	sessionService.SetAuditRecorder(auditService)
+	oidcService := oidc.NewService(db, cfg, privateKey)
+	oidcService.SetAuditRecorder(auditService)
 
 	var registrars []httpserver.Registrar
 	if githubIDPConfigured(cfg) {
@@ -78,6 +81,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 			RedirectURI:  cfg.GitHubRedirectURI,
 		})
 		idpService := idp.NewService(db, githubProvider)
+		idpService.SetAuditRecorder(auditService)
 		registrars = append(registrars, idp.NewHandler(idpService, sessionService, session.AuthMiddleware(&privateKey.PublicKey)))
 	}
 
@@ -90,6 +94,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 
 	authGroup := router.Group("/v1/auth")
 	sessionHandler.RegisterRoutes(authGroup)
+	oidc.RegisterRoutes(router, oidcService)
 	httpserver.RegisterRoutes(
 		router,
 		rbac.NewHandler(rbacService),
