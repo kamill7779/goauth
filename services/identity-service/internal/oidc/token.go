@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -15,6 +16,7 @@ import (
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type tokenResponse struct {
@@ -106,6 +108,9 @@ func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthC
 	var response *tokenResponse
 	err = h.service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := h.service.now()
+		if err := h.service.lockActiveSessionWithDB(ctx, tx, user.ID, record.SessionID); err != nil {
+			return errInvalidGrant
+		}
 		result := tx.Model(&store.OAuthAuthorizationCode{}).
 			Where("id = ? AND consumed_at IS NULL", record.ID).
 			Update("consumed_at", now)
@@ -236,14 +241,19 @@ func (h *Handler) logout(c *gin.Context) {
 	}
 	if sessionID != "" {
 		now := h.service.now()
-		_ = h.service.db.WithContext(ctx).
-			Model(&store.RefreshToken{}).
-			Where("session_id = ? AND revoked_at IS NULL", sessionID).
-			Update("revoked_at", now).Error
-		_ = h.service.db.WithContext(ctx).
-			Model(&store.OAuthAuthorizationCode{}).
-			Where("session_id = ? AND consumed_at IS NULL", sessionID).
-			Update("consumed_at", now).Error
+		_ = h.service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := h.service.revokeLoginSessionWithDB(ctx, tx, sessionID, now); err != nil {
+				return err
+			}
+			if err := tx.Model(&store.RefreshToken{}).
+				Where("session_id = ? AND revoked_at IS NULL", sessionID).
+				Update("revoked_at", now).Error; err != nil {
+				return err
+			}
+			return tx.Model(&store.OAuthAuthorizationCode{}).
+				Where("session_id = ? AND consumed_at IS NULL", sessionID).
+				Update("consumed_at", now).Error
+		})
 	}
 	session.ClearOIDCAuthorizeCookie(c)
 
@@ -342,18 +352,7 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 		return
 	}
 	if current.RevokedAt != nil {
-		_ = h.service.revokeRefreshTokenFamily(ctx, current.FamilyID)
-		_ = h.service.audit.Record(ctx, audit.Entry{
-			ActorUserID: current.UserID,
-			TenantID:    current.TenantID,
-			Action:      audit.ActionRefreshTokenReuseDetected,
-			TargetType:  audit.TargetTypeTokenFamily,
-			TargetID:    current.FamilyID,
-			Metadata: map[string]any{
-				"session_id": current.SessionID,
-				"client_id":  current.ClientID,
-			},
-		})
+		h.service.recordRefreshTokenReuse(ctx, current)
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
@@ -375,10 +374,16 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	var response *tokenResponse
 	err = h.service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := h.service.now()
+		if err := h.service.lockActiveSessionWithDB(ctx, tx, current.UserID, current.SessionID); err != nil {
+			return errInvalidGrant
+		}
 		result := tx.Model(&store.RefreshToken{}).
 			Where("id = ? AND revoked_at IS NULL", current.ID).
 			Update("revoked_at", now)
 		if result.Error != nil {
+			if isSQLiteWriteLock(result.Error) {
+				return errInvalidGrant
+			}
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
@@ -444,6 +449,7 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 
 func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.RefreshToken) {
 	_ = s.revokeRefreshTokenFamily(ctx, token.FamilyID)
+	_ = s.revokeLoginSession(ctx, token.SessionID)
 	_ = s.audit.Record(ctx, audit.Entry{
 		ActorUserID: token.UserID,
 		TenantID:    token.TenantID,
@@ -463,6 +469,40 @@ func (s *Service) revokeRefreshTokenFamily(ctx context.Context, familyID string)
 		Model(&store.RefreshToken{}).
 		Where("family_id = ? AND revoked_at IS NULL", familyID).
 		Update("revoked_at", now).Error
+}
+
+func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	now := s.now()
+	return s.db.WithContext(ctx).
+		Model(&store.LoginSession{}).
+		Where("id = ? AND revoked_at IS NULL", sessionID).
+		Update("revoked_at", now).Error
+}
+
+func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, sessionID string, now time.Time) error {
+	if err := db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", sessionID).
+		First(&store.LoginSession{}).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	return db.Model(&store.LoginSession{}).
+		Where("id = ? AND revoked_at IS NULL", sessionID).
+		Update("revoked_at", now).Error
+}
+
+func isSQLiteWriteLock(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
 }
 
 func (s *Service) signAccessToken(user *store.User, clientID string, tenantID int64, sessionID, scope string) (string, error) {

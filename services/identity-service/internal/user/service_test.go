@@ -147,6 +147,24 @@ func TestDisableProtectedUserFails(t *testing.T) {
 	}
 }
 
+func TestRootEmailWithoutSystemRoleCanBeDisabled(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Email:       "root@example.com",
+		DisplayName: "Root",
+		Password:    "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	if err := service.DisableUser(ctx, record.ID); err != nil {
+		t.Fatalf("DisableUser() error = %v", err)
+	}
+}
+
 func TestDisableSystemRoleUserFails(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()
@@ -169,5 +187,69 @@ func TestDisableSystemRoleUserFails(t *testing.T) {
 	}
 	if err != ErrProtectedUser {
 		t.Fatalf("DisableUser() error = %v, want %v", err, ErrProtectedUser)
+	}
+}
+
+func TestInactiveSystemRoleMembershipDoesNotProtectUser(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Email:       "inactive-admin@example.com",
+		DisplayName: "Inactive Admin",
+		Password:    "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if err := service.MarkSystemUser(ctx, record.ID, "system-admin"); err != nil {
+		t.Fatalf("MarkSystemUser() error = %v", err)
+	}
+	if err := service.db.Model(&store.TenantMember{}).
+		Where("user_id = ?", record.ID).
+		Update("status", store.MemberStatusDisabled).Error; err != nil {
+		t.Fatalf("disable tenant member: %v", err)
+	}
+
+	if err := service.DisableUser(ctx, record.ID); err != nil {
+		t.Fatalf("DisableUser() error = %v", err)
+	}
+}
+
+func TestCrossTenantSystemRoleBindingDoesNotProtectUser(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Email:       "cross-tenant-admin@example.com",
+		DisplayName: "Cross Tenant Admin",
+		Password:    "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	tenantA := store.Tenant{Name: "Tenant A", Slug: "tenant-a", Status: store.TenantStatusActive}
+	tenantB := store.Tenant{Name: "Tenant B", Slug: "tenant-b", Status: store.TenantStatusActive}
+	if err := service.db.Create(&tenantA).Error; err != nil {
+		t.Fatalf("create tenant A: %v", err)
+	}
+	if err := service.db.Create(&tenantB).Error; err != nil {
+		t.Fatalf("create tenant B: %v", err)
+	}
+	member := store.TenantMember{TenantID: tenantA.ID, UserID: record.ID, Status: store.MemberStatusActive}
+	if err := service.db.Create(&member).Error; err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	role := store.Role{TenantID: tenantB.ID, Name: "System Admin", Code: "system-admin", IsSystem: true}
+	if err := service.db.Create(&role).Error; err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if err := service.db.Create(&store.MemberRole{MemberID: member.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatalf("create cross-tenant member role: %v", err)
+	}
+
+	if err := service.DisableUser(ctx, record.ID); err != nil {
+		t.Fatalf("DisableUser() error = %v", err)
 	}
 }

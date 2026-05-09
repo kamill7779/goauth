@@ -4,8 +4,10 @@ import (
 	"context"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"goauth/services/identity-service/internal/cache"
@@ -20,6 +22,7 @@ type testEnv struct {
 	db     *gorm.DB
 	rbac   *rbac.Service
 	tenant *tenant.Service
+	redis  *redis.Client
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -51,6 +54,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		db:     db,
 		rbac:   rbacService,
 		tenant: tenantService,
+		redis:  redisClient,
 	}
 }
 
@@ -260,6 +264,39 @@ func TestPermissionCacheInvalidatesAfterRoleChanges(t *testing.T) {
 	}
 	if !slices.Equal(perms, []string{"project:read", "project:write"}) {
 		t.Fatalf("perms after invalidate = %#v, want [project:read project:write]", perms)
+	}
+}
+
+func TestPermissionCacheVersionIgnoresStaleRedisEntryAfterRoleDeletion(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	user := createUser(t, env.db, "stale-delete@example.com", store.UserStatusActive)
+	tenantRecord, _ := env.tenant.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "stale-delete"})
+	member, _ := env.tenant.AddMember(ctx, tenant.AddMemberInput{TenantID: tenantRecord.ID, UserID: user.ID, Status: store.MemberStatusActive})
+	role, _ := env.tenant.CreateRole(ctx, tenant.CreateRoleInput{TenantID: tenantRecord.ID, Name: "Admin", Code: "admin"})
+	permission := createPermission(t, env.db, "project:delete")
+	_ = env.tenant.GrantPermissions(ctx, role.ID, []int64{permission.ID})
+	_ = env.tenant.AssignRoles(ctx, member.ID, []int64{role.ID})
+
+	if allowed, err := env.rbac.Can(ctx, user.ID, tenantRecord.ID, "project:delete"); err != nil || !allowed {
+		t.Fatalf("warm permission = %v, %v; want allowed", allowed, err)
+	}
+	if err := env.tenant.DeleteRole(ctx, role.ID); err != nil {
+		t.Fatalf("DeleteRole() error = %v", err)
+	}
+
+	stalePayload := `{"version":0,"permissions":["project:delete"]}`
+	if err := env.redis.Set(ctx, cache.PermissionCacheKey(tenantRecord.ID, user.ID), stalePayload, time.Minute).Err(); err != nil {
+		t.Fatalf("seed stale cache: %v", err)
+	}
+
+	allowed, err := env.rbac.Can(ctx, user.ID, tenantRecord.ID, "project:delete")
+	if err != nil {
+		t.Fatalf("Can() error = %v", err)
+	}
+	if allowed {
+		t.Fatal("expected stale cached permission to be ignored after role deletion")
 	}
 }
 

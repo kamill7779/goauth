@@ -119,39 +119,29 @@ func (s *Service) IssueTokens(ctx context.Context, input IssueTokensInput) (*Tok
 		return nil, err
 	}
 
-	return s.issueTokenPair(ctx, input.User, input.TenantID, input.ClientID, sessionID, familyID)
-}
+	var pair *TokenPair
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		loginSession := store.LoginSession{
+			ID:       sessionID,
+			UserID:   input.User.ID,
+			TenantID: input.TenantID,
+			ClientID: input.ClientID,
+		}
+		if err := tx.WithContext(ctx).Create(&loginSession).Error; err != nil {
+			return err
+		}
 
-func (s *Service) issueTokenPair(ctx context.Context, user store.User, tenantID int64, clientID, sessionID, familyID string) (*TokenPair, error) {
-	accessToken, err := s.signAccessToken(user, tenantID, clientID, sessionID)
+		nextPair, err := s.issueTokenPairWithDB(ctx, tx, input.User, input.TenantID, input.ClientID, sessionID, familyID)
+		if err != nil {
+			return err
+		}
+		pair = nextPair
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	refreshToken, err := randomID(32)
-	if err != nil {
-		return nil, err
-	}
-
-	record := store.RefreshToken{
-		TokenHash:    hashToken(refreshToken),
-		FamilyID:     familyID,
-		SessionID:    sessionID,
-		UserID:       user.ID,
-		TenantID:     tenantID,
-		TokenVersion: user.TokenVersion,
-		ClientID:     clientID,
-		ExpiresAt:    s.now().Add(s.refreshTokenTTL),
-	}
-	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
-		return nil, err
-	}
-
-	return &TokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		SessionID:    sessionID,
-	}, nil
+	return pair, nil
 }
 
 func (s *Service) signAccessToken(user store.User, tenantID int64, clientID, sessionID string) (string, error) {

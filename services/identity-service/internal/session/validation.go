@@ -23,7 +23,9 @@ func (s *Service) loadActiveUser(ctx context.Context, userID int64) (*store.User
 func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID string) error {
 	var token store.RefreshToken
 	return s.db.WithContext(ctx).
-		Where("session_id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
+		Joins("JOIN login_sessions ON login_sessions.id = refresh_tokens.session_id").
+		Where("refresh_tokens.session_id = ? AND refresh_tokens.user_id = ? AND refresh_tokens.revoked_at IS NULL", sessionID, userID).
+		Where("login_sessions.revoked_at IS NULL").
 		First(&token).Error
 }
 

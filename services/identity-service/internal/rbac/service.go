@@ -25,6 +25,11 @@ type memberScope struct {
 	TenantID int64
 }
 
+type permissionCacheEntry struct {
+	Version     int      `json:"version"`
+	Permissions []string `json:"permissions"`
+}
+
 func NewService(db *gorm.DB, redisClient *redis.Client) *Service {
 	return &Service{
 		db:    db,
@@ -47,14 +52,16 @@ func (s *Service) Can(ctx context.Context, userID, tenantID int64, permission st
 }
 
 func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) ([]string, error) {
-	if permissions, ok, err := s.loadCachedPermissions(ctx, userID, tenantID); err != nil {
+	if permissions, cachedVersion, ok, err := s.loadCachedPermissions(ctx, userID, tenantID); err != nil {
 		return nil, err
 	} else if ok {
-		memberIDs, err := s.activeMemberIDsForUserTenant(ctx, userID, tenantID)
-		if err != nil || len(memberIDs) == 0 {
+		currentVersion, active, err := s.permissionScopeVersion(ctx, userID, tenantID)
+		if err != nil || !active {
 			return []string{}, err
 		}
-		return permissions, nil
+		if cachedVersion == currentVersion {
+			return permissions, nil
+		}
 	}
 
 	// Resolve permissions from live user/member state so membership changes and
@@ -65,8 +72,14 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 	}
 	sort.Strings(permissions)
 
-	if err := s.storeCachedPermissions(ctx, userID, tenantID, permissions); err != nil {
+	currentVersion, active, err := s.permissionScopeVersion(ctx, userID, tenantID)
+	if err != nil {
 		return nil, err
+	}
+	if active {
+		if err := s.storeCachedPermissions(ctx, userID, tenantID, currentVersion, permissions); err != nil {
+			return nil, err
+		}
 	}
 	return permissions, nil
 }
@@ -75,7 +88,8 @@ func (s *Service) InvalidateUserTenantPermissions(ctx context.Context, userID, t
 	if s.redis == nil {
 		return nil
 	}
-	return s.redis.Del(ctx, cache.PermissionCacheKey(tenantID, userID)).Err()
+	_ = s.redis.Del(ctx, cache.PermissionCacheKey(tenantID, userID)).Err()
+	return nil
 }
 
 func (s *Service) InvalidateMemberPermissions(ctx context.Context, memberID int64) error {
@@ -200,6 +214,36 @@ func (s *Service) activeTenantExists(ctx context.Context, tenantID int64) bool {
 	return err == nil && count > 0
 }
 
+func (s *Service) permissionScopeVersion(ctx context.Context, userID, tenantID int64) (int, bool, error) {
+	if !s.activeTenantExists(ctx, tenantID) {
+		return 0, false, nil
+	}
+
+	var userCount int64
+	if err := s.db.WithContext(ctx).
+		Model(&store.User{}).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
+		Count(&userCount).Error; err != nil {
+		return 0, false, err
+	}
+	if userCount == 0 {
+		return 0, false, nil
+	}
+
+	var scope struct {
+		Version int
+		Count   int64
+	}
+	if err := s.db.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Select("COALESCE(MAX(permission_version), 0) AS version, COUNT(*) AS count").
+		Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", tenantID, userID, store.MemberStatusActive).
+		Scan(&scope).Error; err != nil {
+		return 0, false, err
+	}
+	return scope.Version, scope.Count > 0, nil
+}
+
 func (s *Service) roleIDsForMembersInTenant(ctx context.Context, memberIDs []int64, tenantID int64) ([]int64, error) {
 	var assignedRoleIDs []int64
 	if err := s.db.WithContext(ctx).
@@ -269,35 +313,40 @@ func (s *Service) memberScopesByIDs(ctx context.Context, memberIDs []int64) ([]m
 	return scopes, err
 }
 
-func (s *Service) loadCachedPermissions(ctx context.Context, userID, tenantID int64) ([]string, bool, error) {
+func (s *Service) loadCachedPermissions(ctx context.Context, userID, tenantID int64) ([]string, int, bool, error) {
 	if s.redis == nil {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 
 	value, err := s.redis.Get(ctx, cache.PermissionCacheKey(tenantID, userID)).Result()
 	if err == redis.Nil {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, nil
 	}
 
-	var permissions []string
-	if err := json.Unmarshal([]byte(value), &permissions); err != nil {
-		return nil, false, err
+	var entry permissionCacheEntry
+	if err := json.Unmarshal([]byte(value), &entry); err != nil || entry.Permissions == nil {
+		return nil, 0, false, nil
 	}
+	permissions := entry.Permissions
 	sort.Strings(permissions)
-	return permissions, true, nil
+	return permissions, entry.Version, true, nil
 }
 
-func (s *Service) storeCachedPermissions(ctx context.Context, userID, tenantID int64, permissions []string) error {
+func (s *Service) storeCachedPermissions(ctx context.Context, userID, tenantID int64, version int, permissions []string) error {
 	if s.redis == nil {
 		return nil
 	}
 
-	payload, err := json.Marshal(permissions)
+	payload, err := json.Marshal(permissionCacheEntry{
+		Version:     version,
+		Permissions: permissions,
+	})
 	if err != nil {
 		return err
 	}
-	return s.redis.Set(ctx, cache.PermissionCacheKey(tenantID, userID), payload, permissionCacheTTL).Err()
+	_ = s.redis.Set(ctx, cache.PermissionCacheKey(tenantID, userID), payload, permissionCacheTTL).Err()
+	return nil
 }

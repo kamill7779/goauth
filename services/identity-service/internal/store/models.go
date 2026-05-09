@@ -55,13 +55,14 @@ type Tenant struct {
 }
 
 type TenantMember struct {
-	ID        int64          `gorm:"primaryKey;autoIncrement"`
-	TenantID  int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
-	UserID    int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
-	Status    string         `gorm:"size:32;not null;index"`
-	CreatedAt time.Time      `gorm:"not null"`
-	UpdatedAt time.Time      `gorm:"not null"`
-	DeletedAt gorm.DeletedAt `gorm:"index"`
+	ID                int64          `gorm:"primaryKey;autoIncrement"`
+	TenantID          int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
+	UserID            int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
+	Status            string         `gorm:"size:32;not null;index"`
+	PermissionVersion int            `gorm:"not null;default:0"`
+	CreatedAt         time.Time      `gorm:"not null"`
+	UpdatedAt         time.Time      `gorm:"not null"`
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
 }
 
 type Role struct {
@@ -125,6 +126,16 @@ type OAuthAuthorizationCode struct {
 	ExpiresAt           time.Time `gorm:"not null;index"`
 	ConsumedAt          *time.Time
 	CreatedAt           time.Time `gorm:"not null"`
+}
+
+type LoginSession struct {
+	ID        string     `gorm:"primaryKey;size:255"`
+	UserID    int64      `gorm:"not null;index"`
+	TenantID  int64      `gorm:"not null;index"`
+	ClientID  string     `gorm:"size:255;index"`
+	RevokedAt *time.Time `gorm:"index"`
+	CreatedAt time.Time  `gorm:"not null"`
+	UpdatedAt time.Time  `gorm:"not null"`
 }
 
 type RefreshToken struct {

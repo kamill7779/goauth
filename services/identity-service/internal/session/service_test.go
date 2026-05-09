@@ -116,6 +116,30 @@ func TestIssueTokensStoresRefreshTokenAsHashOnly(t *testing.T) {
 	}
 }
 
+func TestIssueTokensCreatesActiveLoginSession(t *testing.T) {
+	service, user := newTestService(t)
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	var loginSession store.LoginSession
+	if err := service.db.First(&loginSession, "id = ?", pair.SessionID).Error; err != nil {
+		t.Fatalf("load login session: %v", err)
+	}
+	if loginSession.UserID != user.ID || loginSession.TenantID != 42 || loginSession.ClientID != "web-client" {
+		t.Fatalf("login session = %#v, want user/tenant/client metadata", loginSession)
+	}
+	if loginSession.RevokedAt != nil {
+		t.Fatal("new login session should be active")
+	}
+}
+
 func TestIssueOIDCAuthorizeCookieUsesShortLivedExpiry(t *testing.T) {
 	service, user := newTestService(t)
 
@@ -284,6 +308,38 @@ func TestLogoutRevokesSingleSession(t *testing.T) {
 	}
 	if refreshToken.RevokedAt == nil {
 		t.Fatal("expected session refresh token to be revoked")
+	}
+
+	var loginSession store.LoginSession
+	if err := service.db.First(&loginSession, "id = ?", pair.SessionID).Error; err != nil {
+		t.Fatalf("load login session: %v", err)
+	}
+	if loginSession.RevokedAt == nil {
+		t.Fatal("expected login session to be revoked")
+	}
+}
+
+func TestRefreshRejectsRevokedLoginSession(t *testing.T) {
+	service, user := newTestService(t)
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 0,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := service.db.Model(&store.LoginSession{}).
+		Where("id = ?", pair.SessionID).
+		Update("revoked_at", now).Error; err != nil {
+		t.Fatalf("revoke login session: %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected revoked login session to reject refresh")
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"goauth/services/identity-service/internal/config"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -171,9 +172,28 @@ func (s *Service) hasActiveSessionWithDB(ctx context.Context, db *gorm.DB, userI
 	var count int64
 	err := db.WithContext(ctx).
 		Model(&store.RefreshToken{}).
+		Joins("JOIN login_sessions ON login_sessions.id = refresh_tokens.session_id").
 		Joins("JOIN users ON users.id = refresh_tokens.user_id").
 		Where("refresh_tokens.user_id = ? AND refresh_tokens.session_id = ? AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.expires_at > ?", userID, sessionID, s.now()).
+		Where("login_sessions.revoked_at IS NULL").
 		Where("refresh_tokens.token_version = users.token_version AND users.status = ? AND users.deleted_at IS NULL", store.UserStatusActive).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) error {
+	var loginSession store.LoginSession
+	return db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
+		First(&loginSession).Error
+}
+
+func (s *Service) hasActiveLoginSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) bool {
+	var count int64
+	err := db.WithContext(ctx).
+		Model(&store.LoginSession{}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
 		Count(&count).Error
 	return err == nil && count > 0
 }
@@ -256,6 +276,9 @@ func (s *Service) validateRefreshToken(ctx context.Context, token store.RefreshT
 		return false
 	}
 	if user.TokenVersion != token.TokenVersion {
+		return false
+	}
+	if !s.hasActiveLoginSessionWithDB(ctx, s.db, token.UserID, token.SessionID) {
 		return false
 	}
 	if token.TenantID != 0 && !s.hasActiveTenantMembership(ctx, token.UserID, token.TenantID) {

@@ -32,6 +32,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&MemberRole{},
 		&OAuthClient{},
 		&OAuthAuthorizationCode{},
+		&LoginSession{},
 		&RefreshToken{},
 		&ExternalProviderConfig{},
 		&AuditLog{},

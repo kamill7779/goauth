@@ -245,52 +245,15 @@ func (s *Service) MarkSystemUser(ctx context.Context, userID int64, roleCode str
 }
 
 func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
-	var user store.User
-	if err := s.db.WithContext(ctx).First(&user, id).Error; err != nil {
-		return false, err
-	}
-	if strings.EqualFold(user.Email, "root@example.com") || strings.HasPrefix(strings.ToLower(user.Email), "root@") {
-		return true, nil
-	}
-
-	memberIDs, err := s.memberIDsForUser(ctx, id)
-	if err != nil || len(memberIDs) == 0 {
-		return false, err
-	}
-
-	roleIDs, err := s.roleIDsForMembers(ctx, memberIDs)
-	if err != nil || len(roleIDs) == 0 {
-		return false, err
-	}
-
-	return s.hasProtectedRole(ctx, roleIDs)
-}
-
-func (s *Service) memberIDsForUser(ctx context.Context, userID int64) ([]int64, error) {
-	var memberIDs []int64
-	err := s.db.WithContext(ctx).
-		Table("tenant_members").
-		Where("user_id = ?", userID).
-		Pluck("id", &memberIDs).Error
-	return memberIDs, err
-}
-
-func (s *Service) roleIDsForMembers(ctx context.Context, memberIDs []int64) ([]int64, error) {
-	var roleIDs []int64
-	err := s.db.WithContext(ctx).
-		Model(&store.MemberRole{}).
-		Distinct("role_id").
-		Where("member_id IN ?", memberIDs).
-		Pluck("role_id", &roleIDs).Error
-	return roleIDs, err
-}
-
-func (s *Service) hasProtectedRole(ctx context.Context, roleIDs []int64) (bool, error) {
 	var count int64
 	err := s.db.WithContext(ctx).
-		Model(&store.Role{}).
-		Where("id IN ?", roleIDs).
-		Where("is_system = ? OR code IN ?", true, protectedRoleCodes).
+		Table("tenant_members AS tm").
+		Joins("JOIN users AS u ON u.id = tm.user_id AND u.status = ? AND u.deleted_at IS NULL", store.UserStatusActive).
+		Joins("JOIN tenants AS t ON t.id = tm.tenant_id AND t.status = ? AND t.deleted_at IS NULL", store.TenantStatusActive).
+		Joins("JOIN member_roles AS mr ON mr.member_id = tm.id").
+		Joins("JOIN roles AS r ON r.id = mr.role_id AND r.tenant_id = tm.tenant_id").
+		Where("tm.user_id = ? AND tm.status = ? AND tm.deleted_at IS NULL", id, store.MemberStatusActive).
+		Where("r.is_system = ? OR r.code IN ?", true, protectedRoleCodes).
 		Count(&count).Error
 	if err != nil {
 		return false, err

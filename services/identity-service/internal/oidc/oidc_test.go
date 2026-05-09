@@ -885,6 +885,36 @@ func TestAuthorizationCodeCannotBeExchangedAfterLogout(t *testing.T) {
 	assertJSONError(t, recorder.Body.Bytes(), "invalid_grant")
 }
 
+func TestAuthorizationCodeCannotBeExchangedAfterSessionRevoked(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("revoked-session-verifier"), "nonce-revoked-session")
+
+	now := time.Now().UTC()
+	if err := db.Model(&store.LoginSession{}).
+		Where("id = ?", sessionID).
+		Update("revoked_at", now).Error; err != nil {
+		t.Fatalf("revoke login session: %v", err)
+	}
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"code":          {code},
+		"redirect_uri":  {"https://client.example.com/callback"},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+		"code_verifier": {"revoked-session-verifier"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("token status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_grant")
+}
+
 func TestLogoutRevokesOIDCGrantTokens(t *testing.T) {
 	_, router, db, privateKey, user, client := newTestProvider(t)
 	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
