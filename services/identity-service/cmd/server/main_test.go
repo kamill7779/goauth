@@ -29,6 +29,7 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 		body   string
 	}{
 		{name: "admin users", method: http.MethodGet, target: "/v1/admin/users"},
+		{name: "admin oauth clients", method: http.MethodGet, target: "/v1/admin/oauth-clients"},
 		{name: "authz check", method: http.MethodPost, target: "/v1/authz/check", body: `{"user_id":1,"tenant_id":1,"permission":"project:read"}`},
 		{name: "my permissions", method: http.MethodGet, target: "/v1/tenants/1/my-permissions?user_id=1"},
 	}
@@ -61,6 +62,7 @@ func TestAdminAndAuthzRoutesRejectNonSystemUser(t *testing.T) {
 		body   string
 	}{
 		{name: "admin users", method: http.MethodGet, target: "/v1/admin/users"},
+		{name: "admin oauth clients", method: http.MethodGet, target: "/v1/admin/oauth-clients"},
 		{name: "authz check", method: http.MethodPost, target: "/v1/authz/check", body: `{"user_id":1,"tenant_id":1,"permission":"project:read"}`},
 	}
 

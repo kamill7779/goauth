@@ -126,6 +126,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		rbac.NewHandler(rbacService, authMiddleware, systemMiddleware),
 		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
 		user.NewHandler(userService, authMiddleware, systemMiddleware),
+		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
 	)
 
 	if redisClient != nil {
