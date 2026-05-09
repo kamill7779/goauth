@@ -250,16 +250,15 @@ func (h *Handler) logout(c *gin.Context) {
 
 func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *store.User, client *store.OAuthClient, record *store.OAuthAuthorizationCode) (*tokenResponse, error) {
 	issueRefreshToken := supportsGrantType(client, "refresh_token") && hasScope(scopeSet(record.Scope), "offline_access")
+	sessionID := strings.TrimSpace(record.SessionID)
+	if sessionID == "" {
+		return nil, errInvalidGrant
+	}
 
-	sessionID := ""
 	familyID := ""
 	refreshToken := ""
 	if issueRefreshToken {
 		var err error
-		sessionID, err = s.randomID(16)
-		if err != nil {
-			return nil, err
-		}
 		familyID, err = s.randomID(16)
 		if err != nil {
 			return nil, err

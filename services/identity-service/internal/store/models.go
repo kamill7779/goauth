@@ -118,6 +118,7 @@ type OAuthAuthorizationCode struct {
 	TenantID            int64     `gorm:"not null;index"`
 	RedirectURI         string    `gorm:"size:1024;not null"`
 	Scope               string    `gorm:"size:1024"`
+	SessionID           string    `gorm:"size:255;index"`
 	CodeChallenge       string    `gorm:"size:255"`
 	CodeChallengeMethod string    `gorm:"size:32"`
 	Nonce               string    `gorm:"size:255"`

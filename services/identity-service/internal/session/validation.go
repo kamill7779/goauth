@@ -80,44 +80,14 @@ func (s *Service) isSystemUser(ctx context.Context, userID int64) (bool, error) 
 		return true, nil
 	}
 
-	memberIDs, err := s.activeMemberIDsForUser(ctx, userID)
-	if err != nil || len(memberIDs) == 0 {
-		return false, err
-	}
-
-	roleIDs, err := s.roleIDsForMembers(ctx, memberIDs)
-	if err != nil || len(roleIDs) == 0 {
-		return false, err
-	}
-
-	return s.hasSystemRole(ctx, roleIDs)
-}
-
-func (s *Service) activeMemberIDsForUser(ctx context.Context, userID int64) ([]int64, error) {
-	var memberIDs []int64
-	err := s.db.WithContext(ctx).
-		Model(&store.TenantMember{}).
-		Where("user_id = ? AND status = ? AND deleted_at IS NULL", userID, store.MemberStatusActive).
-		Pluck("id", &memberIDs).Error
-	return memberIDs, err
-}
-
-func (s *Service) roleIDsForMembers(ctx context.Context, memberIDs []int64) ([]int64, error) {
-	var roleIDs []int64
-	err := s.db.WithContext(ctx).
-		Model(&store.MemberRole{}).
-		Distinct("role_id").
-		Where("member_id IN ?", memberIDs).
-		Pluck("role_id", &roleIDs).Error
-	return roleIDs, err
-}
-
-func (s *Service) hasSystemRole(ctx context.Context, roleIDs []int64) (bool, error) {
 	var count int64
 	if err := s.db.WithContext(ctx).
-		Model(&store.Role{}).
-		Where("id IN ?", roleIDs).
-		Where("is_system = ? OR code IN ?", true, systemRoleCodes).
+		Table("tenant_members AS tm").
+		Joins("JOIN tenants AS t ON t.id = tm.tenant_id AND t.status = ? AND t.deleted_at IS NULL", store.TenantStatusActive).
+		Joins("JOIN member_roles AS mr ON mr.member_id = tm.id").
+		Joins("JOIN roles AS r ON r.id = mr.role_id AND r.tenant_id = tm.tenant_id").
+		Where("tm.user_id = ? AND tm.status = ? AND tm.deleted_at IS NULL", userID, store.MemberStatusActive).
+		Where("r.is_system = ? OR r.code IN ?", true, systemRoleCodes).
 		Count(&count).Error; err != nil {
 		return false, err
 	}

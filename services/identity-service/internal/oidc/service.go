@@ -166,7 +166,9 @@ func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID 
 	var count int64
 	err := s.db.WithContext(ctx).
 		Model(&store.RefreshToken{}).
-		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, sessionID, s.now()).
+		Joins("JOIN users ON users.id = refresh_tokens.user_id").
+		Where("refresh_tokens.user_id = ? AND refresh_tokens.session_id = ? AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.expires_at > ?", userID, sessionID, s.now()).
+		Where("refresh_tokens.token_version = users.token_version AND users.status = ? AND users.deleted_at IS NULL", store.UserStatusActive).
 		Count(&count).Error
 	return err == nil && count > 0
 }
@@ -217,7 +219,7 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	if user.TokenVersion != claims.TokenVersion {
 		return gorm.ErrRecordNotFound
 	}
-	if claims.SessionID != "" && !s.hasActiveSession(ctx, userID, claims.SessionID) {
+	if strings.TrimSpace(claims.SessionID) == "" || !s.hasActiveSession(ctx, userID, claims.SessionID) {
 		return gorm.ErrRecordNotFound
 	}
 	if claims.TenantID != 0 && !s.hasActiveTenantMembership(ctx, userID, claims.TenantID) {

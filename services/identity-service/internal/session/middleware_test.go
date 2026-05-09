@@ -98,9 +98,49 @@ func TestAuthMiddlewareRejectsDisabledMembership(t *testing.T) {
 	assertProtectedStatus(t, router, pair.AccessToken, http.StatusUnauthorized)
 }
 
+func TestSystemUserMiddlewareRejectsSystemRoleInDisabledTenant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	tenantRecord := store.Tenant{Name: "Admin Tenant", Slug: "admin-tenant", Status: store.TenantStatusActive}
+	if err := service.db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	member := store.TenantMember{TenantID: tenantRecord.ID, UserID: user.ID, Status: store.MemberStatusActive}
+	if err := service.db.Create(&member).Error; err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	role := store.Role{TenantID: tenantRecord.ID, Name: "System Admin", Code: "system-admin", IsSystem: true}
+	if err := service.db.Create(&role).Error; err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if err := service.db.Create(&store.MemberRole{MemberID: member.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatalf("create member role: %v", err)
+	}
+
+	pair := issueSessionPair(t, service, *user, 0)
+	router := newSystemProtectedRouter(service)
+	assertSystemProtectedStatus(t, router, pair.AccessToken, http.StatusOK)
+
+	if err := service.db.Model(&store.Tenant{}).
+		Where("id = ?", tenantRecord.ID).
+		Update("status", store.TenantStatusDisabled).Error; err != nil {
+		t.Fatalf("disable tenant: %v", err)
+	}
+	assertSystemProtectedStatus(t, router, pair.AccessToken, http.StatusForbidden)
+}
+
 func newProtectedRouter(service *Service) *gin.Engine {
 	router := gin.New()
 	router.GET("/protected", AuthMiddleware(service, &service.privateKey.PublicKey), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+	return router
+}
+
+func newSystemProtectedRouter(service *Service) *gin.Engine {
+	router := gin.New()
+	router.GET("/admin", AuthMiddleware(service, &service.privateKey.PublicKey), SystemUserMiddleware(service), func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 	return router
@@ -110,6 +150,20 @@ func assertProtectedStatus(t *testing.T, router *gin.Engine, accessToken string,
 	t.Helper()
 
 	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != want {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, want, recorder.Body.String())
+	}
+}
+
+func assertSystemProtectedStatus(t *testing.T, router *gin.Engine, accessToken string, want int) {
+	t.Helper()
+
+	request := httptest.NewRequest(http.MethodGet, "/admin", nil)
 	request.Header.Set("Authorization", "Bearer "+accessToken)
 	recorder := httptest.NewRecorder()
 

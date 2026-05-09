@@ -184,7 +184,7 @@ func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
 	service, router, db, privateKey, user, client := newTestProvider(t)
 	verifier := "test-verifier-1234567890"
 	challenge := pkceChallengeS256(verifier)
-	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope="+url.QueryEscape("openid profile email offline_access")+"&state=state-123&nonce=nonce-123&code_challenge="+challenge+"&code_challenge_method=S256", nil)
@@ -217,6 +217,9 @@ func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
 	}
 	if record.CodeHash != service.hashAuthorizationCode(code) {
 		t.Fatalf("code hash = %q, want %q", record.CodeHash, service.hashAuthorizationCode(code))
+	}
+	if record.SessionID != sessionID {
+		t.Fatalf("session_id = %q, want %q", record.SessionID, sessionID)
 	}
 }
 
@@ -800,6 +803,55 @@ func TestLogoutRevokesSessionAndClearsOIDCCookie(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("active refresh token count = %d, want 0", count)
 	}
+}
+
+func TestLogoutRevokesOIDCGrantTokens(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("logout-grant-verifier"), "nonce-logout-grant")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "logout-grant-verifier")
+
+	logoutRecorder := httptest.NewRecorder()
+	logoutRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	logoutRequest.AddCookie(authorizeCookie)
+	router.ServeHTTP(logoutRecorder, logoutRequest)
+	if logoutRecorder.Code != http.StatusOK {
+		t.Fatalf("logout status = %d, want %d body=%s", logoutRecorder.Code, http.StatusOK, logoutRecorder.Body.String())
+	}
+
+	if status := refreshTokenGrantStatus(router, client.ClientID, "super-secret", tokenSet.RefreshToken); status != http.StatusBadRequest {
+		t.Fatalf("refresh status = %d, want %d after logout", status, http.StatusBadRequest)
+	}
+	assertIntrospectInactive(t, router, client.ClientID, "super-secret", tokenSet.AccessToken)
+	assertIntrospectInactive(t, router, client.ClientID, "super-secret", tokenSet.RefreshToken)
+
+	userInfoRecorder := httptest.NewRecorder()
+	userInfoRequest := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+	userInfoRequest.Header.Set("Authorization", "Bearer "+tokenSet.AccessToken)
+	router.ServeHTTP(userInfoRecorder, userInfoRequest)
+	if userInfoRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("userinfo status = %d, want %d body=%s", userInfoRecorder.Code, http.StatusUnauthorized, userInfoRecorder.Body.String())
+	}
+}
+
+func TestAuthorizeRejectsCookieAfterTokenVersionChange(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	if err := db.Model(&store.User{}).
+		Where("id = ?", user.ID).
+		Update("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+		t.Fatalf("bump token version: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain", nil)
+	request.AddCookie(authorizeCookie)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "login_required")
 }
 
 func TestLogoutRejectsSessionIDThatDoesNotMatchCurrentOIDCCookie(t *testing.T) {

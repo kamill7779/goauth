@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+
+bin/
+dist/
+tmp/
+coverage.out
+*.test
+
+mysql-data/
+redis-data/
