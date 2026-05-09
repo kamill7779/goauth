@@ -25,6 +25,7 @@ const (
 	defaultRefreshTokenTTL      = 30 * 24 * time.Hour
 	authMethodClientSecretBasic = "client_secret_basic"
 	authMethodClientSecretPost  = "client_secret_post"
+	accessTokenUseOIDC          = "oidc_access"
 )
 
 var errInvalidClientCredentials = errors.New("invalid client credentials")
@@ -51,6 +52,7 @@ type accessClaims struct {
 	EmailVerified bool   `json:"email_verified,omitempty"`
 	Name          string `json:"name,omitempty"`
 	Scope         string `json:"scope,omitempty"`
+	TokenUse      string `json:"token_use,omitempty"`
 	ClientID      string `json:"client_id,omitempty"`
 	TenantID      int64  `json:"tid,omitempty"`
 	SessionID     string `json:"sid,omitempty"`
@@ -162,9 +164,12 @@ func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID 
 	if userID == 0 || sessionID == "" {
 		return false
 	}
+	return s.hasActiveSessionWithDB(ctx, s.db, userID, sessionID)
+}
 
+func (s *Service) hasActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) bool {
 	var count int64
-	err := s.db.WithContext(ctx).
+	err := db.WithContext(ctx).
 		Model(&store.RefreshToken{}).
 		Joins("JOIN users ON users.id = refresh_tokens.user_id").
 		Where("refresh_tokens.user_id = ? AND refresh_tokens.session_id = ? AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.expires_at > ?", userID, sessionID, s.now()).
@@ -206,6 +211,9 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	if strings.TrimSpace(claims.ClientID) == "" || !audienceContains(claims.Audience, claims.ClientID) {
 		return gorm.ErrRecordNotFound
 	}
+	if claims.TokenUse != accessTokenUseOIDC {
+		return gorm.ErrRecordNotFound
+	}
 
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
@@ -225,11 +233,21 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	if claims.TenantID != 0 && !s.hasActiveTenantMembership(ctx, userID, claims.TenantID) {
 		return gorm.ErrRecordNotFound
 	}
+	client, err := s.loadClient(ctx, claims.ClientID)
+	if err != nil {
+		return err
+	}
+	if client.Status != store.UserStatusActive || client.TenantID != claims.TenantID {
+		return gorm.ErrRecordNotFound
+	}
 	return nil
 }
 
 func (s *Service) validateRefreshToken(ctx context.Context, token store.RefreshToken) bool {
 	if token.RevokedAt != nil || token.ExpiresAt.Before(s.now()) {
+		return false
+	}
+	if strings.TrimSpace(token.SessionID) == "" {
 		return false
 	}
 

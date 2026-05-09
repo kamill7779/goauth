@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"strconv"
-	"strings"
 
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
@@ -57,6 +56,9 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	if user.TokenVersion != claims.TokenVersion {
 		return gorm.ErrRecordNotFound
 	}
+	if claims.TokenUse != accessTokenUseSession {
+		return gorm.ErrRecordNotFound
+	}
 	if claims.SessionID == "" {
 		return gorm.ErrRecordNotFound
 	}
@@ -72,14 +74,9 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 }
 
 func (s *Service) isSystemUser(ctx context.Context, userID int64) (bool, error) {
-	user, err := s.loadActiveUser(ctx, userID)
-	if err != nil {
+	if _, err := s.loadActiveUser(ctx, userID); err != nil {
 		return false, err
 	}
-	if strings.EqualFold(user.Email, "root@example.com") {
-		return true, nil
-	}
-
 	var count int64
 	if err := s.db.WithContext(ctx).
 		Table("tenant_members AS tm").

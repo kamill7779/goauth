@@ -3,9 +3,12 @@ package session
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -98,6 +101,32 @@ func TestAuthMiddlewareRejectsDisabledMembership(t *testing.T) {
 	assertProtectedStatus(t, router, pair.AccessToken, http.StatusUnauthorized)
 }
 
+func TestAuthMiddlewareRejectsOIDCAccessTokenClass(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	pair := issueSessionPair(t, service, *user, 0)
+	router := newProtectedRouter(service)
+	now := time.Now()
+	claims := jwt.MapClaims{
+		"sub":       strconv.FormatInt(user.ID, 10),
+		"aud":       []string{"oidc-web"},
+		"sid":       pair.SessionID,
+		"ver":       user.TokenVersion,
+		"token_use": "oidc_access",
+		"iat":       now.Unix(),
+		"nbf":       now.Unix(),
+		"exp":       now.Add(15 * time.Minute).Unix(),
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	raw, err := token.SignedString(service.privateKey)
+	if err != nil {
+		t.Fatalf("SignedString() error = %v", err)
+	}
+
+	assertProtectedStatus(t, router, raw, http.StatusUnauthorized)
+}
+
 func TestSystemUserMiddlewareRejectsSystemRoleInDisabledTenant(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -127,6 +156,19 @@ func TestSystemUserMiddlewareRejectsSystemRoleInDisabledTenant(t *testing.T) {
 		Update("status", store.TenantStatusDisabled).Error; err != nil {
 		t.Fatalf("disable tenant: %v", err)
 	}
+	assertSystemProtectedStatus(t, router, pair.AccessToken, http.StatusForbidden)
+}
+
+func TestSystemUserMiddlewareRejectsRootEmailWithoutSystemRole(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	if err := service.db.Model(&store.User{}).Where("id = ?", user.ID).Update("email", "root@example.com").Error; err != nil {
+		t.Fatalf("update email: %v", err)
+	}
+	pair := issueSessionPair(t, service, *user, 0)
+	router := newSystemProtectedRouter(service)
+
 	assertSystemProtectedStatus(t, router, pair.AccessToken, http.StatusForbidden)
 }
 

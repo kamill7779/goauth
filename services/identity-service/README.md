@@ -63,6 +63,8 @@ docker compose down -v
 
 `.env.example` 列出了服务读取的全部环境变量。Compose 使用 `${VAR:-default}`，复制 `.env.example` 后即使变量值为空，也会使用 Compose 内置默认值；因此示例里的 `PUBLIC_ISSUER_URL` 保持为空，避免覆盖随 `IDENTITY_HTTP_PORT` 变化的 issuer 默认值。
 
+不要把 `JWT_PRIVATE_KEY_PATH` 指向服务目录内的私钥文件；私钥应通过运行时 volume/secret 注入。`.dockerignore` 会排除常见 key/secrets 文件，避免它们进入 Docker build context。
+
 ## 集成文档
 
 - [业务系统接入指南](docs/client-integration.md)

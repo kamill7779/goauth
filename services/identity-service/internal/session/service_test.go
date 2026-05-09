@@ -90,6 +90,9 @@ func TestIssueTokensIncludesExpectedAccessClaims(t *testing.T) {
 	if claims["ver"] != float64(3) {
 		t.Fatalf("ver = %v, want 3", claims["ver"])
 	}
+	if claims["token_use"] != accessTokenUseSession {
+		t.Fatalf("token_use = %v, want %q", claims["token_use"], accessTokenUseSession)
+	}
 }
 
 func TestIssueTokensStoresRefreshTokenAsHashOnly(t *testing.T) {

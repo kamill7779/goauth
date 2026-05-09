@@ -88,6 +88,10 @@ func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthC
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
+	if !h.service.hasActiveSession(ctx, record.UserID, record.SessionID) {
+		oauthError(c, http.StatusBadRequest, "invalid_grant")
+		return
+	}
 
 	user, err := h.service.loadUser(ctx, record.UserID)
 	if err != nil || user.Status != store.UserStatusActive {
@@ -109,6 +113,9 @@ func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthC
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
+			return errInvalidGrant
+		}
+		if !h.service.hasActiveSessionWithDB(ctx, tx, user.ID, record.SessionID) {
 			return errInvalidGrant
 		}
 
@@ -233,6 +240,10 @@ func (h *Handler) logout(c *gin.Context) {
 			Model(&store.RefreshToken{}).
 			Where("session_id = ? AND revoked_at IS NULL", sessionID).
 			Update("revoked_at", now).Error
+		_ = h.service.db.WithContext(ctx).
+			Model(&store.OAuthAuthorizationCode{}).
+			Where("session_id = ? AND consumed_at IS NULL", sessionID).
+			Update("consumed_at", now).Error
 	}
 	session.ClearOIDCAuthorizeCookie(c)
 
@@ -322,6 +333,11 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 		return
 	}
 	if current.ClientID != client.ClientID {
+		oauthError(c, http.StatusBadRequest, "invalid_grant")
+		return
+	}
+	if strings.TrimSpace(current.SessionID) == "" {
+		h.service.recordRefreshTokenReuse(ctx, current)
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
@@ -459,6 +475,7 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 
 	claims := accessClaims{
 		Scope:        scope,
+		TokenUse:     accessTokenUseOIDC,
 		ClientID:     clientID,
 		TenantID:     tenantID,
 		SessionID:    sessionID,

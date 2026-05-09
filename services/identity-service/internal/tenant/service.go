@@ -232,14 +232,16 @@ func (s *Service) RemoveMember(ctx context.Context, tenantID, userID int64) erro
 	scopes := make([]permissionCacheScope, 0, len(members))
 	for _, member := range members {
 		scopes = append(scopes, permissionCacheScope{UserID: member.UserID, TenantID: member.TenantID})
-		if err := s.db.WithContext(ctx).Where("member_id = ?", member.ID).Delete(&store.MemberRole{}).Error; err != nil {
-			return err
-		}
 	}
 
-	if err := s.db.WithContext(ctx).
-		Where("tenant_id = ? AND user_id = ?", tenantID, userID).
-		Delete(&store.TenantMember{}).Error; err != nil {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, member := range members {
+			if err := tx.Where("member_id = ?", member.ID).Delete(&store.MemberRole{}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("tenant_id = ? AND user_id = ?", tenantID, userID).Delete(&store.TenantMember{}).Error
+	}); err != nil {
 		return err
 	}
 	if err := s.invalidatePermissionScopes(ctx, scopes); err != nil {

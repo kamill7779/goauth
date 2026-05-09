@@ -26,6 +26,8 @@ var (
 	ErrRefreshTokenReuse   = errors.New("refresh token reuse detected")
 )
 
+const accessTokenUseSession = "session"
+
 type Service struct {
 	db              *gorm.DB
 	privateKey      *rsa.PrivateKey
@@ -53,6 +55,7 @@ type accessClaims struct {
 	EmailVerified bool     `json:"email_verified"`
 	Roles         []string `json:"roles,omitempty"`
 	Permissions   []string `json:"permissions,omitempty"`
+	TokenUse      string   `json:"token_use"`
 	TenantID      int64    `json:"tid"`
 	SessionID     string   `json:"sid"`
 	TokenVersion  int      `json:"ver"`
@@ -161,6 +164,7 @@ func (s *Service) signAccessToken(user store.User, tenantID int64, clientID, ses
 	claims := accessClaims{
 		Email:         user.Email,
 		EmailVerified: user.EmailVerifiedAt != nil,
+		TokenUse:      accessTokenUseSession,
 		TenantID:      tenantID,
 		SessionID:     sessionID,
 		TokenVersion:  user.TokenVersion,
