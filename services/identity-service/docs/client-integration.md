@@ -67,7 +67,8 @@ GET /oauth2/authorize?
 
 - `redirect_uri` 必须和 client 注册值完全一致。
 - `scope` 必须包含 `openid`。
-- 用户浏览器需要先在 Goauth 登录并持有 `goauth_oidc_session` cookie，否则授权端点会返回 `login_required`。
+- 用户浏览器可以直接访问 `/oauth2/authorize`。如果还没有 `goauth_oidc_session` cookie，GoAuth 会自动跳转到内置 `/oauth2/login` 页面，登录成功后继续原始授权请求。
+- 非浏览器调用方如果直接请求授权端点，在缺少登录态时仍会收到 `login_required` JSON 错误。
 - 本地 HTTP 调试如果遇到 Secure Cookie 不写入，建议通过 HTTPS 反向代理或浏览器信任的本地域名测试完整登录跳转。
 - 回调时业务系统必须校验 `state`，并用 `nonce` 校验 ID Token。
 

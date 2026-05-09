@@ -21,4 +21,7 @@ func TestTypedKeyHelpers(t *testing.T) {
 	if got := OIDCStateKey("state-1"); got != "auth:oidc_state:state-1" {
 		t.Fatalf("OIDCStateKey() = %q", got)
 	}
+	if got := RateLimitKey("auth_login", "127.0.0.1|user@example.com"); got != "auth:rate:auth_login:127.0.0.1|user@example.com" {
+		t.Fatalf("RateLimitKey() = %q", got)
+	}
 }

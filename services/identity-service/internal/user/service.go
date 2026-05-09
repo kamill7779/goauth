@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/auth"
@@ -33,6 +34,13 @@ type UpdateUserInput struct {
 	Email       *string `json:"email"`
 	DisplayName *string `json:"display_name"`
 	AvatarURL   *string `json:"avatar_url"`
+}
+
+type BootstrapAdminInput struct {
+	Email       string
+	DisplayName string
+	Password    string
+	RoleCode    string
 }
 
 func NewService(db *gorm.DB, recorder audit.Recorder) *Service {
@@ -183,6 +191,79 @@ func (s *Service) ResetPassword(ctx context.Context, id int64, password string) 
 			"source": "admin",
 		},
 	})
+}
+
+func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdminInput) (*store.User, error) {
+	email := normalizeEmail(input.Email)
+	if email == "" {
+		return nil, errors.New("bootstrap admin email is required")
+	}
+	if strings.TrimSpace(input.Password) == "" {
+		return nil, errors.New("bootstrap admin password is required")
+	}
+
+	roleCode := strings.TrimSpace(input.RoleCode)
+	if roleCode == "" {
+		roleCode = "root"
+	}
+
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		displayName = email
+	}
+
+	hash, err := auth.HashPassword(input.Password)
+	if err != nil {
+		return nil, err
+	}
+
+	var record store.User
+	now := time.Now().UTC()
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		err := tx.Where("email = ?", email).First(&record).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			record = store.User{
+				Email:           email,
+				DisplayName:     displayName,
+				PasswordHash:    hash,
+				Status:          store.UserStatusActive,
+				EmailVerifiedAt: &now,
+			}
+			if err := tx.Create(&record).Error; err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		default:
+			updates := map[string]any{
+				"display_name":  displayName,
+				"password_hash": hash,
+				"status":        store.UserStatusActive,
+				"updated_at":    now,
+			}
+			if record.EmailVerifiedAt == nil {
+				updates["email_verified_at"] = now
+			}
+			if err := tx.Model(&store.User{}).Where("id = ?", record.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			if err := tx.First(&record, record.ID).Error; err != nil {
+				return err
+			}
+		}
+
+		bootstrapService := &Service{
+			db:    tx,
+			audit: s.audit,
+		}
+		return bootstrapService.MarkSystemUser(ctx, record.ID, roleCode)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &record, nil
 }
 
 func (s *Service) MarkSystemUser(ctx context.Context, userID int64, roleCode string) error {

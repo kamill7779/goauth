@@ -12,6 +12,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "")
 	t.Setenv("REDIS_URL", "")
 	t.Setenv("ACCESS_TOKEN_TTL", "")
+	t.Setenv("BROWSER_SESSION_TTL", "")
 	t.Setenv("REFRESH_TOKEN_TTL", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	t.Setenv("CORS_ALLOWED_METHODS", "")
@@ -35,6 +36,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.AccessTokenTTL != 15*time.Minute {
 		t.Fatalf("AccessTokenTTL = %v, want 15m", cfg.AccessTokenTTL)
 	}
+	if cfg.BrowserSessionTTL != 12*time.Hour {
+		t.Fatalf("BrowserSessionTTL = %v, want 12h", cfg.BrowserSessionTTL)
+	}
 	if cfg.RefreshTokenTTL != 30*24*time.Hour {
 		t.Fatalf("RefreshTokenTTL = %v, want 720h", cfg.RefreshTokenTTL)
 	}
@@ -50,6 +54,7 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "root:root@tcp(localhost:3306)/goauth")
 	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
 	t.Setenv("ACCESS_TOKEN_TTL", "20m")
+	t.Setenv("BROWSER_SESSION_TTL", "36h")
 	t.Setenv("REFRESH_TOKEN_TTL", "48h")
 	t.Setenv("SMTP_PORT", "2525")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com")
@@ -68,6 +73,9 @@ func TestLoadParsesTypedValues(t *testing.T) {
 
 	if cfg.SMTPPort != 2525 {
 		t.Fatalf("SMTPPort = %d, want 2525", cfg.SMTPPort)
+	}
+	if cfg.BrowserSessionTTL != 36*time.Hour {
+		t.Fatalf("BrowserSessionTTL = %v, want 36h", cfg.BrowserSessionTTL)
 	}
 	if got, want := len(cfg.CORSAllowedOrigins), 2; got != want {
 		t.Fatalf("len(CORSAllowedOrigins) = %d, want %d", got, want)

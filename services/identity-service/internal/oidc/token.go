@@ -54,6 +54,9 @@ func (h *Handler) token(c *gin.Context) {
 			oauthError(c, http.StatusBadRequest, "unauthorized_client")
 			return
 		}
+		if !h.allowRefreshRateLimit(c, client.ClientID) {
+			return
+		}
 		h.refreshToken(c, client)
 	default:
 		oauthError(c, http.StatusBadRequest, "unsupported_grant_type")

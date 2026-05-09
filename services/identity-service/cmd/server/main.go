@@ -19,6 +19,7 @@ import (
 	githubidp "goauth/services/identity-service/internal/idp/github"
 	"goauth/services/identity-service/internal/mailer"
 	"goauth/services/identity-service/internal/oidc"
+	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/rbac"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
@@ -56,6 +57,9 @@ func run() error {
 	if err := store.AutoMigrate(db); err != nil {
 		return fmt.Errorf("auto migrate: %w", err)
 	}
+	if err := bootstrapAdminUser(db, cfg); err != nil {
+		return fmt.Errorf("bootstrap admin: %w", err)
+	}
 
 	privateKey, err := loadSigningKey(cfg)
 	if err != nil {
@@ -90,15 +94,48 @@ func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
 	return rsa.GenerateKey(rand.Reader, 2048)
 }
 
+func bootstrapAdminUser(db *gorm.DB, cfg config.Config) error {
+	email := strings.TrimSpace(cfg.BootstrapAdminEmail)
+	password := strings.TrimSpace(cfg.BootstrapAdminPassword)
+	if email == "" && password == "" {
+		return nil
+	}
+	if email == "" || password == "" {
+		return fmt.Errorf("BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD must be set together")
+	}
+
+	roleCode := strings.TrimSpace(cfg.BootstrapAdminRoleCode)
+	if roleCode == "" {
+		roleCode = "root"
+	}
+
+	userService := user.NewService(db, audit.NewService(db))
+	record, err := userService.EnsureBootstrapAdmin(context.Background(), user.BootstrapAdminInput{
+		Email:       email,
+		DisplayName: strings.TrimSpace(cfg.BootstrapAdminDisplayName),
+		Password:    password,
+		RoleCode:    roleCode,
+	})
+	if err != nil {
+		return err
+	}
+
+	log.Printf("bootstrap admin ready: user_id=%d email=%s role=%s", record.ID, record.Email, roleCode)
+	return nil
+}
+
 func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, privateKey *rsa.PrivateKey) *gin.Engine {
 	sessionService := session.NewService(db, cfg, privateKey)
 	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
+	rateLimiter := ratelimit.NewService(redisClient)
+	sessionHandler.SetRateLimiter(rateLimiter)
 	authMiddleware := session.AuthMiddleware(sessionService, &privateKey.PublicKey)
 	systemMiddleware := session.SystemUserMiddleware(sessionService)
 	auditService := audit.NewService(db)
 	sessionService.SetAuditRecorder(auditService)
 	oidcService := oidc.NewService(db, cfg, privateKey)
 	oidcService.SetAuditRecorder(auditService)
+	oidcService.SetRateLimiter(rateLimiter)
 
 	registrars := []httpserver.Registrar{
 		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
@@ -136,7 +173,10 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		authService := auth.NewService(db, redisClient, mailer.NoopSender{})
 		authService.SetAuditRecorder(auditService)
 		authHandler := auth.NewHandler(authService, sessionService)
+		authHandler.SetRateLimiter(rateLimiter)
 		authHandler.RegisterRoutes(authGroup)
+		authHandler.RegisterBrowserRoutes(router)
+		oidcService.SetBrowserLoginPath("/oauth2/login")
 	}
 
 	return router

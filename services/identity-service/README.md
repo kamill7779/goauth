@@ -57,11 +57,28 @@ docker compose down -v
 | `JWT_PRIVATE_KEY_PATH` | 空 | RSA 私钥路径。为空时本地开发会生成临时 key，重启后 JWKS 会变化。 |
 | `JWT_KEY_ID` | 空 | JWKS/Token header 的 `kid`。本地 Compose 默认 `local-dev`。 |
 | `ACCESS_TOKEN_TTL` | `15m` | access token 有效期。 |
+| `BROWSER_SESSION_TTL` | `12h` | 浏览器 SSO 会话时长，对应 `goauth_oidc_session` 授权 cookie；只影响浏览器侧 OIDC 连续登录体验，不改变 access/refresh token 语义。 |
 | `REFRESH_TOKEN_TTL` | `720h` | refresh token 有效期。 |
 | `CORS_ALLOWED_ORIGINS` | 空 | 逗号分隔的允许来源。 |
 | `GITHUB_OAUTH_ENABLED` | `false` | 是否启用 GitHub 外部登录。启用时还需配置 client id/secret/redirect URI。 |
+| `BOOTSTRAP_ADMIN_EMAIL` | 空 | 可选。与 `BOOTSTRAP_ADMIN_PASSWORD` 一起设置后，服务启动时会确保该账号存在并授予系统角色。 |
+| `BOOTSTRAP_ADMIN_PASSWORD` | 空 | 可选。bootstrap 管理员密码；建议首次登录后立即通过管理流程轮换并移除该环境变量。 |
+| `BOOTSTRAP_ADMIN_ROLE` | `root` | bootstrap 账号授予的系统角色代码，默认 `root`。 |
 
 `.env.example` 列出了服务读取的全部环境变量。Compose 使用 `${VAR:-default}`，复制 `.env.example` 后即使变量值为空，也会使用 Compose 内置默认值；因此示例里的 `PUBLIC_ISSUER_URL` 保持为空，避免覆盖随 `IDENTITY_HTTP_PORT` 变化的 issuer 默认值。
+
+## 创建第一个管理员
+
+最简单的本地或首部署方式是在 `.env` 中设置：
+
+```text
+BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+BOOTSTRAP_ADMIN_PASSWORD=ChangeMe123!
+BOOTSTRAP_ADMIN_DISPLAY_NAME=Initial Admin
+BOOTSTRAP_ADMIN_ROLE=root
+```
+
+服务启动后会幂等地确保该用户存在、处于激活状态，并属于 `system` 租户下对应的系统角色。建议在首次登录、创建正式管理员并完成 OAuth Client/租户初始化后，删除这些 bootstrap 环境变量并重启服务。
 
 不要把 `JWT_PRIVATE_KEY_PATH` 指向服务目录内的私钥文件；私钥应通过运行时 volume/secret 注入。`.dockerignore` 会排除常见 key/secrets 文件，避免它们进入 Docker build context。
 

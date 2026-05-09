@@ -15,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -36,10 +37,12 @@ type Service struct {
 	privateKey           *rsa.PrivateKey
 	publicKey            *rsa.PublicKey
 	issuer               string
+	browserLoginPath     string
 	keyID                string
 	accessTokenTTL       time.Duration
 	refreshTokenTTL      time.Duration
 	authorizationCodeTTL time.Duration
+	rateLimiter          *ratelimit.Service
 	audit                audit.Recorder
 	now                  func() time.Time
 }
@@ -108,6 +111,10 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 		return
 	}
 	s.audit = recorder
+}
+
+func (s *Service) SetBrowserLoginPath(path string) {
+	s.browserLoginPath = strings.TrimSpace(path)
 }
 
 func RegisterRoutes(router gin.IRoutes, service *Service) {

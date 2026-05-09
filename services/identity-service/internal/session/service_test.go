@@ -33,9 +33,10 @@ func newTestService(t *testing.T) (*Service, *store.User) {
 	}
 
 	service := NewService(db, config.Config{
-		JWTKeyID:        "test-key",
-		AccessTokenTTL:  15 * time.Minute,
-		RefreshTokenTTL: 30 * 24 * time.Hour,
+		JWTKeyID:          "test-key",
+		AccessTokenTTL:    15 * time.Minute,
+		BrowserSessionTTL: 12 * time.Hour,
+		RefreshTokenTTL:   30 * 24 * time.Hour,
 	}, privateKey)
 
 	user := &store.User{
@@ -140,7 +141,7 @@ func TestIssueTokensCreatesActiveLoginSession(t *testing.T) {
 	}
 }
 
-func TestIssueOIDCAuthorizeCookieUsesShortLivedExpiry(t *testing.T) {
+func TestIssueOIDCAuthorizeCookieUsesBrowserSessionExpiry(t *testing.T) {
 	service, user := newTestService(t)
 
 	value, err := service.IssueOIDCAuthorizeCookie(*user, 42, "browser-session")
@@ -160,8 +161,8 @@ func TestIssueOIDCAuthorizeCookieUsesShortLivedExpiry(t *testing.T) {
 	}
 
 	got := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time)
-	if got != service.accessTokenTTL {
-		t.Fatalf("cookie ttl = %s, want %s", got, service.accessTokenTTL)
+	if got != service.OIDCAuthorizeCookieTTL() {
+		t.Fatalf("cookie ttl = %s, want %s", got, service.OIDCAuthorizeCookieTTL())
 	}
 }
 

@@ -253,3 +253,72 @@ func TestCrossTenantSystemRoleBindingDoesNotProtectUser(t *testing.T) {
 		t.Fatalf("DisableUser() error = %v", err)
 	}
 }
+
+func TestEnsureBootstrapAdminCreatesAndMarksSystemUser(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       "bootstrap@example.com",
+		DisplayName: "Bootstrap Admin",
+		Password:    "ChangeMe123!",
+		RoleCode:    "root",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin() error = %v", err)
+	}
+	if record.Status != store.UserStatusActive {
+		t.Fatalf("status = %q, want %q", record.Status, store.UserStatusActive)
+	}
+	if record.EmailVerifiedAt == nil {
+		t.Fatal("expected bootstrap admin email to be verified")
+	}
+
+	protected, err := service.isProtectedUser(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("isProtectedUser() error = %v", err)
+	}
+	if !protected {
+		t.Fatal("expected bootstrap admin to be protected by system role")
+	}
+}
+
+func TestEnsureBootstrapAdminReactivatesExistingUser(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Email:       "existing-bootstrap@example.com",
+		DisplayName: "Existing",
+		Password:    "old-password",
+		Status:      store.UserStatusDisabled,
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	oldHash := record.PasswordHash
+
+	updated, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       record.Email,
+		DisplayName: "Bootstrap Existing",
+		Password:    "new-password",
+		RoleCode:    "system-admin",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin() error = %v", err)
+	}
+	if updated.Status != store.UserStatusActive {
+		t.Fatalf("status = %q, want %q", updated.Status, store.UserStatusActive)
+	}
+	if updated.PasswordHash == oldHash {
+		t.Fatal("expected bootstrap admin password hash to change")
+	}
+
+	protected, err := service.isProtectedUser(ctx, updated.ID)
+	if err != nil {
+		t.Fatalf("isProtectedUser() error = %v", err)
+	}
+	if !protected {
+		t.Fatal("expected existing bootstrap admin to receive system role")
+	}
+}

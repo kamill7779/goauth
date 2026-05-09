@@ -1,16 +1,19 @@
 package auth
 
 import (
+	"errors"
 	stdhttp "net/http"
 
 	"github.com/gin-gonic/gin"
 	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/session"
 )
 
 type Handler struct {
-	service *Service
-	session *session.Service
+	service     *Service
+	session     *session.Service
+	rateLimiter *ratelimit.Service
 }
 
 func NewHandler(service *Service, sessionService *session.Service) *Handler {
@@ -28,6 +31,11 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/password/reset", h.resetPassword)
 }
 
+func (h *Handler) RegisterBrowserRoutes(router gin.IRoutes) {
+	router.GET("/oauth2/login", h.browserLoginPage)
+	router.POST("/oauth2/login", h.browserLoginSubmit)
+}
+
 func (h *Handler) sendCode(c *gin.Context) {
 	var request struct {
 		Purpose string `json:"purpose"`
@@ -39,6 +47,9 @@ func (h *Handler) sendCode(c *gin.Context) {
 	}
 	if request.Purpose == "" {
 		request.Purpose = EmailCodePurposeRegister
+	}
+	if !h.allowJSONRateLimit(c, emailCodeRateLimitScope, rateLimitEmailCodeKey(c, request.Purpose, request.Email), emailCodeRateLimitLimit, emailCodeRateLimitWindow) {
+		return
 	}
 	if _, err := h.service.SendEmailCode(c.Request.Context(), request.Purpose, request.Email); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
@@ -86,41 +97,37 @@ func (h *Handler) login(c *gin.Context) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if !h.allowJSONRateLimit(c, loginRateLimitScope, rateLimitKey(c, request.Email), loginRateLimitLimit, loginRateLimitWindow) {
+		return
+	}
 
-	user, err := h.service.Login(c.Request.Context(), LoginInput{
+	result, err := h.completeLogin(c.Request.Context(), LoginInput{
 		Email:    request.Email,
 		Password: request.Password,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": err.Error()})
+		statusCode, message := loginErrorResponse(err)
+		c.JSON(statusCode, gin.H{"error": message})
 		return
 	}
 
-	if h.session == nil {
+	if result.pair == nil {
 		httpserver.Success(c, stdhttp.StatusOK, gin.H{
-			"id":    user.ID,
-			"email": user.Email,
+			"id":    result.user.ID,
+			"email": result.user.Email,
 		})
 		return
 	}
 
-	pair, err := h.session.IssueTokens(c.Request.Context(), session.IssueTokensInput{
-		User:     *user,
-		TenantID: 0,
-		ClientID: "goauth-web",
-	})
-	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	cookieValue, err := h.session.IssueOIDCAuthorizeCookie(*user, 0, pair.SessionID)
-	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
+	session.SetOIDCAuthorizeCookie(c, result.cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
+	httpserver.Success(c, stdhttp.StatusOK, result.pair)
+}
 
-	httpserver.Success(c, stdhttp.StatusOK, pair)
+func loginErrorResponse(err error) (int, string) {
+	if errors.Is(err, ErrInvalidCredential) || errors.Is(err, ErrUserDisabled) {
+		return stdhttp.StatusUnauthorized, err.Error()
+	}
+	return stdhttp.StatusInternalServerError, "login unavailable"
 }
 
 func (h *Handler) forgotPassword(c *gin.Context) {
@@ -129,6 +136,9 @@ func (h *Handler) forgotPassword(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.allowJSONRateLimit(c, passwordResetRateLimitScope, rateLimitKey(c, request.Email), passwordResetRateLimitLimit, passwordResetRateLimitWindow) {
 		return
 	}
 	if err := h.service.ForgotPassword(c.Request.Context(), request.Email); err != nil {
@@ -146,6 +156,9 @@ func (h *Handler) resetPassword(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.allowJSONRateLimit(c, passwordResetRateLimitScope, rateLimitKey(c, request.Email), passwordResetRateLimitLimit, passwordResetRateLimitWindow) {
 		return
 	}
 	if err := h.service.ResetPassword(c.Request.Context(), ResetPasswordInput{

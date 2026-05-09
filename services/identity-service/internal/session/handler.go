@@ -7,11 +7,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/ratelimit"
 )
 
 type Handler struct {
-	service   *Service
-	publicKey *rsa.PublicKey
+	service     *Service
+	publicKey   *rsa.PublicKey
+	rateLimiter *ratelimit.Service
 }
 
 func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
@@ -40,6 +42,9 @@ func (h *Handler) refresh(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if !h.allowRefreshRateLimit(c) {
 		return
 	}
 

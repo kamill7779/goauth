@@ -29,13 +29,14 @@ var (
 const accessTokenUseSession = "session"
 
 type Service struct {
-	db              *gorm.DB
-	privateKey      *rsa.PrivateKey
-	keyID           string
-	accessTokenTTL  time.Duration
-	refreshTokenTTL time.Duration
-	audit           audit.Recorder
-	now             func() time.Time
+	db                *gorm.DB
+	privateKey        *rsa.PrivateKey
+	keyID             string
+	accessTokenTTL    time.Duration
+	browserSessionTTL time.Duration
+	refreshTokenTTL   time.Duration
+	audit             audit.Recorder
+	now               func() time.Time
 }
 
 type IssueTokensInput struct {
@@ -64,13 +65,14 @@ type accessClaims struct {
 
 func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Service {
 	return &Service{
-		db:              db,
-		privateKey:      privateKey,
-		keyID:           cfg.JWTKeyID,
-		accessTokenTTL:  cfg.AccessTokenTTL,
-		refreshTokenTTL: cfg.RefreshTokenTTL,
-		audit:           audit.NoopRecorder{},
-		now:             time.Now,
+		db:                db,
+		privateKey:        privateKey,
+		keyID:             cfg.JWTKeyID,
+		accessTokenTTL:    cfg.AccessTokenTTL,
+		browserSessionTTL: cfg.BrowserSessionTTL,
+		refreshTokenTTL:   cfg.RefreshTokenTTL,
+		audit:             audit.NoopRecorder{},
+		now:               time.Now,
 	}
 }
 
@@ -193,11 +195,14 @@ func (s *Service) RefreshTokenTTL() time.Duration {
 }
 
 func (s *Service) OIDCAuthorizeCookieTTL() time.Duration {
+	if s.browserSessionTTL > 0 {
+		return s.browserSessionTTL
+	}
 	if s.accessTokenTTL > 0 {
 		return s.accessTokenTTL
 	}
 	if s.refreshTokenTTL > 0 {
 		return s.refreshTokenTTL
 	}
-	return 15 * time.Minute
+	return 12 * time.Hour
 }

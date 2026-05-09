@@ -25,3 +25,7 @@ func JtiDenylistKey(jti string) string {
 func OIDCStateKey(state string) string {
 	return fmt.Sprintf("auth:oidc_state:%s", state)
 }
+
+func RateLimitKey(scope, key string) string {
+	return fmt.Sprintf("auth:rate:%s:%s", scope, key)
+}

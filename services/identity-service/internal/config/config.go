@@ -8,33 +8,45 @@ import (
 	"time"
 )
 
+const defaultBrowserSessionTTL = 12 * time.Hour
+
 type Config struct {
-	AppEnv               string
-	HTTPAddr             string
-	PublicIssuerURL      string
-	MySQLDSN             string
-	RedisURL             string
-	JWTPrivateKeyPath    string
-	JWTKeyID             string
-	AccessTokenTTL       time.Duration
-	RefreshTokenTTL      time.Duration
-	SMTPHost             string
-	SMTPPort             int
-	SMTPUsername         string
-	SMTPPassword         string
-	SMTPFrom             string
-	CORSAllowedOrigins   []string
-	CORSAllowedMethods   []string
-	CORSAllowedHeaders   []string
-	CORSAllowCredentials bool
-	GitHubOAuthEnabled   bool
-	GitHubClientID       string
-	GitHubClientSecret   string
-	GitHubRedirectURI    string
+	AppEnv                    string
+	HTTPAddr                  string
+	PublicIssuerURL           string
+	MySQLDSN                  string
+	RedisURL                  string
+	JWTPrivateKeyPath         string
+	JWTKeyID                  string
+	AccessTokenTTL            time.Duration
+	BrowserSessionTTL         time.Duration
+	RefreshTokenTTL           time.Duration
+	SMTPHost                  string
+	SMTPPort                  int
+	SMTPUsername              string
+	SMTPPassword              string
+	SMTPFrom                  string
+	CORSAllowedOrigins        []string
+	CORSAllowedMethods        []string
+	CORSAllowedHeaders        []string
+	CORSAllowCredentials      bool
+	GitHubOAuthEnabled        bool
+	GitHubClientID            string
+	GitHubClientSecret        string
+	GitHubRedirectURI         string
+	BootstrapAdminEmail       string
+	BootstrapAdminPassword    string
+	BootstrapAdminDisplayName string
+	BootstrapAdminRoleCode    string
 }
 
 func Load() (Config, error) {
 	accessTokenTTL, err := parseDurationEnv("ACCESS_TOKEN_TTL", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+
+	browserSessionTTL, err := parseDurationEnv("BROWSER_SESSION_TTL", defaultBrowserSessionTTL)
 	if err != nil {
 		return Config{}, err
 	}
@@ -60,28 +72,33 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		AppEnv:               envOrDefault("APP_ENV", "development"),
-		HTTPAddr:             envOrDefault("HTTP_ADDR", ":8080"),
-		PublicIssuerURL:      envOrDefault("PUBLIC_ISSUER_URL", "http://127.0.0.1:8080"),
-		MySQLDSN:             os.Getenv("MYSQL_DSN"),
-		RedisURL:             os.Getenv("REDIS_URL"),
-		JWTPrivateKeyPath:    os.Getenv("JWT_PRIVATE_KEY_PATH"),
-		JWTKeyID:             os.Getenv("JWT_KEY_ID"),
-		AccessTokenTTL:       accessTokenTTL,
-		RefreshTokenTTL:      refreshTokenTTL,
-		SMTPHost:             os.Getenv("SMTP_HOST"),
-		SMTPPort:             smtpPort,
-		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
-		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
-		SMTPFrom:             os.Getenv("SMTP_FROM"),
-		CORSAllowedOrigins:   splitCSV(envOrDefault("CORS_ALLOWED_ORIGINS", "")),
-		CORSAllowedMethods:   splitCSV(envOrDefault("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE")),
-		CORSAllowedHeaders:   splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type")),
-		CORSAllowCredentials: corsAllowCredentials,
-		GitHubOAuthEnabled:   githubOAuthEnabled,
-		GitHubClientID:       os.Getenv("GITHUB_CLIENT_ID"),
-		GitHubClientSecret:   os.Getenv("GITHUB_CLIENT_SECRET"),
-		GitHubRedirectURI:    os.Getenv("GITHUB_REDIRECT_URI"),
+		AppEnv:                    envOrDefault("APP_ENV", "development"),
+		HTTPAddr:                  envOrDefault("HTTP_ADDR", ":8080"),
+		PublicIssuerURL:           envOrDefault("PUBLIC_ISSUER_URL", "http://127.0.0.1:8080"),
+		MySQLDSN:                  os.Getenv("MYSQL_DSN"),
+		RedisURL:                  os.Getenv("REDIS_URL"),
+		JWTPrivateKeyPath:         os.Getenv("JWT_PRIVATE_KEY_PATH"),
+		JWTKeyID:                  os.Getenv("JWT_KEY_ID"),
+		AccessTokenTTL:            accessTokenTTL,
+		BrowserSessionTTL:         browserSessionTTL,
+		RefreshTokenTTL:           refreshTokenTTL,
+		SMTPHost:                  os.Getenv("SMTP_HOST"),
+		SMTPPort:                  smtpPort,
+		SMTPUsername:              os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:              os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:                  os.Getenv("SMTP_FROM"),
+		CORSAllowedOrigins:        splitCSV(envOrDefault("CORS_ALLOWED_ORIGINS", "")),
+		CORSAllowedMethods:        splitCSV(envOrDefault("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE")),
+		CORSAllowedHeaders:        splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type")),
+		CORSAllowCredentials:      corsAllowCredentials,
+		GitHubOAuthEnabled:        githubOAuthEnabled,
+		GitHubClientID:            os.Getenv("GITHUB_CLIENT_ID"),
+		GitHubClientSecret:        os.Getenv("GITHUB_CLIENT_SECRET"),
+		GitHubRedirectURI:         os.Getenv("GITHUB_REDIRECT_URI"),
+		BootstrapAdminEmail:       os.Getenv("BOOTSTRAP_ADMIN_EMAIL"),
+		BootstrapAdminPassword:    os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+		BootstrapAdminDisplayName: os.Getenv("BOOTSTRAP_ADMIN_DISPLAY_NAME"),
+		BootstrapAdminRoleCode:    envOrDefault("BOOTSTRAP_ADMIN_ROLE", "root"),
 	}, nil
 }
 

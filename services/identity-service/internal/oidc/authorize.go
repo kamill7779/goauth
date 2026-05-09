@@ -17,6 +17,9 @@ func (h *Handler) authorize(c *gin.Context) {
 	ctx := c.Request.Context()
 	clientID := strings.TrimSpace(c.Query("client_id"))
 	redirectURI := strings.TrimSpace(c.Query("redirect_uri"))
+	if !h.allowAuthorizeRateLimit(c, clientID) {
+		return
+	}
 
 	client, err := h.service.loadClient(ctx, clientID)
 	if err != nil {
@@ -52,26 +55,36 @@ func (h *Handler) authorize(c *gin.Context) {
 		return
 	}
 
-	// The browser must already hold a local login cookie; the authorization code
-	// is only issued after we revalidate that session and the client's tenant access.
 	cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName)
 	if err != nil || strings.TrimSpace(cookieValue) == "" {
+		if h.redirectBrowserToLogin(c) {
+			return
+		}
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
 
 	sessionClaims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey)
 	if err != nil {
+		if h.redirectBrowserToLogin(c) {
+			return
+		}
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
 
 	userID, err := strconv.ParseInt(strings.TrimSpace(sessionClaims.Subject), 10, 64)
 	if err != nil || userID == 0 {
+		if h.redirectBrowserToLogin(c) {
+			return
+		}
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
 	if !h.service.hasActiveSession(ctx, userID, sessionClaims.SessionID) {
+		if h.redirectBrowserToLogin(c) {
+			return
+		}
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
@@ -81,6 +94,9 @@ func (h *Handler) authorize(c *gin.Context) {
 	}
 	user, err := h.service.loadUser(ctx, userID)
 	if err != nil || user.Status != store.UserStatusActive {
+		if h.redirectBrowserToLogin(c) {
+			return
+		}
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
@@ -123,4 +139,18 @@ func (h *Handler) authorize(c *gin.Context) {
 	}
 	redirectURL.RawQuery = query.Encode()
 	c.Redirect(http.StatusFound, redirectURL.String())
+}
+
+func (h *Handler) redirectBrowserToLogin(c *gin.Context) bool {
+	if h.service.browserLoginPath == "" || !browserPrefersHTML(c) {
+		return false
+	}
+
+	returnTo, ok := NormalizeAuthorizeReturnTarget(c.Request.URL.RequestURI())
+	if !ok {
+		return false
+	}
+
+	c.Redirect(http.StatusFound, buildBrowserLoginRedirectPath(h.service.browserLoginPath, returnTo))
+	return true
 }
