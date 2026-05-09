@@ -37,11 +37,12 @@ func TestDiscoveryDocumentIncludesRequiredEndpoints(t *testing.T) {
 	}
 
 	var payload struct {
-		Issuer                string `json:"issuer"`
-		AuthorizationEndpoint string `json:"authorization_endpoint"`
-		TokenEndpoint         string `json:"token_endpoint"`
-		UserInfoEndpoint      string `json:"userinfo_endpoint"`
-		JWKSURI               string `json:"jwks_uri"`
+		Issuer                string   `json:"issuer"`
+		AuthorizationEndpoint string   `json:"authorization_endpoint"`
+		TokenEndpoint         string   `json:"token_endpoint"`
+		UserInfoEndpoint      string   `json:"userinfo_endpoint"`
+		JWKSURI               string   `json:"jwks_uri"`
+		GrantTypes            []string `json:"grant_types_supported"`
 	}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
@@ -61,6 +62,9 @@ func TestDiscoveryDocumentIncludesRequiredEndpoints(t *testing.T) {
 	}
 	if payload.JWKSURI != "https://identity.example.com/oauth2/jwks" {
 		t.Fatalf("jwks_uri = %q", payload.JWKSURI)
+	}
+	if !containsString(payload.GrantTypes, "refresh_token") {
+		t.Fatalf("grant_types_supported = %v, want refresh_token", payload.GrantTypes)
 	}
 }
 
@@ -588,6 +592,104 @@ func TestCreateClientRecordsAuditLog(t *testing.T) {
 	}
 }
 
+func TestAdminOAuthClientsCreateListAndUpdateStatus(t *testing.T) {
+	service, _, db, _, _, _ := newTestProvider(t)
+	router := gin.New()
+	NewAdminHandler(service, nil, nil).RegisterRoutes(router)
+
+	body := `{
+		"tenant_id": 1,
+		"client_id": "admin-web",
+		"client_secret": "admin-secret",
+		"name": "Admin Web",
+		"redirect_uris": ["https://admin.example.com/callback"],
+		"allowed_scopes": ["openid", "profile", "email"],
+		"grant_types": ["authorization_code", "refresh_token"],
+		"token_endpoint_auth_method": "client_secret_post"
+	}`
+	createRequest := httptest.NewRequest(http.MethodPost, "/v1/admin/oauth-clients", strings.NewReader(body))
+	createRequest.Header.Set("Content-Type", "application/json")
+	createRecorder := httptest.NewRecorder()
+
+	router.ServeHTTP(createRecorder, createRequest)
+
+	if createRecorder.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d body=%s", createRecorder.Code, http.StatusCreated, createRecorder.Body.String())
+	}
+	assertNoClientSecretHash(t, createRecorder.Body.String())
+
+	var created struct {
+		Data struct {
+			ClientID     string   `json:"client_id"`
+			RedirectURIs []string `json:"redirect_uris"`
+			Status       string   `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("json.Unmarshal(create) error = %v", err)
+	}
+	if created.Data.ClientID != "admin-web" {
+		t.Fatalf("client_id = %q, want admin-web", created.Data.ClientID)
+	}
+	if len(created.Data.RedirectURIs) != 1 || created.Data.RedirectURIs[0] != "https://admin.example.com/callback" {
+		t.Fatalf("redirect_uris = %v", created.Data.RedirectURIs)
+	}
+	if created.Data.Status != store.UserStatusActive {
+		t.Fatalf("status = %q, want %q", created.Data.Status, store.UserStatusActive)
+	}
+
+	var stored store.OAuthClient
+	if err := db.Where("client_id = ?", "admin-web").First(&stored).Error; err != nil {
+		t.Fatalf("load stored client: %v", err)
+	}
+	if stored.ClientSecretHash == "" || stored.ClientSecretHash == "admin-secret" {
+		t.Fatalf("client secret hash was not stored securely")
+	}
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/oauth-clients", nil)
+	listRecorder := httptest.NewRecorder()
+	router.ServeHTTP(listRecorder, listRequest)
+
+	if listRecorder.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d body=%s", listRecorder.Code, http.StatusOK, listRecorder.Body.String())
+	}
+	assertNoClientSecretHash(t, listRecorder.Body.String())
+
+	var listed struct {
+		Data struct {
+			OAuthClients []oauthClientListItem `json:"oauth_clients"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(listRecorder.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("json.Unmarshal(list) error = %v", err)
+	}
+	if !containsOAuthClient(listed.Data.OAuthClients, "admin-web") {
+		t.Fatalf("oauth_clients = %+v, want admin-web", listed.Data.OAuthClients)
+	}
+
+	statusRequest := httptest.NewRequest(http.MethodPatch, "/v1/admin/oauth-clients/admin-web/status", strings.NewReader(`{"status":"disabled"}`))
+	statusRequest.Header.Set("Content-Type", "application/json")
+	statusRecorder := httptest.NewRecorder()
+	router.ServeHTTP(statusRecorder, statusRequest)
+
+	if statusRecorder.Code != http.StatusOK {
+		t.Fatalf("status update = %d, want %d body=%s", statusRecorder.Code, http.StatusOK, statusRecorder.Body.String())
+	}
+	assertNoClientSecretHash(t, statusRecorder.Body.String())
+
+	var updated struct {
+		Data struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(statusRecorder.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("json.Unmarshal(status) error = %v", err)
+	}
+	if updated.Data.Status != store.UserStatusDisabled {
+		t.Fatalf("status = %q, want %q", updated.Data.Status, store.UserStatusDisabled)
+	}
+}
+
 func TestTokenEndpointRequiresConfiguredClientAuthenticationMethod(t *testing.T) {
 	service, router, db, privateKey, user, _ := newTestProvider(t)
 	client := mustCreateClient(t, service, CreateClientInput{
@@ -758,6 +860,10 @@ type exchangedTokens struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+type oauthClientListItem struct {
+	ClientID string `json:"client_id"`
+}
+
 func newTestProvider(t *testing.T) (*Service, *gin.Engine, *gorm.DB, *rsa.PrivateKey, *store.User, *store.OAuthClient) {
 	t.Helper()
 
@@ -913,6 +1019,32 @@ func assertJSONError(t *testing.T, body []byte, want string) {
 	if payload.Error != want {
 		t.Fatalf("error = %q, want %q", payload.Error, want)
 	}
+}
+
+func assertNoClientSecretHash(t *testing.T, body string) {
+	t.Helper()
+
+	if strings.Contains(body, "client_secret_hash") {
+		t.Fatalf("response leaked client_secret_hash: %s", body)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsOAuthClient(clients []oauthClientListItem, clientID string) bool {
+	for _, client := range clients {
+		if client.ClientID == clientID {
+			return true
+		}
+	}
+	return false
 }
 
 func issueSessionAuthorization(t *testing.T, db *gorm.DB, privateKey *rsa.PrivateKey, user store.User) string {

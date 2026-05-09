@@ -17,14 +17,14 @@ import (
 )
 
 type CreateClientInput struct {
-	TenantID                int64
-	ClientID                string
-	ClientSecret            string
-	Name                    string
-	RedirectURIs            []string
-	AllowedScopes           []string
-	GrantTypes              []string
-	TokenEndpointAuthMethod string
+	TenantID                int64    `json:"tenant_id"`
+	ClientID                string   `json:"client_id"`
+	ClientSecret            string   `json:"client_secret"`
+	Name                    string   `json:"name"`
+	RedirectURIs            []string `json:"redirect_uris"`
+	AllowedScopes           []string `json:"allowed_scopes"`
+	GrantTypes              []string `json:"grant_types"`
+	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 }
 
 func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*store.OAuthClient, error) {
@@ -89,6 +89,46 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 		Metadata: map[string]any{
 			"change": "created",
 			"name":   client.Name,
+		},
+	})
+	return client, nil
+}
+
+func (s *Service) ListClients(ctx context.Context) ([]store.OAuthClient, error) {
+	var clients []store.OAuthClient
+	err := s.db.WithContext(ctx).Order("id ASC").Find(&clients).Error
+	return clients, err
+}
+
+func (s *Service) UpdateClientStatus(ctx context.Context, clientID, status string) (*store.OAuthClient, error) {
+	clientID = strings.TrimSpace(clientID)
+	status = strings.TrimSpace(status)
+	if clientID == "" {
+		return nil, errors.New("client id is required")
+	}
+	if status != store.UserStatusActive && status != store.UserStatusDisabled {
+		return nil, errors.New("unsupported client status")
+	}
+
+	if err := s.db.WithContext(ctx).
+		Model(&store.OAuthClient{}).
+		Where("client_id = ?", clientID).
+		Update("status", status).Error; err != nil {
+		return nil, err
+	}
+
+	client, err := s.loadClient(ctx, clientID)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		Action:     audit.ActionOAuthClientChanged,
+		TenantID:   client.TenantID,
+		TargetType: audit.TargetTypeOAuthClient,
+		TargetID:   client.ClientID,
+		Metadata: map[string]any{
+			"change": "status_updated",
+			"status": status,
 		},
 	})
 	return client, nil
