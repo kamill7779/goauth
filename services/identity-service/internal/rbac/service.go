@@ -50,6 +50,10 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 	if permissions, ok, err := s.loadCachedPermissions(ctx, userID, tenantID); err != nil {
 		return nil, err
 	} else if ok {
+		memberIDs, err := s.activeMemberIDsForUserTenant(ctx, userID, tenantID)
+		if err != nil || len(memberIDs) == 0 {
+			return []string{}, err
+		}
 		return permissions, nil
 	}
 

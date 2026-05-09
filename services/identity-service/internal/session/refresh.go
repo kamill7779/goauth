@@ -19,23 +19,7 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	}
 
 	if current.RevokedAt != nil {
-		if err := s.revokeFamily(ctx, current.FamilyID); err != nil {
-			return nil, err
-		}
-		if err := s.audit.Record(ctx, audit.Entry{
-			ActorUserID: current.UserID,
-			TenantID:    current.TenantID,
-			Action:      audit.ActionRefreshTokenReuseDetected,
-			TargetType:  audit.TargetTypeTokenFamily,
-			TargetID:    current.FamilyID,
-			Metadata: map[string]any{
-				"session_id": current.SessionID,
-				"client_id":  current.ClientID,
-			},
-		}); err != nil {
-			return nil, err
-		}
-		return nil, ErrRefreshTokenReuse
+		return nil, s.rejectRefreshTokenReuse(ctx, current)
 	}
 	if current.ExpiresAt.Before(s.now()) {
 		return nil, ErrInvalidRefreshToken
@@ -56,17 +40,19 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 
 	var pair *TokenPair
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
-		if err != nil {
-			return err
+		now := s.now()
+		result := tx.Model(&store.RefreshToken{}).
+			Where("id = ? AND revoked_at IS NULL", current.ID).
+			Update("revoked_at", now)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrRefreshTokenReuse
 		}
 
-		now := s.now()
-		if err := tx.Model(&store.RefreshToken{}).
-			Where("id = ?", current.ID).
-			Updates(map[string]any{
-				"revoked_at": now,
-			}).Error; err != nil {
+		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
+		if err != nil {
 			return err
 		}
 
@@ -84,10 +70,33 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ErrRefreshTokenReuse) {
+			return nil, s.rejectRefreshTokenReuse(ctx, current)
+		}
 		return nil, err
 	}
 
 	return pair, nil
+}
+
+func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.RefreshToken) error {
+	if err := s.revokeFamily(ctx, token.FamilyID); err != nil {
+		return err
+	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: token.UserID,
+		TenantID:    token.TenantID,
+		Action:      audit.ActionRefreshTokenReuseDetected,
+		TargetType:  audit.TargetTypeTokenFamily,
+		TargetID:    token.FamilyID,
+		Metadata: map[string]any{
+			"session_id": token.SessionID,
+			"client_id":  token.ClientID,
+		},
+	}); err != nil {
+		return err
+	}
+	return ErrRefreshTokenReuse
 }
 
 func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user store.User, tenantID int64, clientID, sessionID, familyID string) (*TokenPair, error) {

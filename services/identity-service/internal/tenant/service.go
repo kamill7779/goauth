@@ -166,6 +166,42 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.T
 		status = store.MemberStatusActive
 	}
 
+	if err := s.ensureActiveTenant(ctx, input.TenantID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureActiveUser(ctx, input.UserID); err != nil {
+		return nil, err
+	}
+
+	var existing store.TenantMember
+	err := s.db.WithContext(ctx).
+		Unscoped().
+		Where("tenant_id = ? AND user_id = ?", input.TenantID, input.UserID).
+		First(&existing).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+	if err == nil && existing.DeletedAt.Valid {
+		if err := s.db.WithContext(ctx).
+			Unscoped().
+			Model(&store.TenantMember{}).
+			Where("id = ?", existing.ID).
+			Updates(map[string]any{
+				"status":     status,
+				"deleted_at": nil,
+			}).Error; err != nil {
+			return nil, err
+		}
+		var restored store.TenantMember
+		if err := s.db.WithContext(ctx).First(&restored, existing.ID).Error; err != nil {
+			return nil, err
+		}
+		if err := s.recordMembershipAdded(ctx, input.TenantID, &restored); err != nil {
+			return nil, err
+		}
+		return &restored, nil
+	}
+
 	member := &store.TenantMember{
 		TenantID: input.TenantID,
 		UserID:   input.UserID,
@@ -174,16 +210,7 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.T
 	if err := s.db.WithContext(ctx).Create(member).Error; err != nil {
 		return nil, err
 	}
-	if err := s.audit.Record(ctx, audit.Entry{
-		ActorUserID: 0,
-		TenantID:    input.TenantID,
-		Action:      audit.ActionTenantMembershipAdded,
-		TargetType:  audit.TargetTypeTenantMember,
-		TargetID:    strconv.FormatInt(member.ID, 10),
-		Metadata: map[string]any{
-			"user_id": member.UserID,
-		},
-	}); err != nil {
+	if err := s.recordMembershipAdded(ctx, input.TenantID, member); err != nil {
 		return nil, err
 	}
 	return member, nil
@@ -243,6 +270,10 @@ func (s *Service) ListRoles(ctx context.Context, tenantID int64) ([]store.Role, 
 }
 
 func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (*store.Role, error) {
+	if err := s.ensureActiveTenant(ctx, input.TenantID); err != nil {
+		return nil, err
+	}
+
 	role := &store.Role{
 		TenantID:    input.TenantID,
 		Name:        input.Name,
@@ -466,6 +497,31 @@ func (s *Service) memberByID(ctx context.Context, memberID int64) (*store.Tenant
 		return nil, err
 	}
 	return &member, nil
+}
+
+func (s *Service) ensureActiveTenant(ctx context.Context, tenantID int64) error {
+	return s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
+		First(&store.Tenant{}).Error
+}
+
+func (s *Service) ensureActiveUser(ctx context.Context, userID int64) error {
+	return s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
+		First(&store.User{}).Error
+}
+
+func (s *Service) recordMembershipAdded(ctx context.Context, tenantID int64, member *store.TenantMember) error {
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    tenantID,
+		Action:      audit.ActionTenantMembershipAdded,
+		TargetType:  audit.TargetTypeTenantMember,
+		TargetID:    strconv.FormatInt(member.ID, 10),
+		Metadata: map[string]any{
+			"user_id": member.UserID,
+		},
+	})
 }
 
 func (s *Service) roleByID(ctx context.Context, roleID int64) (*store.Role, error) {

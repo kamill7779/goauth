@@ -13,6 +13,7 @@ import (
 	"goauth/services/identity-service/internal/rbac"
 	"goauth/services/identity-service/internal/store"
 	"goauth/services/identity-service/internal/tenant"
+	usersvc "goauth/services/identity-service/internal/user"
 )
 
 type testEnv struct {
@@ -262,11 +263,45 @@ func TestPermissionCacheInvalidatesAfterRoleChanges(t *testing.T) {
 	}
 }
 
+func TestPermissionCacheChecksLiveUserState(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	user := createUser(t, env.db, "warm-disable@example.com", store.UserStatusActive)
+	tenantRecord, _ := env.tenant.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	member, _ := env.tenant.AddMember(ctx, tenant.AddMemberInput{TenantID: tenantRecord.ID, UserID: user.ID, Status: store.MemberStatusActive})
+	role, _ := env.tenant.CreateRole(ctx, tenant.CreateRoleInput{TenantID: tenantRecord.ID, Name: "Admin", Code: "admin"})
+	permission := createPermission(t, env.db, "project:create")
+	_ = env.tenant.GrantPermissions(ctx, role.ID, []int64{permission.ID})
+	_ = env.tenant.AssignRoles(ctx, member.ID, []int64{role.ID})
+
+	allowed, err := env.rbac.Can(ctx, user.ID, tenantRecord.ID, "project:create")
+	if err != nil {
+		t.Fatalf("warm Can() error = %v", err)
+	}
+	if !allowed {
+		t.Fatal("expected warm permission check to be granted")
+	}
+
+	userService := usersvc.NewService(env.db, nil)
+	if err := userService.DisableUser(ctx, user.ID); err != nil {
+		t.Fatalf("DisableUser() error = %v", err)
+	}
+
+	allowed, err = env.rbac.Can(ctx, user.ID, tenantRecord.ID, "project:create")
+	if err != nil {
+		t.Fatalf("Can() after disable error = %v", err)
+	}
+	if allowed {
+		t.Fatal("expected disabled user to fail permission check with warm cache")
+	}
+}
+
 func TestDisabledUsersAndMembersFailChecks(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
 
-	disabledUser := createUser(t, env.db, "disabled-user@example.com", store.UserStatusDisabled)
+	disabledUser := createUser(t, env.db, "disabled-user@example.com", store.UserStatusActive)
 	activeUser := createUser(t, env.db, "disabled-member@example.com", store.UserStatusActive)
 	tenantRecord, _ := env.tenant.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
 	disabledUserMember, _ := env.tenant.AddMember(ctx, tenant.AddMemberInput{TenantID: tenantRecord.ID, UserID: disabledUser.ID, Status: store.MemberStatusActive})
@@ -276,6 +311,9 @@ func TestDisabledUsersAndMembersFailChecks(t *testing.T) {
 	_ = env.tenant.GrantPermissions(ctx, role.ID, []int64{permission.ID})
 	_ = env.tenant.AssignRoles(ctx, disabledUserMember.ID, []int64{role.ID})
 	_ = env.tenant.AssignRoles(ctx, disabledMember.ID, []int64{role.ID})
+	if err := env.db.Model(&store.User{}).Where("id = ?", disabledUser.ID).Update("status", store.UserStatusDisabled).Error; err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
 
 	allowed, err := env.rbac.Can(ctx, disabledUser.ID, tenantRecord.ID, "project:create")
 	if err != nil {

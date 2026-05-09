@@ -20,7 +20,7 @@ import (
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int64  `json:"expires_in"`
 	Scope        string `json:"scope,omitempty"`
@@ -249,17 +249,25 @@ func (h *Handler) logout(c *gin.Context) {
 }
 
 func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *store.User, client *store.OAuthClient, record *store.OAuthAuthorizationCode) (*tokenResponse, error) {
-	sessionID, err := s.randomID(16)
-	if err != nil {
-		return nil, err
-	}
-	familyID, err := s.randomID(16)
-	if err != nil {
-		return nil, err
-	}
-	refreshToken, err := s.randomID(32)
-	if err != nil {
-		return nil, err
+	issueRefreshToken := supportsGrantType(client, "refresh_token") && hasScope(scopeSet(record.Scope), "offline_access")
+
+	sessionID := ""
+	familyID := ""
+	refreshToken := ""
+	if issueRefreshToken {
+		var err error
+		sessionID, err = s.randomID(16)
+		if err != nil {
+			return nil, err
+		}
+		familyID, err = s.randomID(16)
+		if err != nil {
+			return nil, err
+		}
+		refreshToken, err = s.randomID(32)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	accessToken, err := s.signAccessToken(user, client.ClientID, client.TenantID, sessionID, record.Scope)
@@ -271,20 +279,22 @@ func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *sto
 		return nil, err
 	}
 
-	refreshRecord := store.RefreshToken{
-		TokenHash:    s.hashToken(refreshToken),
-		FamilyID:     familyID,
-		SessionID:    sessionID,
-		UserID:       user.ID,
-		TenantID:     client.TenantID,
-		TokenVersion: user.TokenVersion,
-		ClientID:     client.ClientID,
-		Scope:        record.Scope,
-		ExpiresAt:    s.now().Add(s.refreshTokenTTL),
-		CreatedAt:    s.now(),
-	}
-	if err := db.WithContext(ctx).Create(&refreshRecord).Error; err != nil {
-		return nil, err
+	if issueRefreshToken {
+		refreshRecord := store.RefreshToken{
+			TokenHash:    s.hashToken(refreshToken),
+			FamilyID:     familyID,
+			SessionID:    sessionID,
+			UserID:       user.ID,
+			TenantID:     client.TenantID,
+			TokenVersion: user.TokenVersion,
+			ClientID:     client.ClientID,
+			Scope:        record.Scope,
+			ExpiresAt:    s.now().Add(s.refreshTokenTTL),
+			CreatedAt:    s.now(),
+		}
+		if err := db.WithContext(ctx).Create(&refreshRecord).Error; err != nil {
+			return nil, err
+		}
 	}
 
 	return &tokenResponse{
@@ -333,6 +343,10 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 		return
 	}
 	if !h.service.validateRefreshToken(ctx, current) {
+		oauthError(c, http.StatusBadRequest, "invalid_grant")
+		return
+	}
+	if !hasScope(scopeSet(current.Scope), "offline_access") {
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
@@ -402,6 +416,7 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	})
 	if err != nil {
 		if errors.Is(err, errInvalidGrant) {
+			h.service.recordRefreshTokenReuse(ctx, current)
 			oauthError(c, http.StatusBadRequest, "invalid_grant")
 			return
 		}
@@ -410,6 +425,21 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.RefreshToken) {
+	_ = s.revokeRefreshTokenFamily(ctx, token.FamilyID)
+	_ = s.audit.Record(ctx, audit.Entry{
+		ActorUserID: token.UserID,
+		TenantID:    token.TenantID,
+		Action:      audit.ActionRefreshTokenReuseDetected,
+		TargetType:  audit.TargetTypeTokenFamily,
+		TargetID:    token.FamilyID,
+		Metadata: map[string]any{
+			"session_id": token.SessionID,
+			"client_id":  token.ClientID,
+		},
+	})
 }
 
 func (s *Service) revokeRefreshTokenFamily(ctx context.Context, familyID string) error {

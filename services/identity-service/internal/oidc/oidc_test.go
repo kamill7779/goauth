@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -356,6 +357,56 @@ func TestTokenEndpointReturnsIDAccessAndRefreshTokens(t *testing.T) {
 	}
 }
 
+func TestTokenEndpointOmitsRefreshTokenWithoutOfflineAccess(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email", pkceChallengeS256("no-offline-verifier"), "nonce-no-offline")
+
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "no-offline-verifier")
+	if tokenSet.RefreshToken != "" {
+		t.Fatal("expected refresh token to be omitted without offline_access")
+	}
+	assertJSONFieldAbsent(t, tokenSet.raw, "refresh_token")
+
+	var count int64
+	if err := db.Model(&store.RefreshToken{}).Where("client_id = ?", client.ClientID).Count(&count).Error; err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("client refresh token count = %d, want 0", count)
+	}
+}
+
+func TestTokenEndpointOmitsRefreshTokenWhenClientDoesNotSupportRefreshGrant(t *testing.T) {
+	service, router, db, privateKey, user, existingClient := newTestProvider(t)
+	client := mustCreateClient(t, service, CreateClientInput{
+		TenantID:                existingClient.TenantID,
+		ClientID:                "auth-code-only",
+		ClientSecret:            "auth-code-secret",
+		Name:                    "Auth Code Only",
+		RedirectURIs:            []string{"https://client.example.com/auth-code-only"},
+		AllowedScopes:           []string{"openid", "profile", "offline_access"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_post",
+	})
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/auth-code-only", "openid offline_access", pkceChallengeS256("grantless-verifier"), "nonce-grantless")
+
+	tokenSet := exchangeCode(t, router, client.ClientID, "auth-code-secret", code, "https://client.example.com/auth-code-only", "grantless-verifier")
+	if tokenSet.RefreshToken != "" {
+		t.Fatal("expected refresh token to be omitted when client lacks refresh_token grant")
+	}
+	assertJSONFieldAbsent(t, tokenSet.raw, "refresh_token")
+
+	var count int64
+	if err := db.Model(&store.RefreshToken{}).Where("client_id = ?", client.ClientID).Count(&count).Error; err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("client refresh token count = %d, want 0", count)
+	}
+}
+
 func TestTokenEndpointRefreshTokenGrantRotatesRefreshToken(t *testing.T) {
 	service, router, db, privateKey, user, client := newTestProvider(t)
 	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
@@ -391,6 +442,101 @@ func TestTokenEndpointRefreshTokenGrantRotatesRefreshToken(t *testing.T) {
 	router.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("reuse status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+
+	var activeCount int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("family_id = ? AND revoked_at IS NULL", oldToken.FamilyID).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active family tokens: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("active family tokens = %d, want 0 after reuse", activeCount)
+	}
+}
+
+func TestTokenEndpointRefreshTokenGrantRejectsStoredScopeWithoutOfflineAccess(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("legacy-scope-verifier"), "nonce-legacy-scope")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "legacy-scope-verifier")
+
+	if err := db.Model(&store.RefreshToken{}).
+		Where("token_hash = ?", service.hashToken(tokenSet.RefreshToken)).
+		Update("scope", "openid profile").Error; err != nil {
+		t.Fatalf("remove offline_access from stored scope: %v", err)
+	}
+
+	form := url.Values{
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {tokenSet.RefreshToken},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/token", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("refresh status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_grant")
+}
+
+func TestConcurrentRefreshTokenGrantHasSingleWinnerAndRevokesFamilyOnReuse(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("concurrent-refresh-verifier"), "nonce-concurrent-refresh")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "concurrent-refresh-verifier")
+
+	const attempts = 8
+	start := make(chan struct{})
+	statuses := make(chan int, attempts)
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			statuses <- refreshTokenGrantStatus(router, client.ClientID, "super-secret", tokenSet.RefreshToken)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+
+	successes := 0
+	failures := 0
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			successes++
+		case http.StatusBadRequest:
+			failures++
+		default:
+			t.Fatalf("refresh status = %d, want %d or %d", status, http.StatusOK, http.StatusBadRequest)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful refreshes = %d, want 1", successes)
+	}
+	if failures != attempts-1 {
+		t.Fatalf("failed refreshes = %d, want %d", failures, attempts-1)
+	}
+
+	var oldToken store.RefreshToken
+	if err := db.Where("token_hash = ?", service.hashToken(tokenSet.RefreshToken)).First(&oldToken).Error; err != nil {
+		t.Fatalf("load old refresh token: %v", err)
+	}
+	var activeCount int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("family_id = ? AND revoked_at IS NULL", oldToken.FamilyID).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active family tokens: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("active family tokens = %d, want 0 after concurrent reuse", activeCount)
 	}
 }
 
@@ -430,6 +576,70 @@ func TestUserInfoReturnsClaimsForValidAccessToken(t *testing.T) {
 	}
 	if payload.Name != user.DisplayName {
 		t.Fatalf("name = %q, want %q", payload.Name, user.DisplayName)
+	}
+}
+
+func TestUserInfoRejectsNonOIDCTokenClass(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	sessionAuthorization := issueSessionAuthorization(t, db, privateKey, *user, client.TenantID)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+	request.Header.Set("Authorization", sessionAuthorization)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_token")
+}
+
+func TestUserInfoRejectsAccessTokenWithoutOpenIDScope(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("no-openid-verifier"), "nonce-no-openid")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "no-openid-verifier")
+	tokenWithoutOpenID := signModifiedAccessToken(t, service, tokenSet.AccessToken, func(claims *accessClaims) {
+		claims.Scope = "profile"
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+	request.Header.Set("Authorization", "Bearer "+tokenWithoutOpenID)
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_token")
+}
+
+func TestAccessTokenValidationRejectsIssuerAndAudienceConfusion(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("confusion-verifier"), "nonce-confusion")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "confusion-verifier")
+
+	for name, token := range map[string]string{
+		"wrong issuer": signModifiedAccessToken(t, service, tokenSet.AccessToken, func(claims *accessClaims) {
+			claims.Issuer = "https://issuer.example.net"
+		}),
+		"wrong audience": signModifiedAccessToken(t, service, tokenSet.AccessToken, func(claims *accessClaims) {
+			claims.Audience = jwt.ClaimStrings{"different-client"}
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/oauth2/userinfo", nil)
+			request.Header.Set("Authorization", "Bearer "+token)
+			router.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusUnauthorized {
+				t.Fatalf("userinfo status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+			}
+			assertJSONError(t, recorder.Body.Bytes(), "invalid_token")
+			assertIntrospectInactive(t, router, client.ClientID, "super-secret", token)
+		})
 	}
 }
 
@@ -954,6 +1164,7 @@ type exchangedTokens struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
 	RefreshToken string `json:"refresh_token"`
+	raw          []byte
 }
 
 type oauthClientListItem struct {
@@ -1076,6 +1287,7 @@ func exchangeCode(t *testing.T, router http.Handler, clientID, clientSecret, cod
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
+	payload.raw = append([]byte(nil), recorder.Body.Bytes()...)
 	return payload
 }
 
@@ -1103,12 +1315,31 @@ func exchangeCodeBasic(t *testing.T, router http.Handler, clientID, clientSecret
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
+	payload.raw = append([]byte(nil), recorder.Body.Bytes()...)
 	return payload
 }
 
 func refreshTokenGrant(t *testing.T, router http.Handler, clientID, clientSecret, refreshToken string) exchangedTokens {
 	t.Helper()
 
+	recorder := performRefreshTokenGrant(router, clientID, clientSecret, refreshToken)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("refresh status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload exchangedTokens
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	payload.raw = append([]byte(nil), recorder.Body.Bytes()...)
+	return payload
+}
+
+func refreshTokenGrantStatus(router http.Handler, clientID, clientSecret, refreshToken string) int {
+	return performRefreshTokenGrant(router, clientID, clientSecret, refreshToken).Code
+}
+
+func performRefreshTokenGrant(router http.Handler, clientID, clientSecret, refreshToken string) *httptest.ResponseRecorder {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {refreshToken},
@@ -1120,16 +1351,33 @@ func refreshTokenGrant(t *testing.T, router http.Handler, clientID, clientSecret
 	recorder := httptest.NewRecorder()
 
 	router.ServeHTTP(recorder, request)
+	return recorder
+}
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("refresh status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
-	}
+func signModifiedAccessToken(t *testing.T, service *Service, rawToken string, modify func(*accessClaims)) string {
+	t.Helper()
 
-	var payload exchangedTokens
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
+	token, err := jwt.ParseWithClaims(rawToken, &accessClaims{}, func(token *jwt.Token) (any, error) {
+		return &service.privateKey.PublicKey, nil
+	})
+	if err != nil {
+		t.Fatalf("parse access token: %v", err)
 	}
-	return payload
+	claims, ok := token.Claims.(*accessClaims)
+	if !ok {
+		t.Fatal("access token claims have unexpected type")
+	}
+	modify(claims)
+
+	signed := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	if service.keyID != "" {
+		signed.Header["kid"] = service.keyID
+	}
+	value, err := signed.SignedString(service.privateKey)
+	if err != nil {
+		t.Fatalf("sign modified access token: %v", err)
+	}
+	return value
 }
 
 func pkceChallengeS256(verifier string) string {
@@ -1156,6 +1404,18 @@ func assertNoClientSecretHash(t *testing.T, body string) {
 
 	if strings.Contains(body, "client_secret_hash") {
 		t.Fatalf("response leaked client_secret_hash: %s", body)
+	}
+}
+
+func assertJSONFieldAbsent(t *testing.T, body []byte, field string) {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if _, ok := payload[field]; ok {
+		t.Fatalf("field %q present in response: %s", field, string(body))
 	}
 }
 

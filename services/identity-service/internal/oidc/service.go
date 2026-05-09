@@ -198,6 +198,13 @@ func (s *Service) hasActiveTenant(ctx context.Context, tenantID int64) bool {
 }
 
 func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims) error {
+	if claims.Issuer != s.issuer {
+		return gorm.ErrRecordNotFound
+	}
+	if strings.TrimSpace(claims.ClientID) == "" || !audienceContains(claims.Audience, claims.ClientID) {
+		return gorm.ErrRecordNotFound
+	}
+
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
 		return err
@@ -210,7 +217,7 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	if user.TokenVersion != claims.TokenVersion {
 		return gorm.ErrRecordNotFound
 	}
-	if !s.hasActiveSession(ctx, userID, claims.SessionID) {
+	if claims.SessionID != "" && !s.hasActiveSession(ctx, userID, claims.SessionID) {
 		return gorm.ErrRecordNotFound
 	}
 	if claims.TenantID != 0 && !s.hasActiveTenantMembership(ctx, userID, claims.TenantID) {
@@ -267,7 +274,7 @@ func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return s.publicKey, nil
-	})
+	}, jwt.WithIssuer(s.issuer))
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +284,15 @@ func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 		return nil, errors.New("invalid token")
 	}
 	return claims, nil
+}
+
+func audienceContains(audience jwt.ClaimStrings, value string) bool {
+	for _, item := range audience {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func scopeSet(scope string) map[string]struct{} {

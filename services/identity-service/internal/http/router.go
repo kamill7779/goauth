@@ -1,8 +1,10 @@
 package http
 
 import (
+	"context"
 	stdhttp "net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/config"
@@ -14,6 +16,63 @@ type Registrar interface {
 
 type EngineRegistrar interface {
 	RegisterRoutes(*gin.Engine)
+}
+
+type ReadinessCheck struct {
+	Name  string
+	Check func(context.Context) error
+}
+
+type readinessRegistrar struct {
+	checks []ReadinessCheck
+}
+
+type readinessFailureResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error"`
+	Data    any    `json:"data"`
+}
+
+func NewReadinessRegistrar(checks ...ReadinessCheck) Registrar {
+	return readinessRegistrar{checks: checks}
+}
+
+func (r readinessRegistrar) RegisterRoutes(router gin.IRouter) {
+	router.GET("/readyz", func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+
+		failures := make(map[string]string)
+		for _, check := range r.checks {
+			name := strings.TrimSpace(check.Name)
+			if name == "" {
+				name = "dependency"
+			}
+			if check.Check == nil {
+				failures[name] = "check not configured"
+				continue
+			}
+			if err := check.Check(ctx); err != nil {
+				failures[name] = err.Error()
+			}
+		}
+
+		if len(failures) > 0 {
+			c.JSON(stdhttp.StatusServiceUnavailable, readinessFailureResponse{
+				Success: false,
+				Error:   "service not ready",
+				Data: gin.H{
+					"status": "not_ready",
+					"checks": failures,
+				},
+			})
+			return
+		}
+
+		Success(c, stdhttp.StatusOK, gin.H{
+			"status": "ready",
+		})
+	})
 }
 
 func NewRouter(cfg config.Config, registrars ...Registrar) *gin.Engine {

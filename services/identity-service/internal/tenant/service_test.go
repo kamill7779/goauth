@@ -78,6 +78,105 @@ func TestCreateTenantAndAddMember(t *testing.T) {
 	}
 }
 
+func TestAddMemberRestoresRemovedMember(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	tenantRecord, err := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	if err != nil {
+		t.Fatalf("CreateTenant() error = %v", err)
+	}
+	user := store.User{
+		Email:        "readd@example.com",
+		DisplayName:  "readd",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := service.DB().Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	first, err := service.AddMember(ctx, tenant.AddMemberInput{
+		TenantID: tenantRecord.ID,
+		UserID:   user.ID,
+		Status:   store.MemberStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("AddMember() first error = %v", err)
+	}
+	if err := service.RemoveMember(ctx, tenantRecord.ID, user.ID); err != nil {
+		t.Fatalf("RemoveMember() error = %v", err)
+	}
+
+	second, err := service.AddMember(ctx, tenant.AddMemberInput{
+		TenantID: tenantRecord.ID,
+		UserID:   user.ID,
+		Status:   store.MemberStatusActive,
+	})
+	if err != nil {
+		t.Fatalf("AddMember() second error = %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("restored member id = %d, want %d", second.ID, first.ID)
+	}
+	if second.DeletedAt.Valid {
+		t.Fatal("restored member is still soft-deleted")
+	}
+}
+
+func TestAddMemberRequiresActiveTenantAndUser(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	activeTenant, _ := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	disabledTenant, _ := service.CreateTenant(ctx, tenant.CreateTenantInput{
+		Name:   "Disabled",
+		Slug:   "disabled",
+		Status: store.TenantStatusDisabled,
+	})
+	activeUser := store.User{
+		Email:        "active@example.com",
+		DisplayName:  "active",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	disabledUser := store.User{
+		Email:        "disabled@example.com",
+		DisplayName:  "disabled",
+		PasswordHash: "hash",
+		Status:       store.UserStatusDisabled,
+	}
+	if err := service.DB().Create(&activeUser).Error; err != nil {
+		t.Fatalf("create active user: %v", err)
+	}
+	if err := service.DB().Create(&disabledUser).Error; err != nil {
+		t.Fatalf("create disabled user: %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		tenantID int64
+		userID   int64
+	}{
+		{name: "missing tenant", tenantID: activeTenant.ID + disabledTenant.ID + 100, userID: activeUser.ID},
+		{name: "disabled tenant", tenantID: disabledTenant.ID, userID: activeUser.ID},
+		{name: "missing user", tenantID: activeTenant.ID, userID: activeUser.ID + disabledUser.ID + 100},
+		{name: "disabled user", tenantID: activeTenant.ID, userID: disabledUser.ID},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := service.AddMember(ctx, tenant.AddMemberInput{
+				TenantID: tt.tenantID,
+				UserID:   tt.userID,
+				Status:   store.MemberStatusActive,
+			})
+			if err == nil {
+				t.Fatal("AddMember() error = nil, want validation error")
+			}
+		})
+	}
+}
+
 func TestGrantAndRevokeRolePermissions(t *testing.T) {
 	service := newTenantService(t)
 	ctx := context.Background()
@@ -150,6 +249,38 @@ func TestMembershipChangesWriteAuditLogs(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("membership audit log count = %d, want 2", count)
+	}
+}
+
+func TestCreateRoleRequiresActiveTenant(t *testing.T) {
+	service := newTenantService(t)
+	ctx := context.Background()
+
+	activeTenant, _ := service.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	disabledTenant, _ := service.CreateTenant(ctx, tenant.CreateTenantInput{
+		Name:   "Disabled",
+		Slug:   "disabled",
+		Status: store.TenantStatusDisabled,
+	})
+
+	cases := []struct {
+		name     string
+		tenantID int64
+	}{
+		{name: "missing tenant", tenantID: activeTenant.ID + disabledTenant.ID + 100},
+		{name: "disabled tenant", tenantID: disabledTenant.ID},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := service.CreateRole(ctx, tenant.CreateRoleInput{
+				TenantID: tt.tenantID,
+				Name:     "Admin",
+				Code:     "admin-" + tt.name,
+			})
+			if err == nil {
+				t.Fatal("CreateRole() error = nil, want validation error")
+			}
+		})
 	}
 }
 
@@ -271,6 +402,15 @@ func TestTenantAndRoleLifecycleWritesAuditLogs(t *testing.T) {
 		t.Fatalf("CreateTenant() error = %v", err)
 	}
 
+	role, err := service.CreateRole(ctx, tenant.CreateRoleInput{
+		TenantID: tenantRecord.ID,
+		Name:     "Admin",
+		Code:     "admin",
+	})
+	if err != nil {
+		t.Fatalf("CreateRole() error = %v", err)
+	}
+
 	updatedName := "Acme Updated"
 	updatedSlug := "acme-updated"
 	updatedStatus := store.TenantStatusDisabled
@@ -280,15 +420,6 @@ func TestTenantAndRoleLifecycleWritesAuditLogs(t *testing.T) {
 		Status: &updatedStatus,
 	}); err != nil {
 		t.Fatalf("UpdateTenant() error = %v", err)
-	}
-
-	role, err := service.CreateRole(ctx, tenant.CreateRoleInput{
-		TenantID: tenantRecord.ID,
-		Name:     "Admin",
-		Code:     "admin",
-	})
-	if err != nil {
-		t.Fatalf("CreateRole() error = %v", err)
 	}
 
 	updatedRoleName := "Editor"

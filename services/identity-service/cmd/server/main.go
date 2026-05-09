@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
@@ -99,7 +100,9 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	oidcService := oidc.NewService(db, cfg, privateKey)
 	oidcService.SetAuditRecorder(auditService)
 
-	var registrars []httpserver.Registrar
+	registrars := []httpserver.Registrar{
+		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
+	}
 	if githubIDPConfigured(cfg) {
 		githubProvider := githubidp.New(githubidp.Config{
 			ClientID:     cfg.GitHubClientID,
@@ -137,6 +140,39 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	}
 
 	return router
+}
+
+func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.ReadinessCheck {
+	return []httpserver.ReadinessCheck{
+		{
+			Name: "mysql",
+			Check: func(ctx context.Context) error {
+				if db == nil {
+					return fmt.Errorf("db not configured")
+				}
+				sqlDB, err := db.DB()
+				if err != nil {
+					return fmt.Errorf("db handle: %w", err)
+				}
+				if err := sqlDB.PingContext(ctx); err != nil {
+					return fmt.Errorf("ping db: %w", err)
+				}
+				return nil
+			},
+		},
+		{
+			Name: "redis",
+			Check: func(ctx context.Context) error {
+				if redisClient == nil {
+					return fmt.Errorf("redis not configured")
+				}
+				if err := redisClient.Ping(ctx).Err(); err != nil {
+					return fmt.Errorf("ping redis: %w", err)
+				}
+				return nil
+			},
+		},
+	}
 }
 
 func githubIDPConfigured(cfg config.Config) bool {

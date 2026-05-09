@@ -1,9 +1,12 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -51,6 +54,59 @@ func TestHealthzReturnsStructuredSuccessResponse(t *testing.T) {
 	}
 	if payload.Data.Status != "ok" {
 		t.Fatalf("data.status = %q, want ok", payload.Data.Status)
+	}
+}
+
+func TestReadyzReturnsStructuredSuccessWhenChecksPass(t *testing.T) {
+	router := NewRouter(config.Config{}, NewReadinessRegistrar(ReadinessCheck{
+		Name: "db",
+		Check: func(ctx context.Context) error {
+			return nil
+		},
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !payload.Success {
+		t.Fatal("success = false, want true")
+	}
+	if payload.Data.Status != "ready" {
+		t.Fatalf("data.status = %q, want ready", payload.Data.Status)
+	}
+}
+
+func TestReadyzReturnsServiceUnavailableWhenCheckFails(t *testing.T) {
+	router := NewRouter(config.Config{}, NewReadinessRegistrar(ReadinessCheck{
+		Name: "redis",
+		Check: func(ctx context.Context) error {
+			return errors.New("ping redis: connection refused")
+		},
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusServiceUnavailable, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, "not_ready") || !strings.Contains(body, "redis") {
+		t.Fatalf("body = %s, want readiness failure details", body)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -194,6 +196,66 @@ func TestReusingRotatedTokenRevokesFamily(t *testing.T) {
 	}
 	if current.RevokedAt == nil {
 		t.Fatal("expected token family to be revoked after reuse")
+	}
+}
+
+func TestConcurrentRefreshHasSingleWinnerAndRevokesFamilyOnReuse(t *testing.T) {
+	service, user := newTestService(t)
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 0,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	const attempts = 8
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := service.Refresh(context.Background(), pair.RefreshToken)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	reuseFailures := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		if errors.Is(err, ErrRefreshTokenReuse) {
+			reuseFailures++
+			continue
+		}
+		t.Fatalf("Refresh() error = %v, want success or ErrRefreshTokenReuse", err)
+	}
+	if successes != 1 {
+		t.Fatalf("successful refreshes = %d, want 1", successes)
+	}
+	if reuseFailures != attempts-1 {
+		t.Fatalf("reuse failures = %d, want %d", reuseFailures, attempts-1)
+	}
+
+	var activeCount int64
+	if err := service.db.Model(&store.RefreshToken{}).
+		Where("family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = ?) AND revoked_at IS NULL", hashToken(pair.RefreshToken)).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active family tokens: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("active family tokens = %d, want 0 after concurrent reuse", activeCount)
 	}
 }
 

@@ -11,10 +11,11 @@ go test ./...
 go run ./cmd/server
 ```
 
-默认监听 `:8080`，健康检查：
+默认监听 `:8080`。`/healthz` 只表示进程存活，`/readyz` 会检查 DB/Redis 依赖是否可用：
 
 ```powershell
 curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/readyz
 ```
 
 如果 `MYSQL_DSN` 留空，服务会使用进程内 SQLite 内存库，适合快速跑单测或验证路由；如果 `REDIS_URL` 留空或不可用，登录/注册等依赖 Redis 的 auth routes 会被禁用，但基础会话/OIDC/RBAC 路由仍会注册。生产或联调建议显式配置 MySQL 和 Redis。
@@ -32,9 +33,11 @@ docker compose up --build
 
 ```powershell
 docker compose ps
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/readyz
 curl http://127.0.0.1:8080/.well-known/openid-configuration
 ```
+
+Compose 固定容器内监听 `:8080`，只通过 `IDENTITY_HTTP_PORT` 改宿主机端口，例如 `IDENTITY_HTTP_PORT=18080 docker compose up --build`。`PUBLIC_ISSUER_URL` 默认随宿主机端口变为 `http://localhost:${IDENTITY_HTTP_PORT}`；只有在代理、域名或 HTTPS 场景下才需要显式设置。
 
 清理本地容器和数据卷：
 
@@ -47,8 +50,8 @@ docker compose down -v
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `APP_ENV` | `development` | 运行环境标识。 |
-| `HTTP_ADDR` | `:8080` | HTTP 监听地址。容器内保持 `:8080`。 |
-| `PUBLIC_ISSUER_URL` | `http://127.0.0.1:8080` | OIDC issuer，必须是业务系统可访问的外部地址；Compose 默认 `http://localhost:8080`。 |
+| `HTTP_ADDR` | `:8080` | HTTP 监听地址。Compose 固定容器内为 `:8080`，不要用它调整宿主机端口。 |
+| `PUBLIC_ISSUER_URL` | `http://127.0.0.1:8080` | OIDC issuer，必须是业务系统可访问的外部地址；Compose 默认 `http://localhost:${IDENTITY_HTTP_PORT:-8080}`。 |
 | `MYSQL_DSN` | 空 | MySQL DSN。为空时使用内存 SQLite。 |
 | `REDIS_URL` | 空 | Redis URL，例如 `redis://redis:6379/0`。 |
 | `JWT_PRIVATE_KEY_PATH` | 空 | RSA 私钥路径。为空时本地开发会生成临时 key，重启后 JWKS 会变化。 |
@@ -58,7 +61,7 @@ docker compose down -v
 | `CORS_ALLOWED_ORIGINS` | 空 | 逗号分隔的允许来源。 |
 | `GITHUB_OAUTH_ENABLED` | `false` | 是否启用 GitHub 外部登录。启用时还需配置 client id/secret/redirect URI。 |
 
-`.env.example` 列出了服务读取的全部环境变量。Compose 使用 `${VAR:-default}`，复制 `.env.example` 后即使变量值为空，也会使用 Compose 内置默认值。
+`.env.example` 列出了服务读取的全部环境变量。Compose 使用 `${VAR:-default}`，复制 `.env.example` 后即使变量值为空，也会使用 Compose 内置默认值；因此示例里的 `PUBLIC_ISSUER_URL` 保持为空，避免覆盖随 `IDENTITY_HTTP_PORT` 变化的 issuer 默认值。
 
 ## 集成文档
 
