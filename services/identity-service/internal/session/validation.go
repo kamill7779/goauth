@@ -9,6 +9,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var systemRoleCodes = []string{"root", "system-admin", "system_admin"}
+
 func (s *Service) loadActiveUser(ctx context.Context, userID int64) (*store.User, error) {
 	var user store.User
 	if err := s.db.WithContext(ctx).
@@ -63,24 +65,52 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 }
 
 func (s *Service) isSystemUser(ctx context.Context, userID int64) (bool, error) {
-	var user store.User
-	if err := s.db.WithContext(ctx).
-		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
-		First(&user).Error; err != nil {
+	user, err := s.loadActiveUser(ctx, userID)
+	if err != nil {
 		return false, err
 	}
 	if strings.EqualFold(user.Email, "root@example.com") {
 		return true, nil
 	}
 
+	memberIDs, err := s.activeMemberIDsForUser(ctx, userID)
+	if err != nil || len(memberIDs) == 0 {
+		return false, err
+	}
+
+	roleIDs, err := s.roleIDsForMembers(ctx, memberIDs)
+	if err != nil || len(roleIDs) == 0 {
+		return false, err
+	}
+
+	return s.hasSystemRole(ctx, roleIDs)
+}
+
+func (s *Service) activeMemberIDsForUser(ctx context.Context, userID int64) ([]int64, error) {
+	var memberIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("user_id = ? AND status = ? AND deleted_at IS NULL", userID, store.MemberStatusActive).
+		Pluck("id", &memberIDs).Error
+	return memberIDs, err
+}
+
+func (s *Service) roleIDsForMembers(ctx context.Context, memberIDs []int64) ([]int64, error) {
+	var roleIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.MemberRole{}).
+		Distinct("role_id").
+		Where("member_id IN ?", memberIDs).
+		Pluck("role_id", &roleIDs).Error
+	return roleIDs, err
+}
+
+func (s *Service) hasSystemRole(ctx context.Context, roleIDs []int64) (bool, error) {
 	var count int64
 	if err := s.db.WithContext(ctx).
-		Table("roles").
-		Joins("JOIN member_roles ON member_roles.role_id = roles.id").
-		Joins("JOIN tenant_members ON tenant_members.id = member_roles.member_id").
-		Where("tenant_members.status = ? AND tenant_members.deleted_at IS NULL", store.MemberStatusActive).
-		Where("tenant_members.user_id = ?", userID).
-		Where("roles.is_system = ? OR roles.code IN ?", true, []string{"root", "system-admin", "system_admin"}).
+		Model(&store.Role{}).
+		Where("id IN ?", roleIDs).
+		Where("is_system = ? OR code IN ?", true, systemRoleCodes).
 		Count(&count).Error; err != nil {
 		return false, err
 	}

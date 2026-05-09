@@ -332,6 +332,40 @@ func TestRefreshRejectsDisabledMembership(t *testing.T) {
 	}
 }
 
+func TestIsSystemUserRecognizesSystemRole(t *testing.T) {
+	service, user := newTestService(t)
+	tenantRecord := createTenantAndMember(t, service, user.ID)
+
+	var member store.TenantMember
+	if err := service.db.
+		Where("tenant_id = ? AND user_id = ?", tenantRecord.ID, user.ID).
+		First(&member).Error; err != nil {
+		t.Fatalf("load member: %v", err)
+	}
+	role := store.Role{
+		TenantID:  tenantRecord.ID,
+		Name:      "System Admin",
+		Code:      "system-admin",
+		IsSystem:  true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := service.db.Create(&role).Error; err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if err := service.db.Create(&store.MemberRole{MemberID: member.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatalf("create member role: %v", err)
+	}
+
+	ok, err := service.isSystemUser(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("isSystemUser() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected system role user to be recognized")
+	}
+}
+
 func createTenantAndMember(t *testing.T, service *Service, userID int64) store.Tenant {
 	t.Helper()
 
