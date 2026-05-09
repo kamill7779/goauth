@@ -31,6 +31,9 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 	if strings.TrimSpace(input.ClientID) == "" || strings.TrimSpace(input.ClientSecret) == "" {
 		return nil, errors.New("client id and secret are required")
 	}
+	if input.TenantID == 0 || !s.hasActiveTenant(ctx, input.TenantID) {
+		return nil, errors.New("active tenant is required")
+	}
 	if strings.TrimSpace(input.Name) == "" {
 		return nil, errors.New("client name is required")
 	}
@@ -39,6 +42,11 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 	}
 	if len(input.GrantTypes) == 0 {
 		return nil, errors.New("at least one grant type is required")
+	}
+	for _, grantType := range input.GrantTypes {
+		if !isSupportedGrantType(grantType) {
+			return nil, errors.New("unsupported grant type")
+		}
 	}
 
 	secretHash, err := auth.HashPassword(input.ClientSecret)
@@ -265,6 +273,15 @@ func supportsGrantType(client *store.OAuthClient, grantType string) bool {
 		}
 	}
 	return false
+}
+
+func isSupportedGrantType(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "authorization_code", "refresh_token":
+		return true
+	default:
+		return false
+	}
 }
 
 func isSupportedTokenEndpointAuthMethod(value string) bool {

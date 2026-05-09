@@ -135,6 +135,7 @@ type RefreshToken struct {
 	TenantID          int64      `gorm:"not null;index"`
 	TokenVersion      int        `gorm:"not null;default:0;index"`
 	ClientID          string     `gorm:"size:255;index"`
+	Scope             string     `gorm:"size:1024"`
 	UserAgent         string     `gorm:"size:1024"`
 	IPAddress         string     `gorm:"size:255"`
 	ExpiresAt         time.Time  `gorm:"not null;index"`

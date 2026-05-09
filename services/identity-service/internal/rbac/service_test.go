@@ -293,3 +293,37 @@ func TestDisabledUsersAndMembersFailChecks(t *testing.T) {
 		t.Fatal("expected disabled member to fail permission check")
 	}
 }
+
+func TestDisabledTenantFailsPermissionCheckAndInvalidatesCache(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+
+	user := createUser(t, env.db, "disabled-tenant@example.com", store.UserStatusActive)
+	tenantRecord, _ := env.tenant.CreateTenant(ctx, tenant.CreateTenantInput{Name: "Acme", Slug: "acme"})
+	member, _ := env.tenant.AddMember(ctx, tenant.AddMemberInput{TenantID: tenantRecord.ID, UserID: user.ID, Status: store.MemberStatusActive})
+	role, _ := env.tenant.CreateRole(ctx, tenant.CreateRoleInput{TenantID: tenantRecord.ID, Name: "Admin", Code: "admin"})
+	permission := createPermission(t, env.db, "project:create")
+	_ = env.tenant.GrantPermissions(ctx, role.ID, []int64{permission.ID})
+	_ = env.tenant.AssignRoles(ctx, member.ID, []int64{role.ID})
+
+	allowed, err := env.rbac.Can(ctx, user.ID, tenantRecord.ID, "project:create")
+	if err != nil {
+		t.Fatalf("Can(active tenant) error = %v", err)
+	}
+	if !allowed {
+		t.Fatal("expected active tenant permission to be granted")
+	}
+
+	disabled := store.TenantStatusDisabled
+	if _, err := env.tenant.UpdateTenant(ctx, tenantRecord.ID, tenant.UpdateTenantInput{Status: &disabled}); err != nil {
+		t.Fatalf("UpdateTenant(disabled) error = %v", err)
+	}
+
+	allowed, err = env.rbac.Can(ctx, user.ID, tenantRecord.ID, "project:create")
+	if err != nil {
+		t.Fatalf("Can(disabled tenant) error = %v", err)
+	}
+	if allowed {
+		t.Fatal("expected disabled tenant to fail permission check")
+	}
+}

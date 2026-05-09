@@ -29,6 +29,13 @@ func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID 
 }
 
 func (s *Service) hasActiveMembership(ctx context.Context, userID, tenantID int64) error {
+	var tenant store.Tenant
+	if err := s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
+		First(&tenant).Error; err != nil {
+		return err
+	}
+
 	var member store.TenantMember
 	return s.db.WithContext(ctx).
 		Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", tenantID, userID, store.MemberStatusActive).

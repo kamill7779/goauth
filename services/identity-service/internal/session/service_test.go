@@ -332,6 +332,22 @@ func TestRefreshRejectsDisabledMembership(t *testing.T) {
 	}
 }
 
+func TestRefreshRejectsDisabledTenant(t *testing.T) {
+	service, user := newTestService(t)
+	tenantRecord := createTenantAndMember(t, service, user.ID)
+	pair := issueSessionPair(t, service, *user, tenantRecord.ID)
+
+	if err := service.db.Model(&store.Tenant{}).
+		Where("id = ?", tenantRecord.ID).
+		Update("status", store.TenantStatusDisabled).Error; err != nil {
+		t.Fatalf("disable tenant: %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected disabled tenant to fail")
+	}
+}
+
 func TestIsSystemUserRecognizesSystemRole(t *testing.T) {
 	service, user := newTestService(t)
 	tenantRecord := createTenantAndMember(t, service, user.ID)

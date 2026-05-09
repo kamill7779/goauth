@@ -134,6 +134,11 @@ func (s *Service) UpdateTenant(ctx context.Context, id int64, input UpdateTenant
 		if err := s.db.WithContext(ctx).Model(&store.Tenant{}).Where("id = ?", id).Updates(updates).Error; err != nil {
 			return nil, err
 		}
+		if input.Status != nil && s.rbac != nil {
+			if err := s.rbac.InvalidateTenantPermissions(ctx, id); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	var record store.Tenant

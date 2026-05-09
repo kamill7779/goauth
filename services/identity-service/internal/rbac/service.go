@@ -13,6 +13,7 @@ import (
 )
 
 const permissionCacheTTL = 2 * time.Minute
+const memberScopeBatchSize = 500
 
 type Service struct {
 	db    *gorm.DB
@@ -94,14 +95,50 @@ func (s *Service) InvalidateRolePermissions(ctx context.Context, roleID int64) e
 	if err != nil {
 		return err
 	}
-	scopes, err := s.memberScopesByIDs(ctx, memberIDs)
-	if err != nil {
+	for start := 0; start < len(memberIDs); start += memberScopeBatchSize {
+		end := start + memberScopeBatchSize
+		if end > len(memberIDs) {
+			end = len(memberIDs)
+		}
+		scopes, err := s.memberScopesByIDs(ctx, memberIDs[start:end])
+		if err != nil {
+			return err
+		}
+		for _, scope := range scopes {
+			if err := s.InvalidateUserTenantPermissions(ctx, scope.UserID, scope.TenantID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) InvalidateTenantPermissions(ctx context.Context, tenantID int64) error {
+	if s.redis == nil {
+		return nil
+	}
+
+	var memberIDs []int64
+	if err := s.db.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
+		Pluck("id", &memberIDs).Error; err != nil {
 		return err
 	}
 
-	for _, scope := range scopes {
-		if err := s.InvalidateUserTenantPermissions(ctx, scope.UserID, scope.TenantID); err != nil {
+	for start := 0; start < len(memberIDs); start += memberScopeBatchSize {
+		end := start + memberScopeBatchSize
+		if end > len(memberIDs) {
+			end = len(memberIDs)
+		}
+		scopes, err := s.memberScopesByIDs(ctx, memberIDs[start:end])
+		if err != nil {
 			return err
+		}
+		for _, scope := range scopes {
+			if err := s.InvalidateUserTenantPermissions(ctx, scope.UserID, scope.TenantID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -127,6 +164,10 @@ func (s *Service) lookupPermissionCodes(ctx context.Context, userID, tenantID in
 }
 
 func (s *Service) activeMemberIDsForUserTenant(ctx context.Context, userID, tenantID int64) ([]int64, error) {
+	if !s.activeTenantExists(ctx, tenantID) {
+		return nil, nil
+	}
+
 	var userCount int64
 	if err := s.db.WithContext(ctx).
 		Model(&store.User{}).
@@ -144,6 +185,15 @@ func (s *Service) activeMemberIDsForUserTenant(ctx context.Context, userID, tena
 		Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", tenantID, userID, store.MemberStatusActive).
 		Pluck("id", &memberIDs).Error
 	return memberIDs, err
+}
+
+func (s *Service) activeTenantExists(ctx context.Context, tenantID int64) bool {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&store.Tenant{}).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
+		Count(&count).Error
+	return err == nil && count > 0
 }
 
 func (s *Service) roleIDsForMembersInTenant(ctx context.Context, memberIDs []int64, tenantID int64) ([]int64, error) {

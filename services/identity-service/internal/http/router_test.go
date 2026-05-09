@@ -74,3 +74,28 @@ func TestNewRouterInvokesRegistrars(t *testing.T) {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
 }
+
+func TestCORSPreflightUsesConfiguredAllowlist(t *testing.T) {
+	router := NewRouter(config.Config{
+		CORSAllowedOrigins:   []string{"https://app.example.com"},
+		CORSAllowedMethods:   []string{"GET", "POST"},
+		CORSAllowedHeaders:   []string{"Authorization", "Content-Type"},
+		CORSAllowCredentials: true,
+	})
+
+	request := httptest.NewRequest(http.MethodOptions, "/v1/auth/login", nil)
+	request.Header.Set("Origin", "https://app.example.com")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Origin"); got != "https://app.example.com" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := recorder.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q", got)
+	}
+}

@@ -176,10 +176,23 @@ func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantI
 		return false
 	}
 
+	if !s.hasActiveTenant(ctx, tenantID) {
+		return false
+	}
+
 	var count int64
 	err := s.db.WithContext(ctx).
 		Model(&store.TenantMember{}).
 		Where("user_id = ? AND tenant_id = ? AND status = ? AND deleted_at IS NULL", userID, tenantID, store.MemberStatusActive).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+func (s *Service) hasActiveTenant(ctx context.Context, tenantID int64) bool {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&store.Tenant{}).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
 		Count(&count).Error
 	return err == nil && count > 0
 }
