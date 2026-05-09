@@ -500,12 +500,15 @@ func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientI
 	}
 
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.revokeLoginSessionWithDB(ctx, tx, token.SessionID, now); err != nil {
+			return err
+		}
 		if err := tx.Model(&store.RefreshToken{}).
 			Where("family_id = ? AND client_id = ? AND revoked_at IS NULL", token.FamilyID, clientID).
 			Update("revoked_at", now).Error; err != nil {
 			return err
 		}
-		return s.revokeLoginSessionWithDB(ctx, tx, token.SessionID, now)
+		return nil
 	})
 }
 

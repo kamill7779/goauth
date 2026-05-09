@@ -91,19 +91,18 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.RefreshToken) error {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
+		if token.SessionID != "" {
+			if err := tx.Model(&store.LoginSession{}).
+				Where("id = ? AND revoked_at IS NULL", token.SessionID).
+				Update("revoked_at", now).Error; err != nil {
+				if isSQLiteWriteLock(err) {
+					return ErrRefreshTokenReuse
+				}
+				return err
+			}
+		}
 		if err := tx.Model(&store.RefreshToken{}).
 			Where("family_id = ? AND revoked_at IS NULL", token.FamilyID).
-			Update("revoked_at", now).Error; err != nil {
-			if isSQLiteWriteLock(err) {
-				return ErrRefreshTokenReuse
-			}
-			return err
-		}
-		if token.SessionID == "" {
-			return nil
-		}
-		if err := tx.Model(&store.LoginSession{}).
-			Where("id = ? AND revoked_at IS NULL", token.SessionID).
 			Update("revoked_at", now).Error; err != nil {
 			if isSQLiteWriteLock(err) {
 				return ErrRefreshTokenReuse
