@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )

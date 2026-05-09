@@ -1,28 +1,43 @@
-# GoAuth Implementation Plan
+# GoAuth 实现计划
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **For Claude:** 实现该计划时，必须逐任务使用 `superpowers:executing-plans` 子技能。
 
-**Goal:** Build GoAuth, a standalone, deployable multi-tenant identity service with email login, token lifecycle management, tenant-scoped RBAC, OIDC provider endpoints, and a GitHub external login adapter.
+**目标：** 构建 GoAuth，一个可独立部署的多租户身份认证服务，提供邮箱登录、令牌生命周期管理、租户级 RBAC、OIDC Provider 端点，以及 GitHub 外部登录适配器。
 
-**Architecture:** Create a new service with a clean router -> handler -> service -> repository structure. MySQL is the primary database, Redis handles ephemeral state and hot-path caches, and OIDC/JWT endpoints expose the service as an identity provider for other systems.
+**架构：** 以清晰的 `router -> handler -> service -> repository` 分层结构实现服务。MySQL 作为主数据库，Redis 负责临时状态和热点缓存，OIDC/JWT 端点将该服务暴露为其他系统可接入的身份提供方。
 
-**Tech Stack:** Go 1.22+, Gin, GORM v2, MySQL, Redis, golang-jwt/jwt/v5, bcrypt or argon2id, Docker Compose.
+**技术栈：** Go 1.24+、Gin、GORM v2、MySQL、Redis、golang-jwt/jwt/v5、bcrypt 或 argon2id、Docker Compose。
+
+## 实现约束
+
+- 本地开发、CI 与运行时镜像统一以 Go 1.24+ 作为最低语言和工具链基线。
+- 实现保持轻量、直接、可读。优先使用小函数、显式流程控制和标准库优先方案，避免预先抽象、过早接口化和单次使用的额外间接层。
+- 如果存在并行开发需求，必须在 `.worktrees/` 下创建隔离的 git worktree，并在独立分支中完成任务，不能把多个并行任务混入主工作区。
+- 在创建项目内 worktree 之前，必须先确认 `.worktrees/` 已被 git 忽略。
+
+推荐的并行开发初始化方式：
+
+```bash
+git check-ignore -q .worktrees
+git worktree add .worktrees/<task-name> -b feat/<task-name> HEAD
+cd .worktrees/<task-name>
+```
 
 ---
 
-## Phase 0: Repository Decision
+## 阶段 0：仓库放置方式
 
-This plan assumes the identity service will be created as a standalone repository or a top-level standalone service directory. If it is developed inside the current repository first, use `services/identity-service` as the root and avoid touching existing gateway code.
+这个计划默认身份服务要么作为独立仓库开发，要么作为当前仓库中的顶层独立服务目录开发。如果先在当前仓库内孵化，根目录使用 `services/identity-service`，并避免触碰现有 gateway 代码。
 
-Recommended root for in-repo prototyping:
+推荐的仓库内原型目录：
 
 ```text
 services/identity-service
 ```
 
-## Task 1: Create Service Skeleton
+## 任务 1：创建服务骨架
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/go.mod`
 - Create: `services/identity-service/cmd/server/main.go`
@@ -31,57 +46,57 @@ services/identity-service
 - Create: `services/identity-service/internal/http/response.go`
 - Create: `services/identity-service/.env.example`
 
-**Step 1: Initialize module**
+**步骤 1：初始化模块**
 
-Run:
+运行：
 
 ```bash
 cd services/identity-service
-go mod init example.com/identity-service
+go mod init goauth/services/identity-service
 go get github.com/gin-gonic/gin gorm.io/gorm gorm.io/driver/mysql gorm.io/driver/sqlite github.com/redis/go-redis/v9 github.com/golang-jwt/jwt/v5 golang.org/x/crypto
 ```
 
-Expected: `go.mod` and `go.sum` are created.
+预期：生成 `go.mod` 和 `go.sum`。
 
-**Step 2: Add config loader**
+**步骤 2：添加配置加载器**
 
-Implement `internal/config/config.go` with typed fields for HTTP address, issuer URL, MySQL DSN, Redis URL, token TTLs, SMTP, CORS, and GitHub OAuth settings.
+在 `internal/config/config.go` 中实现强类型配置，覆盖 HTTP 地址、Issuer URL、MySQL DSN、Redis URL、Token TTL、SMTP、CORS 与 GitHub OAuth 配置项。
 
-**Step 3: Add health route**
+**步骤 3：添加健康检查路由**
 
-Implement:
+实现：
 
 ```text
 GET /healthz
 ```
 
-Expected response:
+预期响应：
 
 ```json
 {"success":true,"data":{"status":"ok"}}
 ```
 
-**Step 4: Verify**
+**步骤 4：验证**
 
-Run:
+运行：
 
 ```bash
 go run ./cmd/server
 curl -fsS http://127.0.0.1:8080/healthz
 ```
 
-Expected: health response returns HTTP 200.
+预期：健康检查返回 HTTP 200。
 
-**Step 5: Commit**
+**步骤 5：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): scaffold standalone identity service"
 ```
 
-## Task 2: Add Database and Redis Infrastructure
+## 任务 2：添加数据库与 Redis 基础设施
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/store/db.go`
 - Create: `services/identity-service/internal/store/models.go`
@@ -89,9 +104,9 @@ git commit -m "feat(identity): scaffold standalone identity service"
 - Create: `services/identity-service/internal/cache/keys.go`
 - Modify: `services/identity-service/cmd/server/main.go`
 
-**Step 1: Define GORM models**
+**步骤 1：定义 GORM 模型**
 
-Create models for:
+为下列实体创建模型：
 
 - `User`
 - `UserIdentity`
@@ -107,19 +122,19 @@ Create models for:
 - `ExternalProviderConfig`
 - `AuditLog`
 
-Use explicit GORM indexes for unique constraints described in the design document.
+唯一约束按设计文档中的要求，通过显式 GORM 索引表达。
 
-**Step 2: Add database initialization**
+**步骤 2：添加数据库初始化**
 
-Implement `OpenDB(cfg)` and `AutoMigrate(db)`.
+实现 `OpenDB(cfg)` 与 `AutoMigrate(db)`。
 
-Use MySQL when `MYSQL_DSN` is set and SQLite only for local tests.
+当设置了 `MYSQL_DSN` 时使用 MySQL；SQLite 仅用于本地测试。
 
-**Step 3: Add Redis initialization**
+**步骤 3：添加 Redis 初始化**
 
-Implement `OpenRedis(cfg)` and typed key helpers:
+实现 `OpenRedis(cfg)` 以及类型化 key 辅助函数：
 
-```go
+```text
 EmailCodeKey(purpose, email string) string
 UserCacheKey(userID int64) string
 SessionKey(sessionID string) string
@@ -128,26 +143,26 @@ JtiDenylistKey(jti string) string
 OIDCStateKey(state string) string
 ```
 
-**Step 4: Verify**
+**步骤 4：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/store ./internal/cache
 ```
 
-Expected: packages compile and unit tests pass.
+预期：相关包可以编译，单元测试通过。
 
-**Step 5: Commit**
+**步骤 5：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add store and cache infrastructure"
 ```
 
-## Task 3: Implement Email Verification and Password Auth
+## 任务 3：实现邮箱验证与密码认证
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/auth/password.go`
 - Create: `services/identity-service/internal/auth/email_code.go`
@@ -156,32 +171,32 @@ git commit -m "feat(identity): add store and cache infrastructure"
 - Create: `services/identity-service/internal/mailer/mailer.go`
 - Modify: `services/identity-service/internal/http/router.go`
 
-**Step 1: Write tests first**
+**步骤 1：先写测试**
 
-Create tests for:
+为下列行为编写测试：
 
-- Password hash validates the original password.
-- Wrong password fails.
-- Email verification code is stored in Redis with TTL.
-- Registration requires a verified code.
-- Duplicate email registration fails.
-- Login fails for disabled users.
+- 密码哈希可以验证原始密码。
+- 错误密码校验失败。
+- 邮箱验证码写入 Redis 且带 TTL。
+- 注册必须依赖已验证的验证码。
+- 重复邮箱注册失败。
+- 被禁用用户登录失败。
 
-Run:
+运行：
 
 ```bash
 go test ./internal/auth
 ```
 
-Expected: tests fail before implementation.
+预期：在实现前测试先失败。
 
-**Step 2: Implement password helpers**
+**步骤 2：实现密码辅助逻辑**
 
-Use bcrypt first because it is already familiar in the reference project. Keep the interface small so argon2id can replace it later.
+首版先使用 bcrypt，因为它在参考项目中更熟悉。接口保持足够小，以便未来切换到 argon2id。
 
-**Step 3: Implement auth endpoints**
+**步骤 3：实现认证端点**
 
-Routes:
+路由：
 
 ```text
 POST /v1/auth/email/send-code
@@ -191,26 +206,26 @@ POST /v1/auth/password/forgot
 POST /v1/auth/password/reset
 ```
 
-**Step 4: Verify**
+**步骤 4：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/auth
 ```
 
-Expected: tests pass.
+预期：测试通过。
 
-**Step 5: Commit**
+**步骤 5：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add email and password authentication"
 ```
 
-## Task 4: Implement Access and Refresh Tokens
+## 任务 4：实现 Access Token 与 Refresh Token
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/session/token.go`
 - Create: `services/identity-service/internal/session/refresh.go`
@@ -219,38 +234,38 @@ git commit -m "feat(identity): add email and password authentication"
 - Modify: `services/identity-service/internal/http/router.go`
 - Modify: `services/identity-service/internal/auth/service.go`
 
-**Step 1: Write tests first**
+**步骤 1：先写测试**
 
-Create tests for:
+为下列行为编写测试：
 
-- Access token contains `sub`, `sid`, `tid`, `aud`, `jti`, and `ver`.
-- Refresh token is stored only as a hash.
-- Refresh rotates the token.
-- Reusing a rotated refresh token revokes the token family.
-- Logout revokes one session.
-- Logout all increments user token version.
+- Access Token 包含 `sub`、`sid`、`tid`、`aud`、`jti` 和 `ver`。
+- Refresh Token 在存储层只保存哈希。
+- 刷新动作会轮换 Token。
+- 轮换后的旧 Refresh Token 被复用时，整个 token family 会被撤销。
+- Logout 只撤销一个会话。
+- Logout all 会增加用户 token version。
 
-Run:
+运行：
 
 ```bash
 go test ./internal/session
 ```
 
-Expected: tests fail before implementation.
+预期：在实现前测试先失败。
 
-**Step 2: Implement JWT signing**
+**步骤 2：实现 JWT 签名**
 
-Use `github.com/golang-jwt/jwt/v5`.
+使用 `github.com/golang-jwt/jwt/v5`。
 
-Support:
+需要支持：
 
-- RSA private key loading.
-- Key ID in JWT header.
-- JWKS public key export later in the OIDC task.
+- RSA 私钥加载。
+- JWT Header 中的 Key ID。
+- 在后续 OIDC 任务中导出 JWKS 公钥。
 
-**Step 3: Implement refresh token lifecycle**
+**步骤 3：实现 Refresh Token 生命周期**
 
-Implement:
+实现：
 
 ```text
 POST /v1/auth/refresh
@@ -259,26 +274,26 @@ POST /v1/auth/logout-all
 GET  /v1/auth/me
 ```
 
-**Step 4: Verify**
+**步骤 4：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/session ./internal/auth
 ```
 
-Expected: tests pass.
+预期：测试通过。
 
-**Step 5: Commit**
+**步骤 5：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add access and refresh token lifecycle"
 ```
 
-## Task 5: Implement Tenant-Scoped RBAC
+## 任务 5：实现租户级 RBAC
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/rbac/service.go`
 - Create: `services/identity-service/internal/rbac/handler.go`
@@ -286,38 +301,38 @@ git commit -m "feat(identity): add access and refresh token lifecycle"
 - Create: `services/identity-service/internal/tenant/handler.go`
 - Modify: `services/identity-service/internal/http/router.go`
 
-**Step 1: Write tests first**
+**步骤 1：先写测试**
 
-Create tests for:
+为下列行为编写测试：
 
-- A member with a role has the role permissions.
-- Removing a role removes access.
-- A user can have different roles in different tenants.
-- Permission cache invalidates after role changes.
-- Disabled users and disabled members fail checks.
+- 某成员持有角色后，会继承该角色的权限。
+- 移除角色后，相应访问权也消失。
+- 同一用户在不同租户中可以拥有不同角色。
+- 角色变更后，权限缓存会失效。
+- 被禁用用户和被禁用成员都无法通过权限校验。
 
-Run:
+运行：
 
 ```bash
 go test ./internal/rbac ./internal/tenant
 ```
 
-Expected: tests fail before implementation.
+预期：在实现前测试先失败。
 
-**Step 2: Implement RBAC service**
+**步骤 2：实现 RBAC 服务**
 
-Implement permission resolution:
+实现权限解析接口：
 
-```go
+```text
 Can(ctx, userID, tenantID int64, permission string) (bool, error)
 ListPermissions(ctx, userID, tenantID int64) ([]string, error)
 ```
 
-Use Redis for permission cache and MySQL as source of truth.
+Redis 作为权限缓存，MySQL 作为事实来源。
 
-**Step 3: Add RBAC APIs**
+**步骤 3：添加 RBAC API**
 
-Routes:
+路由：
 
 ```text
 POST /v1/authz/check
@@ -325,9 +340,9 @@ POST /v1/authz/check-batch
 GET  /v1/tenants/:tenant_id/my-permissions
 ```
 
-**Step 4: Add tenant and role admin APIs**
+**步骤 4：添加租户与角色管理 API**
 
-Routes:
+路由：
 
 ```text
 GET    /v1/admin/tenants
@@ -345,26 +360,26 @@ POST   /v1/admin/members/:member_id/roles
 DELETE /v1/admin/members/:member_id/roles/:role_id
 ```
 
-**Step 5: Verify**
+**步骤 5：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/rbac ./internal/tenant
 ```
 
-Expected: tests pass.
+预期：测试通过。
 
-**Step 6: Commit**
+**步骤 6：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add tenant scoped rbac"
 ```
 
-## Task 6: Implement OIDC Provider
+## 任务 6：实现 OIDC Provider
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/oidc/discovery.go`
 - Create: `services/identity-service/internal/oidc/jwks.go`
@@ -374,53 +389,58 @@ git commit -m "feat(identity): add tenant scoped rbac"
 - Create: `services/identity-service/internal/oidc/client.go`
 - Modify: `services/identity-service/internal/http/router.go`
 
-**Step 1: Write tests first**
+**步骤 1：先写测试**
 
-Create tests for:
+为下列行为编写测试：
 
-- Discovery document contains issuer, authorization endpoint, token endpoint, userinfo endpoint, and jwks URI.
-- Authorization endpoint requires a valid client and redirect URI.
-- Authorization code is hashed in storage.
-- Token endpoint validates PKCE.
-- Token endpoint returns ID token, access token, and refresh token.
-- UserInfo returns user claims for a valid access token.
-- Revocation revokes refresh tokens.
+- Discovery 文档包含 issuer、authorization endpoint、token endpoint、userinfo endpoint 和 jwks URI。
+- Authorization endpoint 会校验合法 client 与 redirect URI。
+- Authorization Code 在存储层以哈希保存。
+- Token endpoint 会校验 PKCE。
+- Token endpoint 返回 ID Token、Access Token 与 Refresh Token。
+- 合法 Access Token 调用 UserInfo 时会返回用户 claims。
+- Revocation 可以撤销 Refresh Token。
 
-Run:
+运行：
 
 ```bash
 go test ./internal/oidc
 ```
 
-Expected: tests fail before implementation.
+预期：在实现前测试先失败。
 
-**Step 2: Implement discovery and JWKS**
+**步骤 2：实现 Discovery 与 JWKS**
 
-Routes:
+路由：
 
 ```text
 GET /.well-known/openid-configuration
 GET /oauth2/jwks
 ```
 
-**Step 3: Implement OAuth clients**
+**步骤 3：实现 OAuth Client**
 
-Add repository and admin service methods for client creation, secret hashing, redirect URI validation, and scope validation.
+增加仓储层与后台服务方法，用于：
 
-**Step 4: Implement Authorization Code + PKCE**
+- 创建客户端。
+- 哈希存储 client secret。
+- 校验 redirect URI。
+- 校验 scope。
 
-Routes:
+**步骤 4：实现 Authorization Code + PKCE**
+
+路由：
 
 ```text
 GET  /oauth2/authorize
 POST /oauth2/token
 ```
 
-Do not implement implicit flow.
+不要实现 Implicit Flow。
 
-**Step 5: Implement UserInfo, Introspection, Revocation, Logout**
+**步骤 5：实现 UserInfo、Introspection、Revocation、Logout**
 
-Routes:
+路由：
 
 ```text
 GET  /oauth2/userinfo
@@ -429,26 +449,26 @@ POST /oauth2/revoke
 GET  /oauth2/logout
 ```
 
-**Step 6: Verify**
+**步骤 6：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/oidc ./internal/session ./internal/auth
 ```
 
-Expected: tests pass.
+预期：测试通过。
 
-**Step 7: Commit**
+**步骤 7：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add oidc provider endpoints"
 ```
 
-## Task 7: Implement External Provider Abstraction and GitHub
+## 任务 7：实现外部 Provider 抽象与 GitHub 适配器
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/idp/provider.go`
 - Create: `services/identity-service/internal/idp/service.go`
@@ -456,31 +476,31 @@ git commit -m "feat(identity): add oidc provider endpoints"
 - Create: `services/identity-service/internal/idp/github/github.go`
 - Modify: `services/identity-service/internal/http/router.go`
 
-**Step 1: Write tests first**
+**步骤 1：先写测试**
 
-Create tests for:
+为下列行为编写测试：
 
-- GitHub adapter builds the correct authorization URL.
-- GitHub adapter exchanges code using the configured redirect URI.
-- GitHub adapter fetches `/user` and `/user/emails`.
-- Hidden GitHub email is resolved from primary verified email.
-- Existing identity logs into the local user.
-- Existing email without identity requires local login before binding.
-- Logged-in user can bind GitHub identity.
+- GitHub 适配器可以生成正确的授权 URL。
+- GitHub 适配器使用已配置的 redirect URI 交换 code。
+- GitHub 适配器可以获取 `/user` 和 `/user/emails`。
+- 隐藏邮箱时，可以从主已验证邮箱中解析出来。
+- 已存在的外部身份可以直接登录到对应本地用户。
+- 如果邮箱已存在但身份未绑定，必须先本地登录才能绑定。
+- 已登录用户可以绑定 GitHub 身份。
 
-Run:
+运行：
 
 ```bash
 go test ./internal/idp ./internal/idp/github
 ```
 
-Expected: tests fail before implementation.
+预期：在实现前测试先失败。
 
-**Step 2: Implement provider interface**
+**步骤 2：实现 Provider 接口**
 
-Use:
+使用：
 
-```go
+```text
 type Provider interface {
     Slug() string
     DisplayName() string
@@ -490,9 +510,9 @@ type Provider interface {
 }
 ```
 
-**Step 3: Implement GitHub provider**
+**步骤 3：实现 GitHub Provider**
 
-Use:
+使用：
 
 ```text
 Authorization URL: https://github.com/login/oauth/authorize
@@ -502,7 +522,7 @@ Emails API:        https://api.github.com/user/emails
 Scopes:            read:user user:email
 ```
 
-**Step 4: Add routes**
+**步骤 4：添加路由**
 
 ```text
 GET    /v1/external/github/start
@@ -512,54 +532,54 @@ DELETE /v1/external/github/bind
 GET    /v1/me/identities
 ```
 
-**Step 5: Verify**
+**步骤 5：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/idp ./internal/idp/github ./internal/auth
 ```
 
-Expected: tests pass.
+预期：测试通过。
 
-**Step 6: Commit**
+**步骤 6：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add github external identity provider"
 ```
 
-## Task 8: Add Admin User Management and Audit Logs
+## 任务 8：添加后台用户管理与审计日志
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/internal/user/service.go`
 - Create: `services/identity-service/internal/user/handler.go`
 - Create: `services/identity-service/internal/audit/service.go`
 - Modify: `services/identity-service/internal/http/router.go`
 
-**Step 1: Write tests first**
+**步骤 1：先写测试**
 
-Create tests for:
+为下列行为编写测试：
 
-- Admin can list users.
-- Admin can disable and enable users.
-- Admin can reset user password.
-- Root or system admin cannot be accidentally disabled without explicit permission checks.
-- Role changes write audit logs.
-- Login and logout write audit logs.
+- 管理员可以列出用户。
+- 管理员可以禁用与启用用户。
+- 管理员可以重置用户密码。
+- Root 或系统管理员不能在未显式校验权限的情况下被误禁用。
+- 角色变更会写入审计日志。
+- 登录与退出会写入审计日志。
 
-Run:
+运行：
 
 ```bash
 go test ./internal/user ./internal/audit
 ```
 
-Expected: tests fail before implementation.
+预期：在实现前测试先失败。
 
-**Step 2: Implement admin APIs**
+**步骤 2：实现后台 API**
 
-Routes:
+路由：
 
 ```text
 GET   /v1/admin/users
@@ -570,9 +590,9 @@ POST  /v1/admin/users/:id/enable
 POST  /v1/admin/users/:id/reset-password
 ```
 
-**Step 3: Implement audit writer**
+**步骤 3：实现审计写入**
 
-Write audit events for:
+为以下事件写入审计日志：
 
 - login
 - logout
@@ -583,26 +603,26 @@ Write audit events for:
 - OAuth client changes
 - external identity binding changes
 
-**Step 4: Verify**
+**步骤 4：验证**
 
-Run:
+运行：
 
 ```bash
 go test ./internal/user ./internal/audit ./...
 ```
 
-Expected: tests pass.
+预期：测试通过。
 
-**Step 5: Commit**
+**步骤 5：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "feat(identity): add admin user management and audit logs"
 ```
 
-## Task 9: Add Docker Compose and Operational Documentation
+## 任务 9：添加 Docker Compose 与运维文档
 
-**Files:**
+**文件：**
 
 - Create: `services/identity-service/Dockerfile`
 - Create: `services/identity-service/docker-compose.yml`
@@ -610,13 +630,13 @@ git commit -m "feat(identity): add admin user management and audit logs"
 - Create: `services/identity-service/docs/client-integration.md`
 - Create: `services/identity-service/docs/oidc-integration.md`
 
-**Step 1: Add Dockerfile**
+**步骤 1：添加 Dockerfile**
 
-Build a small production image with a multi-stage Go build.
+通过多阶段 Go 构建生成体积较小的生产镜像。
 
-**Step 2: Add Docker Compose**
+**步骤 2：添加 Docker Compose**
 
-Services:
+服务：
 
 ```text
 identity-service
@@ -624,20 +644,20 @@ mysql
 redis
 ```
 
-**Step 3: Add integration docs**
+**步骤 3：添加集成文档**
 
-Document:
+需要说明：
 
-- Environment variables.
-- How to create the first admin.
-- How to register an OAuth client.
-- How a business system redirects to `/oauth2/authorize`.
-- How a business API validates JWTs with JWKS.
-- How a business API calls `/v1/authz/check`.
+- 环境变量。
+- 如何创建第一个管理员。
+- 如何注册一个 OAuth Client。
+- 业务系统如何跳转到 `/oauth2/authorize`。
+- 业务 API 如何通过 JWKS 校验 JWT。
+- 业务 API 如何调用 `/v1/authz/check`。
 
-**Step 4: Verify**
+**步骤 4：验证**
 
-Run:
+运行：
 
 ```bash
 docker compose up -d --build
@@ -645,18 +665,18 @@ curl -fsS http://127.0.0.1:8080/healthz
 docker compose logs identity-service
 ```
 
-Expected: service starts and health check succeeds.
+预期：服务成功启动，健康检查通过。
 
-**Step 5: Commit**
+**步骤 5：提交**
 
 ```bash
 git add services/identity-service
 git commit -m "docs(identity): add deployment and integration guide"
 ```
 
-## Final Verification
+## 最终验证
 
-Run:
+运行：
 
 ```bash
 go test ./...
@@ -665,17 +685,17 @@ curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8080/.well-known/openid-configuration
 ```
 
-Expected:
+预期：
 
-- All Go tests pass.
-- Health check returns HTTP 200.
-- OIDC discovery document returns HTTP 200 and contains the configured issuer.
+- 所有 Go 测试通过。
+- 健康检查返回 HTTP 200。
+- OIDC discovery 文档返回 HTTP 200，并包含已配置的 issuer。
 
-## Execution Options
+## 执行方式
 
-Plan complete and saved to `docs/plans/2026-05-08-identity-service-implementation-plan.md`.
+计划已保存到 `docs/plans/2026-05-08-identity-service-implementation-plan.md`。
 
-Two execution options:
+有两种执行方式：
 
-1. Subagent-Driven (this session) - Dispatch a fresh subagent per task, review between tasks, and iterate quickly.
-2. Parallel Session (separate) - Open a new session with `executing-plans` and execute the plan with checkpoints.
+1. Subagent-Driven（当前会话）- 每个任务派发一个新的子代理，中间穿插 review，迭代快。
+2. Parallel Session（独立会话）- 新开一个使用 `executing-plans` 的会话，按检查点推进整个计划。

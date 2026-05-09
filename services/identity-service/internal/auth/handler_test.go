@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/session"
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/session"
+	"goauth/services/identity-service/internal/store"
 )
 
 func TestLoginSetsOIDCAuthorizeCookie(t *testing.T) {

@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 

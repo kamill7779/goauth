@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 
@@ -104,6 +104,8 @@ func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirect
 		if err != nil {
 			return nil, err
 		}
+		// If the email already belongs to a local account, require an explicit bind
+		// flow instead of silently linking an external identity to that user.
 		if user != nil {
 			return nil, ErrLocalLoginRequired
 		}

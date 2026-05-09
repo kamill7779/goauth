@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"strings"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/auth"
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/auth"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )

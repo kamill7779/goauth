@@ -3,12 +3,11 @@ package user
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/auth"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/auth"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -269,8 +268,4 @@ func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
 
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
-}
-
-func userTargetID(id int64) string {
-	return strconv.FormatInt(id, 10)
 }

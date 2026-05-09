@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"example.com/identity-service/internal/config"
+	"goauth/services/identity-service/internal/config"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"

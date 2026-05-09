@@ -3,57 +3,81 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"fmt"
 	"log"
 	"strings"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/auth"
-	"example.com/identity-service/internal/cache"
-	"example.com/identity-service/internal/config"
-	httpserver "example.com/identity-service/internal/http"
-	"example.com/identity-service/internal/idp"
-	githubidp "example.com/identity-service/internal/idp/github"
-	"example.com/identity-service/internal/mailer"
-	"example.com/identity-service/internal/oidc"
-	"example.com/identity-service/internal/rbac"
-	"example.com/identity-service/internal/session"
-	"example.com/identity-service/internal/store"
-	"example.com/identity-service/internal/tenant"
-	"example.com/identity-service/internal/user"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/auth"
+	"goauth/services/identity-service/internal/cache"
+	"goauth/services/identity-service/internal/config"
+	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/idp"
+	githubidp "goauth/services/identity-service/internal/idp/github"
+	"goauth/services/identity-service/internal/mailer"
+	"goauth/services/identity-service/internal/oidc"
+	"goauth/services/identity-service/internal/rbac"
+	"goauth/services/identity-service/internal/session"
+	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/tenant"
+	"goauth/services/identity-service/internal/user"
 	"gorm.io/gorm"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatalf("identity service: %v", err)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	db, err := store.OpenDB(cfg)
 	if err != nil {
-		log.Fatalf("open db: %v", err)
+		return fmt.Errorf("open db: %w", err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("db handle: %w", err)
+	}
+	defer func() {
+		if err := sqlDB.Close(); err != nil {
+			log.Printf("close db: %v", err)
+		}
+	}()
+
 	if err := store.AutoMigrate(db); err != nil {
-		log.Fatalf("auto migrate: %v", err)
+		return fmt.Errorf("auto migrate: %w", err)
 	}
 
 	privateKey, err := loadSigningKey(cfg)
 	if err != nil {
-		log.Fatalf("load signing key: %v", err)
+		return fmt.Errorf("load signing key: %w", err)
 	}
 
 	redisClient, err := cache.OpenRedis(cfg)
 	if err != nil {
 		log.Printf("auth routes disabled until redis is available: %v", err)
 		redisClient = nil
+	} else {
+		defer func() {
+			if err := redisClient.Close(); err != nil {
+				log.Printf("close redis: %v", err)
+			}
+		}()
 	}
 
 	router := buildRouter(cfg, db, redisClient, privateKey)
 	if err := router.Run(cfg.HTTPAddr); err != nil {
-		log.Fatalf("run server: %v", err)
+		return fmt.Errorf("run server: %w", err)
 	}
+	return nil
 }
 
 func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {

@@ -6,8 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"example.com/identity-service/internal/config"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/config"
 )
 
 type testRegistrar struct {

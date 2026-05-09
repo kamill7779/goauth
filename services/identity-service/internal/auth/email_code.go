@@ -7,8 +7,8 @@ import (
 	"math/big"
 	"time"
 
-	"example.com/identity-service/internal/cache"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/cache"
 )
 
 const (
@@ -18,8 +18,8 @@ const (
 )
 
 func generateEmailCode() (string, error) {
-	max := big.NewInt(1000000)
-	value, err := rand.Int(rand.Reader, max)
+	limit := big.NewInt(1000000)
+	value, err := rand.Int(rand.Reader, limit)
 	if err != nil {
 		return "", err
 	}

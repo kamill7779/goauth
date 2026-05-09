@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"example.com/identity-service/internal/audit"
 	"github.com/alicebob/miniredis/v2"
+	"goauth/services/identity-service/internal/audit"
 
-	"example.com/identity-service/internal/cache"
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/cache"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/store"
 )
 
 type testMailer struct {

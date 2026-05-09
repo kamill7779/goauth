@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/store"
 )
 
 func TestMeRouteReturnsClaimsForValidBearerToken(t *testing.T) {

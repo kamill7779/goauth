@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/rbac"
-	"example.com/identity-service/internal/session"
-	"example.com/identity-service/internal/store"
-	"example.com/identity-service/internal/tenant"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/rbac"
+	"goauth/services/identity-service/internal/session"
+	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/tenant"
 	"gorm.io/gorm"
 )
 

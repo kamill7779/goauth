@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"example.com/identity-service/internal/config"
+	"goauth/services/identity-service/internal/config"
 )
 
 func TestOpenDBFallsBackToSQLiteAndMigratesTables(t *testing.T) {
@@ -36,7 +36,11 @@ func TestOpenDBFallsBackToSQLiteAndMigratesTables(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.DB() error = %v", err)
 	}
-	defer sqlDB.Close()
+	defer func() {
+		if err := sqlDB.Close(); err != nil {
+			t.Fatalf("sqlDB.Close() error = %v", err)
+		}
+	}()
 }
 
 func TestUserEmailUniqueIndexRejectsDuplicates(t *testing.T) {

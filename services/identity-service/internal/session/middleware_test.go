@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 

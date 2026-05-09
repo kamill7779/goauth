@@ -8,11 +8,11 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"gorm.io/gorm"
 
-	"example.com/identity-service/internal/cache"
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/rbac"
-	"example.com/identity-service/internal/store"
-	"example.com/identity-service/internal/tenant"
+	"goauth/services/identity-service/internal/cache"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/rbac"
+	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/tenant"
 )
 
 type testEnv struct {

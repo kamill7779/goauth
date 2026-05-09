@@ -9,10 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"example.com/identity-service/internal/session"
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"goauth/services/identity-service/internal/session"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 

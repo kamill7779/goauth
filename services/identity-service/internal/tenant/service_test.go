@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"example.com/identity-service/internal/audit"
 	"github.com/alicebob/miniredis/v2"
+	"goauth/services/identity-service/internal/audit"
 
-	"example.com/identity-service/internal/cache"
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/rbac"
-	"example.com/identity-service/internal/store"
-	"example.com/identity-service/internal/tenant"
+	"goauth/services/identity-service/internal/cache"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/rbac"
+	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/tenant"
 )
 
 func newTenantService(t *testing.T) *tenant.Service {

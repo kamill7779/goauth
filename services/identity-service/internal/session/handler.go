@@ -5,8 +5,8 @@ import (
 	stdhttp "net/http"
 	"strconv"
 
-	httpserver "example.com/identity-service/internal/http"
 	"github.com/gin-gonic/gin"
+	httpserver "goauth/services/identity-service/internal/http"
 )
 
 type Handler struct {

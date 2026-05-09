@@ -6,9 +6,9 @@ import (
 	"sort"
 	"time"
 
-	"example.com/identity-service/internal/cache"
-	"example.com/identity-service/internal/store"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/cache"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 
@@ -57,6 +57,8 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 	}
 
 	var rows []permissionRow
+	// Permissions are resolved from the tenant member relationship at read time
+	// so role changes and membership revocation do not depend on stale token claims.
 	err := s.db.WithContext(ctx).
 		Table("permissions").
 		Select("DISTINCT permissions.code AS code").

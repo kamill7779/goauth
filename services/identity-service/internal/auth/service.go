@@ -7,9 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/mailer"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/mailer"
+	"goauth/services/identity-service/internal/store"
+
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )

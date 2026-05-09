@@ -3,9 +3,9 @@ package auth
 import (
 	stdhttp "net/http"
 
-	httpserver "example.com/identity-service/internal/http"
-	"example.com/identity-service/internal/session"
 	"github.com/gin-gonic/gin"
+	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/session"
 )
 
 type Handler struct {

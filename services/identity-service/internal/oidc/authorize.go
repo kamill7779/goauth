@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"example.com/identity-service/internal/session"
-	"example.com/identity-service/internal/store"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/session"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 
@@ -52,6 +52,8 @@ func (h *Handler) authorize(c *gin.Context) {
 		return
 	}
 
+	// The browser must already hold a local login cookie; the authorization code
+	// is only issued after we revalidate that session and the client's tenant access.
 	cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName)
 	if err != nil || strings.TrimSpace(cookieValue) == "" {
 		oauthError(c, http.StatusUnauthorized, "login_required")
@@ -89,6 +91,7 @@ func (h *Handler) authorize(c *gin.Context) {
 		return
 	}
 
+	// Only the hashed code is stored so leaking the database does not expose reusable auth codes.
 	record := store.OAuthAuthorizationCode{
 		CodeHash:            h.service.hashAuthorizationCode(rawCode),
 		ClientID:            client.ClientID,

@@ -1,6 +1,8 @@
 .env
 .env.*
 !.env.example
+.worktrees/
+.idea/
 
 bin/
 dist/

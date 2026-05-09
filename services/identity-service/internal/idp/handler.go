@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	httpserver "example.com/identity-service/internal/http"
-	"example.com/identity-service/internal/session"
 	"github.com/gin-gonic/gin"
+	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/session"
 )
 
 const (
@@ -37,12 +37,6 @@ func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.Han
 		authMiddleware: authMiddleware,
 		newState:       randomState,
 	}
-}
-
-func RegisterRoutes(router gin.IRouter, service *Service, sessions SessionIssuer, authMiddleware gin.HandlerFunc) *Handler {
-	handler := NewHandler(service, sessions, authMiddleware)
-	handler.RegisterRoutes(router)
-	return handler
 }
 
 func (h *Handler) RegisterRoutes(router gin.IRouter) {

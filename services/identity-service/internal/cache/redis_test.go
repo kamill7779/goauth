@@ -6,7 +6,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 
-	"example.com/identity-service/internal/config"
+	"goauth/services/identity-service/internal/config"
 )
 
 func TestOpenRedisBuildsClientFromConfiguredURL(t *testing.T) {
@@ -20,7 +20,11 @@ func TestOpenRedisBuildsClientFromConfiguredURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenRedis() error = %v", err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			t.Fatalf("client.Close() error = %v", err)
+		}
+	}()
 
 	if pong, err := client.Ping(context.Background()).Result(); err != nil {
 		t.Fatalf("Ping() error = %v", err)

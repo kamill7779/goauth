@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 
@@ -39,6 +39,8 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 		return err
 	}
 
+	// JWT signature alone is not enough here: we also recheck live user, session,
+	// and tenant state so logout, disable, or membership removal takes effect immediately.
 	user, err := s.loadActiveUser(ctx, userID)
 	if err != nil {
 		return err

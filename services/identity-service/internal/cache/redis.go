@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"example.com/identity-service/internal/config"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/config"
 )
 
 func OpenRedis(cfg config.Config) (*redis.Client, error) {

@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"testing"
 
-	"example.com/identity-service/internal/idp"
+	"goauth/services/identity-service/internal/idp"
 )
 
 func TestAuthCodeURLBuildsGitHubAuthorizeURL(t *testing.T) {

@@ -3,16 +3,12 @@ package http
 import (
 	stdhttp "net/http"
 
-	"example.com/identity-service/internal/config"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/config"
 )
 
 type Registrar interface {
 	RegisterRoutes(router gin.IRouter)
-}
-
-type RouteRegistrar interface {
-	RegisterRoutes(gin.IRoutes)
 }
 
 type EngineRegistrar interface {
@@ -37,15 +33,6 @@ func NewRouter(_ config.Config, registrars ...Registrar) *gin.Engine {
 	}
 
 	return router
-}
-
-func RegisterIRoutes(router gin.IRoutes, registrars ...RouteRegistrar) {
-	for _, registrar := range registrars {
-		if registrar == nil {
-			continue
-		}
-		registrar.RegisterRoutes(router)
-	}
 }
 
 func RegisterRoutes(router *gin.Engine, registrars ...EngineRegistrar) {

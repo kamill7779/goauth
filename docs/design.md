@@ -1,119 +1,124 @@
-# GoAuth Design
+# GoAuth 设计文档
 
-Date: 2026-05-08
+日期：2026-05-08
 
-## Goal
+## 目标
 
-Build GoAuth, a standalone, deployable identity service that can be used as a system scaffold for future projects. It should provide email-first account registration, login, token lifecycle management, tenant-scoped RBAC, user administration, and OAuth2/OpenID Connect provider capabilities out of the box.
+构建 GoAuth，一个可独立部署的身份认证服务，作为后续系统的通用脚手架能力。首版需要开箱即用地提供：以邮箱为主的注册与登录、令牌生命周期管理、租户级 RBAC、用户管理，以及 OAuth2 / OpenID Connect 提供方能力。
 
-The service is not a library embedded into the current gateway. It is an independent service that other systems integrate with over HTTP/OIDC.
+这个服务不是嵌入当前网关的库，而是一个独立的服务，供其他业务系统通过 HTTP / OIDC 接入。
 
-## Non-Goals
+## 非目标
 
-- Do not move business concepts such as quota, billing, model groups, channel keys, subscriptions, or invitation rewards into the identity service.
-- Do not implement a full ABAC policy engine in the first version.
-- Do not implement DAC as the primary permission model.
-- Do not require other systems to share the identity service database.
-- Do not make third-party OAuth login the primary product shape. External OAuth providers are optional upstream identity sources.
+- 不把 quota、billing、model groups、channel keys、subscriptions、invitation rewards 等业务概念迁入身份服务。
+- 首版不实现完整的 ABAC 策略引擎。
+- 不把 DAC 作为首要权限模型。
+- 不要求其他系统与身份服务共享数据库。
+- 不把第三方 OAuth 登录做成产品主形态。外部 OAuth 提供方只是上游身份来源的可选接入方式。
 
-## Product Shape
+## 产品形态
 
-The service provides two OAuth-related capabilities that must remain separate in code and documentation:
+服务中有两类 OAuth 相关能力，代码和文档里必须严格区分：
 
 1. OIDC Provider
-   - The identity service is the authorization server and identity provider.
-   - Business systems register as OAuth clients.
-   - Business systems redirect users to this service for login.
-   - This service returns authorization codes, ID tokens, access tokens, refresh tokens, JWKS, and userinfo.
+   - 身份服务本身是授权服务器和身份提供方。
+   - 业务系统以 OAuth Client 的身份注册到该服务。
+   - 业务系统把用户重定向到该服务完成登录。
+   - 该服务返回授权码、ID Token、Access Token、Refresh Token、JWKS 以及 UserInfo。
 
-2. External Identity Provider adapters
-   - This service can also let users sign in through external providers.
-   - The first external provider is GitHub.
-   - External login only establishes or binds a local user identity. After that, this service still issues its own tokens and RBAC context to downstream business systems.
+2. External Identity Provider Adapters
+   - 服务也支持用户通过外部身份提供方登录。
+   - 首个外部提供方是 GitHub。
+   - 外部登录只负责建立或绑定本地用户身份。之后仍然由本服务向下游业务系统签发自己的令牌和 RBAC 上下文。
 
-## Recommended Permission Model
+## 推荐权限模型
 
-Use tenant-scoped RBAC as the first version.
+首版使用租户级 RBAC。
 
 ```text
 User -> TenantMember -> Role -> Permission
 ```
 
-Meaning:
+含义如下：
 
-- A user can belong to many tenants.
-- A user becomes a tenant member inside each tenant.
-- A member can have one or more roles.
-- A role contains permissions.
-- Permissions are named strings using `resource:action`, for example `user:read`, `member:invite`, or `project:create`.
+- 一个用户可以属于多个租户。
+- 用户进入某个租户后，表现为该租户中的一个 TenantMember。
+- 一个成员可以拥有一个或多个角色。
+- 一个角色包含一组权限。
+- 权限使用 `resource:action` 这样的命名方式，例如 `user:read`、`member:invite`、`project:create`。
 
-RBAC is the right default because it is simple to configure, easy to reason about, easy to expose in an admin API, and suitable for most scaffolded systems. ABAC can be added later through a separate policy extension layer if a real product need appears.
+RBAC 是合适的首版默认值，因为它简单、可配置、易于推理，也容易通过管理 API 暴露。若未来出现真实产品需求，再通过独立的策略扩展层引入 ABAC。
 
-## Architecture
+## 架构
 
 ```text
 cmd/server
   main.go
 
 internal/config
-  Environment and typed config loading.
+  环境变量与强类型配置加载。
 
 internal/http
-  Gin router, middleware, request binding, response helpers.
+  Gin 路由、中间件、请求绑定、统一响应辅助。
 
 internal/auth
-  Email registration, password login, password reset, access token issuing.
+  邮箱注册、密码登录、密码重置、访问令牌签发。
 
 internal/session
-  Refresh token rotation, device sessions, logout, revocation.
+  Refresh Token 轮换、设备会话、退出登录、令牌撤销。
 
 internal/oidc
-  OAuth2 authorization server and OpenID Connect provider endpoints.
+  OAuth2 授权服务器与 OpenID Connect 提供方端点。
 
 internal/idp
-  External identity provider abstraction.
+  外部身份提供方抽象。
 
 internal/idp/github
-  GitHub OAuth2 adapter.
+  GitHub OAuth2 适配器。
 
 internal/rbac
-  Tenant-scoped role and permission checks.
+  租户级角色与权限校验。
 
 internal/user
-  User profile and admin user management.
+  用户资料与后台用户管理。
 
 internal/tenant
-  Tenant and tenant member management.
+  租户与租户成员管理。
 
 internal/store
-  GORM models and repositories.
+  GORM 模型与仓储层。
 
 internal/cache
-  Redis client and typed cache keys.
+  Redis 客户端与类型化缓存 key。
 
 internal/mailer
-  SMTP email sender.
+  SMTP 邮件发送。
 
 internal/audit
-  Audit event recording.
+  审计事件记录。
 
 pkg/client
-  Optional Go client for business services.
+  提供给业务服务的可选 Go Client。
 ```
 
-Layering:
+分层关系：
 
 ```text
 router -> handler -> service -> repository -> database/cache
 ```
 
-Handlers should only parse requests, call services, and return responses. Business rules belong in services. Repositories hide GORM details. Redis key names and TTLs are centralized in `internal/cache`.
+约束：
 
-## Storage
+- Handler 只负责解析请求、调用 service、返回响应。
+- 业务规则放在 service。
+- Repository 封装 GORM 细节。
+- Redis 的 key 命名和 TTL 统一收敛在 `internal/cache`。
 
-MySQL is the primary target. GORM should still be used so the schema remains portable enough for local SQLite tests and future PostgreSQL compatibility.
+## 存储设计
 
-Recommended tables:
+主数据库目标是 MySQL。仍然使用 GORM，以便在本地测试中继续支持 SQLite，并为未来兼容 PostgreSQL 保留余地。
+
+推荐数据表：
 
 ```text
 users
@@ -255,21 +260,21 @@ audit_logs
   created_at
 ```
 
-Important constraints:
+关键约束：
 
-- `users.email` is unique for active users.
-- `user_identities` has unique `(provider, provider_user_id)`.
-- `user_identities` has unique `(user_id, provider)` for one identity per provider per local user.
-- `tenants.slug` is unique.
-- `roles` has unique `(tenant_id, code)`.
-- `permissions.code` is unique.
-- `oauth_clients.client_id` is unique.
-- Refresh tokens are stored as hashes only.
-- Authorization codes are stored as hashes only.
+- `users.email` 对活跃用户唯一。
+- `user_identities` 上 `(provider, provider_user_id)` 唯一。
+- `user_identities` 上 `(user_id, provider)` 唯一，保证一个本地用户在每个 provider 下最多绑定一个身份。
+- `tenants.slug` 唯一。
+- `roles` 上 `(tenant_id, code)` 唯一。
+- `permissions.code` 唯一。
+- `oauth_clients.client_id` 唯一。
+- Refresh Token 只保存哈希。
+- Authorization Code 只保存哈希。
 
 ## Redis
 
-Redis is used for hot paths and ephemeral state. MySQL remains the source of truth.
+Redis 用于热点路径和临时状态，MySQL 仍然是最终事实来源。
 
 ```text
 auth:email_code:{purpose}:{email}
@@ -282,27 +287,27 @@ auth:oidc_state:{state}
 auth:pkce:{state}
 ```
 
-Recommended TTLs:
+推荐 TTL：
 
-- Email verification code: 10 minutes
-- Password reset code: 10 minutes
-- OIDC state: 10 minutes
-- Authorization code: 5 minutes
-- Access token denylist entry: until token expiry
-- Permission cache: 1 to 5 minutes
-- User cache: 1 to 5 minutes
+- 邮箱验证码：10 分钟
+- 密码重置码：10 分钟
+- OIDC state：10 分钟
+- 授权码：5 分钟
+- Access Token denylist 条目：直到令牌过期
+- 权限缓存：1 到 5 分钟
+- 用户缓存：1 到 5 分钟
 
-## Token Design
+## 令牌设计
 
-Access tokens are JWTs. Refresh tokens are opaque random strings.
+Access Token 使用 JWT，Refresh Token 使用不透明随机字符串。
 
-Default lifetimes:
+默认生命周期：
 
-- Access token: 15 minutes
-- Refresh token: 30 days
-- Authorization code: 5 minutes
+- Access Token：15 分钟
+- Refresh Token：30 天
+- Authorization Code：5 分钟
 
-Access token claims:
+Access Token Claims：
 
 ```json
 {
@@ -322,18 +327,18 @@ Access token claims:
 }
 ```
 
-ID token claims should follow OIDC expectations and include `iss`, `sub`, `aud`, `exp`, `iat`, `nonce` when requested, `email`, `email_verified`, `name`, and `picture` when available.
+ID Token 的 claims 要符合 OIDC 预期；请求中带有 `nonce` 时需要回填，同时在可用时包含 `iss`、`sub`、`aud`、`exp`、`iat`、`email`、`email_verified`、`name`、`picture`。
 
-Refresh token rules:
+Refresh Token 规则：
 
-- Store only a hash of the token.
-- Rotate refresh tokens on every refresh.
-- Track token family ID for reuse detection.
-- If an old refresh token is reused after rotation, revoke the whole token family.
-- Support single-session logout and all-session logout.
-- Increment `users.token_version` to invalidate all existing access tokens for a user.
+- 只保存 Token 哈希。
+- 每次刷新都轮换 Refresh Token。
+- 记录 token family ID，用于复用检测。
+- 如果旧 Refresh Token 在轮换后被再次使用，撤销整个 token family。
+- 支持单会话退出和全会话退出。
+- 通过增加 `users.token_version` 使某个用户现有的所有 Access Token 失效。
 
-## OIDC Provider Endpoints
+## OIDC Provider 端点
 
 ```text
 GET  /.well-known/openid-configuration
@@ -346,18 +351,18 @@ POST /oauth2/revoke
 GET  /oauth2/logout
 ```
 
-Required flows for the first version:
+首版必须支持的流程：
 
 - Authorization Code + PKCE
 - Refresh Token
 
-Optional first-version flow:
+首版可选流程：
 
-- Client Credentials for service-to-service clients if a concrete use case exists.
+- 若存在明确场景，可为服务间客户端增加 Client Credentials。
 
-Do not support implicit flow.
+不要支持 Implicit Flow。
 
-## Auth and User API
+## 认证与用户 API
 
 ```text
 POST /v1/auth/email/send-code
@@ -371,7 +376,7 @@ POST /v1/auth/password/reset
 GET  /v1/auth/me
 ```
 
-## External Provider API
+## 外部身份提供方 API
 
 ```text
 GET    /v1/external/github/start
@@ -381,14 +386,14 @@ DELETE /v1/external/github/bind
 GET    /v1/me/identities
 ```
 
-External provider behavior:
+外部提供方行为约束：
 
-- If a GitHub identity already exists, login as the bound local user.
-- If a GitHub identity does not exist but its verified email already belongs to a local user, require local login before binding.
-- If neither identity nor email exists, create a local user and bind the identity.
-- If the request is made by a logged-in user, bind the GitHub identity to that user unless it is already bound elsewhere.
+- 如果 GitHub 身份已经存在，则直接登录到已绑定的本地用户。
+- 如果 GitHub 身份不存在，但其已验证邮箱已属于某个本地用户，则要求先完成本地登录再执行绑定。
+- 如果身份和邮箱都不存在，则新建本地用户并绑定该身份。
+- 如果请求来自已登录用户，则将 GitHub 身份绑定到当前用户，但前提是它没有绑定到其他用户。
 
-## RBAC and Tenant API
+## RBAC 与租户 API
 
 ```text
 POST /v1/authz/check
@@ -411,7 +416,7 @@ POST   /v1/admin/members/:member_id/roles
 DELETE /v1/admin/members/:member_id/roles/:role_id
 ```
 
-`/v1/authz/check` should accept:
+`/v1/authz/check` 的输入示例：
 
 ```json
 {
@@ -421,7 +426,7 @@ DELETE /v1/admin/members/:member_id/roles/:role_id
 }
 ```
 
-and return:
+返回示例：
 
 ```json
 {
@@ -431,9 +436,9 @@ and return:
 
 ## CORS
 
-Use an allowlist. Do not combine wildcard origins with credentials.
+使用 allowlist，不要把通配符 origin 和 credentials 混用。
 
-Configuration:
+配置项：
 
 ```text
 CORS_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
@@ -442,11 +447,11 @@ CORS_ALLOWED_HEADERS=Authorization,Content-Type,X-Tenant-ID
 CORS_ALLOW_CREDENTIALS=true
 ```
 
-## Configuration
+## 配置
 
-Use `.env` for local and Docker Compose deployments.
+本地开发和 Docker Compose 部署都使用 `.env`。
 
-Required configuration:
+必需配置：
 
 ```text
 APP_ENV
@@ -466,7 +471,7 @@ SMTP_FROM
 CORS_ALLOWED_ORIGINS
 ```
 
-GitHub external provider configuration:
+GitHub 外部提供方配置：
 
 ```text
 GITHUB_OAUTH_ENABLED
@@ -475,20 +480,20 @@ GITHUB_CLIENT_SECRET
 GITHUB_REDIRECT_URI
 ```
 
-## Security Requirements
+## 安全要求
 
-- Passwords are hashed with bcrypt or argon2id.
-- Client secrets are stored as hashes.
-- Refresh tokens and authorization codes are stored as hashes.
-- Access token signing keys support rotation through JWKS.
-- Login, email code, password reset, token refresh, and authorization endpoints are rate limited.
-- OIDC state and PKCE are required.
-- CSRF protection is required for browser session endpoints if cookie sessions are used.
-- Audit logs are written for login, logout, password changes, role changes, tenant membership changes, client changes, and token revocation.
+- 密码使用 bcrypt 或 argon2id 哈希。
+- Client Secret 以哈希形式存储。
+- Refresh Token 和 Authorization Code 只以哈希形式存储。
+- Access Token 签名密钥需要支持通过 JWKS 轮换。
+- 登录、邮箱验证码、密码重置、令牌刷新、授权端点都必须限流。
+- 必须启用 OIDC state 和 PKCE。
+- 如果浏览器会话使用 cookie，则浏览器会话端点必须具备 CSRF 保护。
+- 登录、退出、密码变更、角色变更、租户成员变更、客户端变更、令牌撤销都要写入审计日志。
 
-## Deployment
+## 部署
 
-The first delivery should include Docker Compose:
+首版交付包含 Docker Compose：
 
 ```text
 auth-service
@@ -496,52 +501,52 @@ mysql
 redis
 ```
 
-The service should start from:
+服务应支持通过下面命令启动：
 
 ```bash
 docker compose up -d
 ```
 
-Local development should support:
+本地开发应支持：
 
 ```bash
 go run ./cmd/server
 ```
 
-## Testing Strategy
+## 测试策略
 
-Unit tests:
+单元测试：
 
-- Password hashing and validation.
-- JWT creation and validation.
-- Refresh token hashing, rotation, and reuse detection.
-- RBAC permission resolution.
-- GitHub profile normalization.
+- 密码哈希与校验。
+- JWT 创建与校验。
+- Refresh Token 哈希、轮换与复用检测。
+- RBAC 权限解析。
+- GitHub 用户资料标准化。
 
-Integration tests:
+集成测试：
 
-- Registration with email verification.
-- Login and refresh.
-- Logout and token revocation.
-- Authorization code + PKCE flow.
-- Userinfo with access token.
-- Tenant role assignment and permission checks.
+- 带邮箱验证的注册流程。
+- 登录与刷新流程。
+- 登出与令牌撤销。
+- Authorization Code + PKCE 流程。
+- 使用 Access Token 获取 UserInfo。
+- 租户角色分配与权限校验。
 
-Compatibility tests:
+兼容性测试：
 
-- MySQL as the primary integration database.
-- SQLite for fast local tests where possible.
-- Redis-backed verification codes and rate limits.
+- MySQL 作为主集成数据库。
+- SQLite 作为本地快速测试数据库。
+- 基于 Redis 的验证码与限流能力。
 
-## Implementation Order
+## 实现顺序
 
-1. Project skeleton and configuration.
-2. Store models and migrations.
-3. Redis cache wrapper.
-4. Email registration and password login.
-5. Access token and refresh token lifecycle.
-6. Tenant-scoped RBAC.
-7. OIDC provider endpoints.
-8. External provider abstraction and GitHub adapter.
-9. Admin APIs.
-10. Docker Compose and sample client documentation.
+1. 项目骨架与配置。
+2. Store 模型与迁移。
+3. Redis 缓存封装。
+4. 邮箱注册与密码登录。
+5. Access Token 与 Refresh Token 生命周期。
+6. 租户级 RBAC。
+7. OIDC Provider 端点。
+8. 外部提供方抽象与 GitHub 适配器。
+9. 管理后台 API。
+10. Docker Compose 与示例客户端文档。

@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
 

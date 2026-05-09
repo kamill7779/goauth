@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"example.com/identity-service/internal/idp"
+	"goauth/services/identity-service/internal/idp"
 )
 
 const (
@@ -133,7 +133,9 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI st
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(response.Body)
@@ -204,7 +206,9 @@ func (p *Provider) getJSON(ctx context.Context, accessToken, path string, target
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		body, _ := io.ReadAll(response.Body)

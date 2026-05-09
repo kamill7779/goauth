@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/rbac"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/rbac"
+	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
-	"example.com/identity-service/internal/audit"
-	"example.com/identity-service/internal/config"
-	"example.com/identity-service/internal/store"
+	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/store"
 )
 
 func newTestService(t *testing.T) *Service {
