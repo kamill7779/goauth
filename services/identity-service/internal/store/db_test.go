@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	mysqlcfg "github.com/go-sql-driver/mysql"
 	"goauth/services/identity-service/internal/config"
 )
 
@@ -106,7 +107,12 @@ func TestAutoMigrateBackfillsLoginSessionsOnConfiguredMySQL(t *testing.T) {
 	if dsn == "" {
 		t.Skip("MYSQL_DSN_TEST not set")
 	}
-	if os.Getenv("MYSQL_DSN_TEST_ALLOW_DESTRUCTIVE") != "1" || !strings.Contains(strings.ToLower(dsn), "test") {
+	parsed, err := mysqlcfg.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse MYSQL_DSN_TEST: %v", err)
+	}
+	dbName := strings.ToLower(parsed.DBName)
+	if os.Getenv("MYSQL_DSN_TEST_ALLOW_DESTRUCTIVE") != "1" || dbName == "" || !strings.HasSuffix(dbName, "_test") {
 		t.Skip("MYSQL_DSN_TEST requires MYSQL_DSN_TEST_ALLOW_DESTRUCTIVE=1 and a test database name")
 	}
 

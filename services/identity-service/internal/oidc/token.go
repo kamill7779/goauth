@@ -215,10 +215,7 @@ func (h *Handler) revoke(c *gin.Context) {
 	}
 
 	now := h.service.now()
-	if err := h.service.db.WithContext(c.Request.Context()).
-		Model(&store.RefreshToken{}).
-		Where("token_hash = ? AND client_id = ? AND revoked_at IS NULL", h.service.hashToken(rawToken), client.ClientID).
-		Update("revoked_at", now).Error; err != nil {
+	if err := h.service.revokeRefreshTokenGrant(c.Request.Context(), rawToken, client.ClientID, now); err != nil {
 		oauthError(c, http.StatusInternalServerError, "server_error")
 		return
 	}
@@ -488,6 +485,28 @@ func (s *Service) revokeRefreshTokenFamily(ctx context.Context, familyID string)
 		Model(&store.RefreshToken{}).
 		Where("family_id = ? AND revoked_at IS NULL", familyID).
 		Update("revoked_at", now).Error
+}
+
+func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientID string, now time.Time) error {
+	var token store.RefreshToken
+	err := s.db.WithContext(ctx).
+		Where("token_hash = ? AND client_id = ?", s.hashToken(rawToken), clientID).
+		First(&token).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&store.RefreshToken{}).
+			Where("family_id = ? AND client_id = ? AND revoked_at IS NULL", token.FamilyID, clientID).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		return s.revokeLoginSessionWithDB(ctx, tx, token.SessionID, now)
+	})
 }
 
 func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {

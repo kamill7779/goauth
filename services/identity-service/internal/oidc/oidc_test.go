@@ -793,6 +793,40 @@ func TestRevokeRevokesRefreshToken(t *testing.T) {
 	if refreshToken.RevokedAt == nil {
 		t.Fatal("expected refresh token to be revoked")
 	}
+	assertIntrospectInactive(t, router, client.ClientID, "super-secret", tokenSet.AccessToken)
+}
+
+func TestRevokeRotatedRefreshTokenRevokesCurrentFamily(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("revoke-rotated-verifier"), "nonce-revoke-rotated")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "revoke-rotated-verifier")
+	rotated := refreshTokenGrant(t, router, client.ClientID, "super-secret", tokenSet.RefreshToken)
+
+	form := url.Values{
+		"token":         {tokenSet.RefreshToken},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/revoke", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var activeCount int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("client_id = ? AND revoked_at IS NULL", client.ClientID).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active refresh tokens: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("active refresh tokens = %d, want 0", activeCount)
+	}
+	assertIntrospectInactive(t, router, client.ClientID, "super-secret", rotated.AccessToken)
 }
 
 func TestLogoutRejectsUnregisteredRedirectURI(t *testing.T) {
