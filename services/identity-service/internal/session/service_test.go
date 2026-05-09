@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -88,6 +90,9 @@ func TestIssueTokensIncludesExpectedAccessClaims(t *testing.T) {
 	if claims["ver"] != float64(3) {
 		t.Fatalf("ver = %v, want 3", claims["ver"])
 	}
+	if claims["token_use"] != accessTokenUseSession {
+		t.Fatalf("token_use = %v, want %q", claims["token_use"], accessTokenUseSession)
+	}
 }
 
 func TestIssueTokensStoresRefreshTokenAsHashOnly(t *testing.T) {
@@ -108,6 +113,30 @@ func TestIssueTokensStoresRefreshTokenAsHashOnly(t *testing.T) {
 	}
 	if refreshToken.TokenHash == pair.RefreshToken {
 		t.Fatal("refresh token stored in plaintext")
+	}
+}
+
+func TestIssueTokensCreatesActiveLoginSession(t *testing.T) {
+	service, user := newTestService(t)
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	var loginSession store.LoginSession
+	if err := service.db.First(&loginSession, "id = ?", pair.SessionID).Error; err != nil {
+		t.Fatalf("load login session: %v", err)
+	}
+	if loginSession.UserID != user.ID || loginSession.TenantID != 42 || loginSession.ClientID != "web-client" {
+		t.Fatalf("login session = %#v, want user/tenant/client metadata", loginSession)
+	}
+	if loginSession.RevokedAt != nil {
+		t.Fatal("new login session should be active")
 	}
 }
 
@@ -197,6 +226,66 @@ func TestReusingRotatedTokenRevokesFamily(t *testing.T) {
 	}
 }
 
+func TestConcurrentRefreshHasSingleWinnerAndRevokesFamilyOnReuse(t *testing.T) {
+	service, user := newTestService(t)
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 0,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	const attempts = 8
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := service.Refresh(context.Background(), pair.RefreshToken)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	successes := 0
+	reuseFailures := 0
+	for err := range results {
+		if err == nil {
+			successes++
+			continue
+		}
+		if errors.Is(err, ErrRefreshTokenReuse) {
+			reuseFailures++
+			continue
+		}
+		t.Fatalf("Refresh() error = %v, want success or ErrRefreshTokenReuse", err)
+	}
+	if successes != 1 {
+		t.Fatalf("successful refreshes = %d, want 1", successes)
+	}
+	if reuseFailures != attempts-1 {
+		t.Fatalf("reuse failures = %d, want %d", reuseFailures, attempts-1)
+	}
+
+	var activeCount int64
+	if err := service.db.Model(&store.RefreshToken{}).
+		Where("family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = ?) AND revoked_at IS NULL", hashToken(pair.RefreshToken)).
+		Count(&activeCount).Error; err != nil {
+		t.Fatalf("count active family tokens: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("active family tokens = %d, want 0 after concurrent reuse", activeCount)
+	}
+}
+
 func TestLogoutRevokesSingleSession(t *testing.T) {
 	service, user := newTestService(t)
 
@@ -219,6 +308,38 @@ func TestLogoutRevokesSingleSession(t *testing.T) {
 	}
 	if refreshToken.RevokedAt == nil {
 		t.Fatal("expected session refresh token to be revoked")
+	}
+
+	var loginSession store.LoginSession
+	if err := service.db.First(&loginSession, "id = ?", pair.SessionID).Error; err != nil {
+		t.Fatalf("load login session: %v", err)
+	}
+	if loginSession.RevokedAt == nil {
+		t.Fatal("expected login session to be revoked")
+	}
+}
+
+func TestRefreshRejectsRevokedLoginSession(t *testing.T) {
+	service, user := newTestService(t)
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 0,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	now := time.Now().UTC()
+	if err := service.db.Model(&store.LoginSession{}).
+		Where("id = ?", pair.SessionID).
+		Update("revoked_at", now).Error; err != nil {
+		t.Fatalf("revoke login session: %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected revoked login session to reject refresh")
 	}
 }
 
@@ -329,6 +450,56 @@ func TestRefreshRejectsDisabledMembership(t *testing.T) {
 
 	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
 		t.Fatal("expected disabled membership to fail")
+	}
+}
+
+func TestRefreshRejectsDisabledTenant(t *testing.T) {
+	service, user := newTestService(t)
+	tenantRecord := createTenantAndMember(t, service, user.ID)
+	pair := issueSessionPair(t, service, *user, tenantRecord.ID)
+
+	if err := service.db.Model(&store.Tenant{}).
+		Where("id = ?", tenantRecord.ID).
+		Update("status", store.TenantStatusDisabled).Error; err != nil {
+		t.Fatalf("disable tenant: %v", err)
+	}
+
+	if _, err := service.Refresh(context.Background(), pair.RefreshToken); err == nil {
+		t.Fatal("expected disabled tenant to fail")
+	}
+}
+
+func TestIsSystemUserRecognizesSystemRole(t *testing.T) {
+	service, user := newTestService(t)
+	tenantRecord := createTenantAndMember(t, service, user.ID)
+
+	var member store.TenantMember
+	if err := service.db.
+		Where("tenant_id = ? AND user_id = ?", tenantRecord.ID, user.ID).
+		First(&member).Error; err != nil {
+		t.Fatalf("load member: %v", err)
+	}
+	role := store.Role{
+		TenantID:  tenantRecord.ID,
+		Name:      "System Admin",
+		Code:      "system-admin",
+		IsSystem:  true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := service.db.Create(&role).Error; err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if err := service.db.Create(&store.MemberRole{MemberID: member.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatalf("create member role: %v", err)
+	}
+
+	ok, err := service.isSystemUser(context.Background(), user.ID)
+	if err != nil {
+		t.Fatalf("isSystemUser() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("expected system role user to be recognized")
 	}
 }
 

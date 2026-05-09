@@ -29,6 +29,11 @@ type Service struct {
 	audit audit.Recorder
 }
 
+type permissionCacheScope struct {
+	UserID   int64
+	TenantID int64
+}
+
 type CreateTenantInput struct {
 	Name   string `json:"name"`
 	Slug   string `json:"slug"`
@@ -131,8 +136,19 @@ func (s *Service) UpdateTenant(ctx context.Context, id int64, input UpdateTenant
 		updates["status"] = *input.Status
 	}
 	if len(updates) > 0 {
-		if err := s.db.WithContext(ctx).Model(&store.Tenant{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&store.Tenant{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+				return err
+			}
+			if input.Status != nil {
+				return s.bumpTenantPermissionVersions(ctx, tx, id)
+			}
+			return nil
+		}); err != nil {
 			return nil, err
+		}
+		if input.Status != nil && s.rbac != nil {
+			_ = s.rbac.InvalidateTenantPermissions(ctx, id)
 		}
 	}
 
@@ -161,6 +177,42 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.T
 		status = store.MemberStatusActive
 	}
 
+	if err := s.ensureActiveTenant(ctx, input.TenantID); err != nil {
+		return nil, err
+	}
+	if err := s.ensureActiveUser(ctx, input.UserID); err != nil {
+		return nil, err
+	}
+
+	var existing store.TenantMember
+	err := s.db.WithContext(ctx).
+		Unscoped().
+		Where("tenant_id = ? AND user_id = ?", input.TenantID, input.UserID).
+		First(&existing).Error
+	if err != nil && err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+	if err == nil && existing.DeletedAt.Valid {
+		if err := s.db.WithContext(ctx).
+			Unscoped().
+			Model(&store.TenantMember{}).
+			Where("id = ?", existing.ID).
+			Updates(map[string]any{
+				"status":     status,
+				"deleted_at": nil,
+			}).Error; err != nil {
+			return nil, err
+		}
+		var restored store.TenantMember
+		if err := s.db.WithContext(ctx).First(&restored, existing.ID).Error; err != nil {
+			return nil, err
+		}
+		if err := s.recordMembershipAdded(ctx, input.TenantID, &restored); err != nil {
+			return nil, err
+		}
+		return &restored, nil
+	}
+
 	member := &store.TenantMember{
 		TenantID: input.TenantID,
 		UserID:   input.UserID,
@@ -169,16 +221,7 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.T
 	if err := s.db.WithContext(ctx).Create(member).Error; err != nil {
 		return nil, err
 	}
-	if err := s.audit.Record(ctx, audit.Entry{
-		ActorUserID: 0,
-		TenantID:    input.TenantID,
-		Action:      audit.ActionTenantMembershipAdded,
-		TargetType:  audit.TargetTypeTenantMember,
-		TargetID:    strconv.FormatInt(member.ID, 10),
-		Metadata: map[string]any{
-			"user_id": member.UserID,
-		},
-	}); err != nil {
+	if err := s.recordMembershipAdded(ctx, input.TenantID, member); err != nil {
 		return nil, err
 	}
 	return member, nil
@@ -192,20 +235,25 @@ func (s *Service) RemoveMember(ctx context.Context, tenantID, userID int64) erro
 		return err
 	}
 
+	scopes := make([]permissionCacheScope, 0, len(members))
 	for _, member := range members {
-		if s.rbac != nil {
-			if err := s.rbac.InvalidateMemberPermissions(ctx, member.ID); err != nil {
+		scopes = append(scopes, permissionCacheScope{UserID: member.UserID, TenantID: member.TenantID})
+	}
+
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.bumpPermissionScopes(ctx, tx, scopes); err != nil {
+			return err
+		}
+		for _, member := range members {
+			if err := tx.Where("member_id = ?", member.ID).Delete(&store.MemberRole{}).Error; err != nil {
 				return err
 			}
 		}
-		if err := s.db.WithContext(ctx).Where("member_id = ?", member.ID).Delete(&store.MemberRole{}).Error; err != nil {
-			return err
-		}
+		return tx.Where("tenant_id = ? AND user_id = ?", tenantID, userID).Delete(&store.TenantMember{}).Error
+	}); err != nil {
+		return err
 	}
-
-	if err := s.db.WithContext(ctx).
-		Where("tenant_id = ? AND user_id = ?", tenantID, userID).
-		Delete(&store.TenantMember{}).Error; err != nil {
+	if err := s.invalidatePermissionScopes(ctx, scopes); err != nil {
 		return err
 	}
 
@@ -238,6 +286,10 @@ func (s *Service) ListRoles(ctx context.Context, tenantID int64) ([]store.Role, 
 }
 
 func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (*store.Role, error) {
+	if err := s.ensureActiveTenant(ctx, input.TenantID); err != nil {
+		return nil, err
+	}
+
 	role := &store.Role{
 		TenantID:    input.TenantID,
 		Name:        input.Name,
@@ -311,10 +363,9 @@ func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 		return err
 	}
 
-	if s.rbac != nil {
-		if err := s.rbac.InvalidateRolePermissions(ctx, id); err != nil {
-			return err
-		}
+	scopes, err := s.permissionCacheScopesForRole(ctx, id)
+	if err != nil {
+		return err
 	}
 
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -324,8 +375,16 @@ func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 		if err := tx.Where("role_id = ?", id).Delete(&store.MemberRole{}).Error; err != nil {
 			return err
 		}
+		// Deleting a role is rare and security-sensitive; bump the whole tenant
+		// so concurrent assignments cannot leave version-valid stale grants.
+		if err := s.bumpTenantPermissionVersions(ctx, tx, role.TenantID); err != nil {
+			return err
+		}
 		return tx.Delete(&store.Role{}, id).Error
 	}); err != nil {
+		return err
+	}
+	if err := s.invalidatePermissionScopes(ctx, scopes); err != nil {
 		return err
 	}
 
@@ -351,6 +410,10 @@ func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permission
 	if err != nil {
 		return err
 	}
+	scopes, err := s.permissionCacheScopesForRole(ctx, roleID)
+	if err != nil {
+		return err
+	}
 
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, permissionID := range permissionIDs {
@@ -362,11 +425,11 @@ func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permission
 				return err
 			}
 		}
-		if s.rbac != nil {
-			return s.rbac.InvalidateRolePermissions(ctx, roleID)
-		}
-		return nil
+		return s.bumpRolePermissionScopes(ctx, tx, roleID)
 	}); err != nil {
+		return err
+	}
+	if err := s.invalidatePermissionScopes(ctx, scopes); err != nil {
 		return err
 	}
 
@@ -387,15 +450,20 @@ func (s *Service) RevokePermission(ctx context.Context, roleID, permissionID int
 	if err != nil {
 		return err
 	}
+	scopes, err := s.permissionCacheScopesForRole(ctx, roleID)
+	if err != nil {
+		return err
+	}
 
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if s.rbac != nil {
-			if err := s.rbac.InvalidateRolePermissions(ctx, roleID); err != nil {
-				return err
-			}
+		if err := tx.Where("role_id = ? AND permission_id = ?", roleID, permissionID).Delete(&store.RolePermission{}).Error; err != nil {
+			return err
 		}
-		return tx.Where("role_id = ? AND permission_id = ?", roleID, permissionID).Delete(&store.RolePermission{}).Error
+		return s.bumpRolePermissionScopes(ctx, tx, roleID)
 	}); err != nil {
+		return err
+	}
+	if err := s.invalidatePermissionScopes(ctx, scopes); err != nil {
 		return err
 	}
 
@@ -430,13 +498,11 @@ func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int
 				return err
 			}
 		}
-		if s.rbac != nil {
-			if err := s.rbac.InvalidateMemberPermissions(ctx, memberID); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.bumpPermissionScopes(ctx, tx, []permissionCacheScope{{UserID: member.UserID, TenantID: member.TenantID}})
 	}); err != nil {
+		return err
+	}
+	if err := s.invalidatePermissionScopes(ctx, []permissionCacheScope{{UserID: member.UserID, TenantID: member.TenantID}}); err != nil {
 		return err
 	}
 
@@ -461,6 +527,89 @@ func (s *Service) memberByID(ctx context.Context, memberID int64) (*store.Tenant
 		return nil, err
 	}
 	return &member, nil
+}
+
+func (s *Service) ensureActiveTenant(ctx context.Context, tenantID int64) error {
+	return s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
+		First(&store.Tenant{}).Error
+}
+
+func (s *Service) ensureActiveUser(ctx context.Context, userID int64) error {
+	return s.db.WithContext(ctx).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
+		First(&store.User{}).Error
+}
+
+func (s *Service) recordMembershipAdded(ctx context.Context, tenantID int64, member *store.TenantMember) error {
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: 0,
+		TenantID:    tenantID,
+		Action:      audit.ActionTenantMembershipAdded,
+		TargetType:  audit.TargetTypeTenantMember,
+		TargetID:    strconv.FormatInt(member.ID, 10),
+		Metadata: map[string]any{
+			"user_id": member.UserID,
+		},
+	})
+}
+
+func (s *Service) permissionCacheScopesForRole(ctx context.Context, roleID int64) ([]permissionCacheScope, error) {
+	var scopes []permissionCacheScope
+	err := s.db.WithContext(ctx).
+		Table("tenant_members").
+		Select("DISTINCT tenant_members.user_id, tenant_members.tenant_id").
+		Joins("JOIN member_roles ON member_roles.member_id = tenant_members.id").
+		Where("member_roles.role_id = ? AND tenant_members.deleted_at IS NULL", roleID).
+		Scan(&scopes).Error
+	return scopes, err
+}
+
+func (s *Service) invalidatePermissionScopes(ctx context.Context, scopes []permissionCacheScope) error {
+	if s.rbac == nil {
+		return nil
+	}
+	for _, scope := range scopes {
+		if err := s.rbac.InvalidateUserTenantPermissions(ctx, scope.UserID, scope.TenantID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) bumpPermissionScopes(ctx context.Context, tx *gorm.DB, scopes []permissionCacheScope) error {
+	seen := make(map[permissionCacheScope]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if scope.UserID == 0 || scope.TenantID == 0 {
+			continue
+		}
+		if _, ok := seen[scope]; ok {
+			continue
+		}
+		seen[scope] = struct{}{}
+		if err := tx.WithContext(ctx).
+			Model(&store.TenantMember{}).
+			Where("tenant_id = ? AND user_id = ? AND deleted_at IS NULL", scope.TenantID, scope.UserID).
+			Update("permission_version", gorm.Expr("permission_version + 1")).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) bumpTenantPermissionVersions(ctx context.Context, tx *gorm.DB, tenantID int64) error {
+	return tx.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
+		Update("permission_version", gorm.Expr("permission_version + 1")).Error
+}
+
+func (s *Service) bumpRolePermissionScopes(ctx context.Context, tx *gorm.DB, roleID int64) error {
+	return tx.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("id IN (?)", tx.Model(&store.MemberRole{}).Select("member_id").Where("role_id = ?", roleID)).
+		Where("deleted_at IS NULL").
+		Update("permission_version", gorm.Expr("permission_version + 1")).Error
 }
 
 func (s *Service) roleByID(ctx context.Context, roleID int64) (*store.Role, error) {
@@ -500,17 +649,20 @@ func (s *Service) ensureRolesBelongToTenant(ctx context.Context, tenantID int64,
 }
 
 func (s *Service) RemoveRole(ctx context.Context, memberID, roleID int64) error {
+	member, err := s.memberByID(ctx, memberID)
+	if err != nil {
+		return err
+	}
+
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if s.rbac != nil {
-			if err := s.rbac.InvalidateMemberPermissions(ctx, memberID); err != nil {
-				return err
-			}
-		}
 		if err := tx.Where("member_id = ? AND role_id = ?", memberID, roleID).Delete(&store.MemberRole{}).Error; err != nil {
 			return err
 		}
-		return nil
+		return s.bumpPermissionScopes(ctx, tx, []permissionCacheScope{{UserID: member.UserID, TenantID: member.TenantID}})
 	}); err != nil {
+		return err
+	}
+	if err := s.invalidatePermissionScopes(ctx, []permissionCacheScope{{UserID: member.UserID, TenantID: member.TenantID}}); err != nil {
 		return err
 	}
 

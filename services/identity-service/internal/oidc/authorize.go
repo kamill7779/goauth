@@ -99,6 +99,7 @@ func (h *Handler) authorize(c *gin.Context) {
 		TenantID:            client.TenantID,
 		RedirectURI:         redirectURI,
 		Scope:               strings.Join(splitScope(c.Query("scope")), " "),
+		SessionID:           strings.TrimSpace(sessionClaims.SessionID),
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
 		Nonce:               strings.TrimSpace(c.Query("nonce")),

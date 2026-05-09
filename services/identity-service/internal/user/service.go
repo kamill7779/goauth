@@ -14,6 +14,8 @@ import (
 
 var ErrProtectedUser = errors.New("protected user cannot be disabled")
 
+var protectedRoleCodes = []string{"root", "system-admin", "system_admin"}
+
 type Service struct {
 	db    *gorm.DB
 	audit audit.Recorder
@@ -243,21 +245,15 @@ func (s *Service) MarkSystemUser(ctx context.Context, userID int64, roleCode str
 }
 
 func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
-	var user store.User
-	if err := s.db.WithContext(ctx).First(&user, id).Error; err != nil {
-		return false, err
-	}
-	if strings.EqualFold(user.Email, "root@example.com") || strings.HasPrefix(strings.ToLower(user.Email), "root@") {
-		return true, nil
-	}
-
 	var count int64
 	err := s.db.WithContext(ctx).
-		Table("roles").
-		Joins("JOIN member_roles ON member_roles.role_id = roles.id").
-		Joins("JOIN tenant_members ON tenant_members.id = member_roles.member_id").
-		Where("tenant_members.user_id = ?", id).
-		Where("roles.is_system = ? OR roles.code IN ?", true, []string{"root", "system-admin", "system_admin"}).
+		Table("tenant_members AS tm").
+		Joins("JOIN users AS u ON u.id = tm.user_id AND u.status = ? AND u.deleted_at IS NULL", store.UserStatusActive).
+		Joins("JOIN tenants AS t ON t.id = tm.tenant_id AND t.status = ? AND t.deleted_at IS NULL", store.TenantStatusActive).
+		Joins("JOIN member_roles AS mr ON mr.member_id = tm.id").
+		Joins("JOIN roles AS r ON r.id = mr.role_id AND r.tenant_id = tm.tenant_id").
+		Where("tm.user_id = ? AND tm.status = ? AND tm.deleted_at IS NULL", id, store.MemberStatusActive).
+		Where("r.is_system = ? OR r.code IN ?", true, protectedRoleCodes).
 		Count(&count).Error
 	if err != nil {
 		return false, err

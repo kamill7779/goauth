@@ -17,6 +17,7 @@ import (
 	"goauth/services/identity-service/internal/config"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -25,6 +26,7 @@ const (
 	defaultRefreshTokenTTL      = 30 * 24 * time.Hour
 	authMethodClientSecretBasic = "client_secret_basic"
 	authMethodClientSecretPost  = "client_secret_post"
+	accessTokenUseOIDC          = "oidc_access"
 )
 
 var errInvalidClientCredentials = errors.New("invalid client credentials")
@@ -51,6 +53,7 @@ type accessClaims struct {
 	EmailVerified bool   `json:"email_verified,omitempty"`
 	Name          string `json:"name,omitempty"`
 	Scope         string `json:"scope,omitempty"`
+	TokenUse      string `json:"token_use,omitempty"`
 	ClientID      string `json:"client_id,omitempty"`
 	TenantID      int64  `json:"tid,omitempty"`
 	SessionID     string `json:"sid,omitempty"`
@@ -162,17 +165,45 @@ func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID 
 	if userID == 0 || sessionID == "" {
 		return false
 	}
+	return s.hasActiveSessionWithDB(ctx, s.db, userID, sessionID)
+}
 
+func (s *Service) hasActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) bool {
 	var count int64
-	err := s.db.WithContext(ctx).
+	err := db.WithContext(ctx).
 		Model(&store.RefreshToken{}).
-		Where("user_id = ? AND session_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, sessionID, s.now()).
+		Joins("JOIN login_sessions ON login_sessions.id = refresh_tokens.session_id").
+		Joins("JOIN users ON users.id = refresh_tokens.user_id").
+		Where("refresh_tokens.user_id = ? AND refresh_tokens.session_id = ? AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.expires_at > ?", userID, sessionID, s.now()).
+		Where("login_sessions.revoked_at IS NULL").
+		Where("refresh_tokens.token_version = users.token_version AND users.status = ? AND users.deleted_at IS NULL", store.UserStatusActive).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
+func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) error {
+	var loginSession store.LoginSession
+	return db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
+		First(&loginSession).Error
+}
+
+func (s *Service) hasActiveLoginSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) bool {
+	var count int64
+	err := db.WithContext(ctx).
+		Model(&store.LoginSession{}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
 		Count(&count).Error
 	return err == nil && count > 0
 }
 
 func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantID int64) bool {
 	if userID == 0 || tenantID == 0 {
+		return false
+	}
+
+	if !s.hasActiveTenant(ctx, tenantID) {
 		return false
 	}
 
@@ -184,7 +215,26 @@ func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantI
 	return err == nil && count > 0
 }
 
+func (s *Service) hasActiveTenant(ctx context.Context, tenantID int64) bool {
+	var count int64
+	err := s.db.WithContext(ctx).
+		Model(&store.Tenant{}).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
 func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims) error {
+	if claims.Issuer != s.issuer {
+		return gorm.ErrRecordNotFound
+	}
+	if strings.TrimSpace(claims.ClientID) == "" || !audienceContains(claims.Audience, claims.ClientID) {
+		return gorm.ErrRecordNotFound
+	}
+	if claims.TokenUse != accessTokenUseOIDC {
+		return gorm.ErrRecordNotFound
+	}
+
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
 		return err
@@ -197,10 +247,17 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	if user.TokenVersion != claims.TokenVersion {
 		return gorm.ErrRecordNotFound
 	}
-	if !s.hasActiveSession(ctx, userID, claims.SessionID) {
+	if strings.TrimSpace(claims.SessionID) == "" || !s.hasActiveSession(ctx, userID, claims.SessionID) {
 		return gorm.ErrRecordNotFound
 	}
 	if claims.TenantID != 0 && !s.hasActiveTenantMembership(ctx, userID, claims.TenantID) {
+		return gorm.ErrRecordNotFound
+	}
+	client, err := s.loadClient(ctx, claims.ClientID)
+	if err != nil {
+		return err
+	}
+	if client.Status != store.UserStatusActive || client.TenantID != claims.TenantID {
 		return gorm.ErrRecordNotFound
 	}
 	return nil
@@ -210,12 +267,18 @@ func (s *Service) validateRefreshToken(ctx context.Context, token store.RefreshT
 	if token.RevokedAt != nil || token.ExpiresAt.Before(s.now()) {
 		return false
 	}
+	if strings.TrimSpace(token.SessionID) == "" {
+		return false
+	}
 
 	user, err := s.loadActiveUser(ctx, token.UserID)
 	if err != nil {
 		return false
 	}
 	if user.TokenVersion != token.TokenVersion {
+		return false
+	}
+	if !s.hasActiveLoginSessionWithDB(ctx, s.db, token.UserID, token.SessionID) {
 		return false
 	}
 	if token.TenantID != 0 && !s.hasActiveTenantMembership(ctx, token.UserID, token.TenantID) {
@@ -254,7 +317,7 @@ func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return s.publicKey, nil
-	})
+	}, jwt.WithIssuer(s.issuer))
 	if err != nil {
 		return nil, err
 	}
@@ -264,6 +327,15 @@ func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 		return nil, errors.New("invalid token")
 	}
 	return claims, nil
+}
+
+func audienceContains(audience jwt.ClaimStrings, value string) bool {
+	for _, item := range audience {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func scopeSet(scope string) map[string]struct{} {

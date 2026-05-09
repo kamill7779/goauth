@@ -55,13 +55,14 @@ type Tenant struct {
 }
 
 type TenantMember struct {
-	ID        int64          `gorm:"primaryKey;autoIncrement"`
-	TenantID  int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
-	UserID    int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
-	Status    string         `gorm:"size:32;not null;index"`
-	CreatedAt time.Time      `gorm:"not null"`
-	UpdatedAt time.Time      `gorm:"not null"`
-	DeletedAt gorm.DeletedAt `gorm:"index"`
+	ID                int64          `gorm:"primaryKey;autoIncrement"`
+	TenantID          int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
+	UserID            int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
+	Status            string         `gorm:"size:32;not null;index"`
+	PermissionVersion int            `gorm:"not null;default:0"`
+	CreatedAt         time.Time      `gorm:"not null"`
+	UpdatedAt         time.Time      `gorm:"not null"`
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
 }
 
 type Role struct {
@@ -92,7 +93,7 @@ type RolePermission struct {
 
 type MemberRole struct {
 	MemberID int64 `gorm:"primaryKey"`
-	RoleID   int64 `gorm:"primaryKey"`
+	RoleID   int64 `gorm:"primaryKey;index:idx_member_roles_role_id"`
 }
 
 type OAuthClient struct {
@@ -118,12 +119,23 @@ type OAuthAuthorizationCode struct {
 	TenantID            int64     `gorm:"not null;index"`
 	RedirectURI         string    `gorm:"size:1024;not null"`
 	Scope               string    `gorm:"size:1024"`
+	SessionID           string    `gorm:"size:255;index"`
 	CodeChallenge       string    `gorm:"size:255"`
 	CodeChallengeMethod string    `gorm:"size:32"`
 	Nonce               string    `gorm:"size:255"`
 	ExpiresAt           time.Time `gorm:"not null;index"`
 	ConsumedAt          *time.Time
 	CreatedAt           time.Time `gorm:"not null"`
+}
+
+type LoginSession struct {
+	ID        string     `gorm:"primaryKey;size:255"`
+	UserID    int64      `gorm:"not null;index"`
+	TenantID  int64      `gorm:"not null;index"`
+	ClientID  string     `gorm:"size:255;index"`
+	RevokedAt *time.Time `gorm:"index"`
+	CreatedAt time.Time  `gorm:"not null"`
+	UpdatedAt time.Time  `gorm:"not null"`
 }
 
 type RefreshToken struct {
@@ -135,6 +147,7 @@ type RefreshToken struct {
 	TenantID          int64      `gorm:"not null;index"`
 	TokenVersion      int        `gorm:"not null;default:0;index"`
 	ClientID          string     `gorm:"size:255;index"`
+	Scope             string     `gorm:"size:1024"`
 	UserAgent         string     `gorm:"size:1024"`
 	IPAddress         string     `gorm:"size:255"`
 	ExpiresAt         time.Time  `gorm:"not null;index"`

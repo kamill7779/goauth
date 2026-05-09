@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/config"
 	"goauth/services/identity-service/internal/rbac"
 	"goauth/services/identity-service/internal/session"
@@ -29,6 +31,7 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 		body   string
 	}{
 		{name: "admin users", method: http.MethodGet, target: "/v1/admin/users"},
+		{name: "admin oauth clients", method: http.MethodGet, target: "/v1/admin/oauth-clients"},
 		{name: "authz check", method: http.MethodPost, target: "/v1/authz/check", body: `{"user_id":1,"tenant_id":1,"permission":"project:read"}`},
 		{name: "my permissions", method: http.MethodGet, target: "/v1/tenants/1/my-permissions?user_id=1"},
 	}
@@ -61,6 +64,7 @@ func TestAdminAndAuthzRoutesRejectNonSystemUser(t *testing.T) {
 		body   string
 	}{
 		{name: "admin users", method: http.MethodGet, target: "/v1/admin/users"},
+		{name: "admin oauth clients", method: http.MethodGet, target: "/v1/admin/oauth-clients"},
 		{name: "authz check", method: http.MethodPost, target: "/v1/authz/check", body: `{"user_id":1,"tenant_id":1,"permission":"project:read"}`},
 	}
 
@@ -143,6 +147,47 @@ func TestLogoutAllRejectsTargetingAnotherUser(t *testing.T) {
 	}
 
 	assertSessionStillActive(t, db, otherPair.SessionID)
+}
+
+func TestReadyzChecksDBAndRedisClients(t *testing.T) {
+	db, err := store.OpenDB(config.Config{})
+	if err != nil {
+		t.Fatalf("store.OpenDB() error = %v", err)
+	}
+	if err := store.AutoMigrate(db); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+
+	mini := miniredis.RunT(t)
+	cfg := config.Config{
+		RedisURL:        "redis://" + mini.Addr() + "/0",
+		JWTKeyID:        "test-key",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 30 * 24 * time.Hour,
+	}
+	redisClient, err := cache.OpenRedis(cfg)
+	if err != nil {
+		t.Fatalf("cache.OpenRedis() error = %v", err)
+	}
+	defer func() {
+		if err := redisClient.Close(); err != nil {
+			t.Fatalf("redisClient.Close() error = %v", err)
+		}
+	}()
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+	router := buildRouter(cfg, db, redisClient, privateKey)
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
 }
 
 func newIntegrationRouter(t *testing.T) (*gin.Engine, *gorm.DB, *session.Service, *store.User, *store.User) {

@@ -3,10 +3,13 @@ package session
 import (
 	"context"
 	"errors"
+	"strings"
+	"time"
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, error) {
@@ -19,23 +22,7 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	}
 
 	if current.RevokedAt != nil {
-		if err := s.revokeFamily(ctx, current.FamilyID); err != nil {
-			return nil, err
-		}
-		if err := s.audit.Record(ctx, audit.Entry{
-			ActorUserID: current.UserID,
-			TenantID:    current.TenantID,
-			Action:      audit.ActionRefreshTokenReuseDetected,
-			TargetType:  audit.TargetTypeTokenFamily,
-			TargetID:    current.FamilyID,
-			Metadata: map[string]any{
-				"session_id": current.SessionID,
-				"client_id":  current.ClientID,
-			},
-		}); err != nil {
-			return nil, err
-		}
-		return nil, ErrRefreshTokenReuse
+		return nil, s.rejectRefreshTokenReuse(ctx, current)
 	}
 	if current.ExpiresAt.Before(s.now()) {
 		return nil, ErrInvalidRefreshToken
@@ -56,17 +43,28 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 
 	var pair *TokenPair
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
-		if err != nil {
-			return err
+		now := s.now()
+		if err := s.lockActiveSessionWithDB(ctx, tx, current.UserID, current.SessionID); err != nil {
+			if s.wasRefreshTokenReplaced(ctx, tx, current.ID) {
+				return ErrRefreshTokenReuse
+			}
+			return ErrInvalidRefreshToken
+		}
+		result := tx.Model(&store.RefreshToken{}).
+			Where("id = ? AND revoked_at IS NULL", current.ID).
+			Update("revoked_at", now)
+		if result.Error != nil {
+			if isSQLiteWriteLock(result.Error) {
+				return ErrRefreshTokenReuse
+			}
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrRefreshTokenReuse
 		}
 
-		now := s.now()
-		if err := tx.Model(&store.RefreshToken{}).
-			Where("id = ?", current.ID).
-			Updates(map[string]any{
-				"revoked_at": now,
-			}).Error; err != nil {
+		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
+		if err != nil {
 			return err
 		}
 
@@ -84,10 +82,72 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, ErrRefreshTokenReuse) {
+			return nil, s.rejectRefreshTokenReuse(ctx, current)
+		}
 		return nil, err
 	}
 
 	return pair, nil
+}
+
+func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.RefreshToken) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := s.now()
+		if token.SessionID != "" {
+			if err := tx.Model(&store.LoginSession{}).
+				Where("id = ? AND revoked_at IS NULL", token.SessionID).
+				Update("revoked_at", now).Error; err != nil {
+				if isSQLiteWriteLock(err) {
+					return ErrRefreshTokenReuse
+				}
+				return err
+			}
+		}
+		if err := tx.Model(&store.RefreshToken{}).
+			Where("family_id = ? AND revoked_at IS NULL", token.FamilyID).
+			Update("revoked_at", now).Error; err != nil {
+			if isSQLiteWriteLock(err) {
+				return ErrRefreshTokenReuse
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.audit.Record(ctx, audit.Entry{
+		ActorUserID: token.UserID,
+		TenantID:    token.TenantID,
+		Action:      audit.ActionRefreshTokenReuseDetected,
+		TargetType:  audit.TargetTypeTokenFamily,
+		TargetID:    token.FamilyID,
+		Metadata: map[string]any{
+			"session_id": token.SessionID,
+			"client_id":  token.ClientID,
+		},
+	}); err != nil {
+		return err
+	}
+	return ErrRefreshTokenReuse
+}
+
+func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) error {
+	var loginSession store.LoginSession
+	return db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
+		First(&loginSession).Error
+}
+
+func (s *Service) wasRefreshTokenReplaced(ctx context.Context, db *gorm.DB, tokenID int64) bool {
+	var token store.RefreshToken
+	err := db.WithContext(ctx).
+		Select("revoked_at", "replaced_by_token_id").
+		Where("id = ?", tokenID).
+		First(&token).Error
+	return err == nil && token.RevokedAt != nil && token.ReplacedByTokenID != nil
 }
 
 func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user store.User, tenantID int64, clientID, sessionID, familyID string) (*TokenPair, error) {
@@ -123,33 +183,42 @@ func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user st
 }
 
 func (s *Service) Logout(ctx context.Context, sessionID string) error {
-	var token store.RefreshToken
-	if err := s.db.WithContext(ctx).
-		Where("session_id = ?", sessionID).
-		Order("id ASC").
-		First(&token).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
+	var loginSession store.LoginSession
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.WithContext(ctx).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", sessionID).
+			First(&loginSession).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
 		}
+
+		now := s.now()
+		if err := tx.Model(&store.LoginSession{}).
+			Where("id = ? AND revoked_at IS NULL", sessionID).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
+		return tx.Model(&store.RefreshToken{}).
+			Where("session_id = ? AND revoked_at IS NULL", sessionID).
+			Update("revoked_at", now).Error
+	}); err != nil {
 		return err
 	}
-
-	now := s.now()
-	if err := s.db.WithContext(ctx).
-		Model(&store.RefreshToken{}).
-		Where("session_id = ? AND revoked_at IS NULL", sessionID).
-		Update("revoked_at", now).Error; err != nil {
-		return err
+	if loginSession.ID == "" {
+		return nil
 	}
 
 	return s.audit.Record(ctx, audit.Entry{
-		ActorUserID: token.UserID,
-		TenantID:    token.TenantID,
+		ActorUserID: loginSession.UserID,
+		TenantID:    loginSession.TenantID,
 		Action:      audit.ActionLogout,
 		TargetType:  audit.TargetTypeSession,
 		TargetID:    sessionID,
 		Metadata: map[string]any{
-			"client_id": token.ClientID,
+			"client_id": loginSession.ClientID,
 		},
 	})
 }
@@ -157,6 +226,11 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
+		if err := tx.Model(&store.LoginSession{}).
+			Where("user_id = ? AND revoked_at IS NULL", userID).
+			Update("revoked_at", now).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&store.RefreshToken{}).
 			Where("user_id = ? AND revoked_at IS NULL", userID).
 			Update("revoked_at", now).Error; err != nil {
@@ -175,4 +249,38 @@ func (s *Service) revokeFamily(ctx context.Context, familyID string) error {
 		Model(&store.RefreshToken{}).
 		Where("family_id = ? AND revoked_at IS NULL", familyID).
 		Update("revoked_at", now).Error
+}
+
+func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {
+	if sessionID == "" {
+		return nil
+	}
+	now := s.now()
+	return s.db.WithContext(ctx).
+		Model(&store.LoginSession{}).
+		Where("id = ? AND revoked_at IS NULL", sessionID).
+		Update("revoked_at", now).Error
+}
+
+func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, sessionID string, now time.Time) error {
+	if err := db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", sessionID).
+		First(&store.LoginSession{}).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	return db.Model(&store.LoginSession{}).
+		Where("id = ? AND revoked_at IS NULL", sessionID).
+		Update("revoked_at", now).Error
+}
+
+func isSQLiteWriteLock(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
 }

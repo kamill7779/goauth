@@ -24,11 +24,15 @@ func (h *Handler) userInfo(c *gin.Context) {
 		oauthError(c, http.StatusUnauthorized, "invalid_token")
 		return
 	}
+	scopes := scopeSet(claims.Scope)
+	if strings.TrimSpace(claims.ClientID) == "" || !hasScope(scopes, "openid") {
+		oauthError(c, http.StatusUnauthorized, "invalid_token")
+		return
+	}
 
 	response := gin.H{
 		"sub": claims.Subject,
 	}
-	scopes := scopeSet(claims.Scope)
 	if hasScope(scopes, "email") {
 		response["email"] = claims.Email
 		response["email_verified"] = claims.EmailVerified
