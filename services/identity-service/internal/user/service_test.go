@@ -146,3 +146,28 @@ func TestDisableProtectedUserFails(t *testing.T) {
 		t.Fatalf("DisableUser() error = %v, want %v", err, ErrProtectedUser)
 	}
 }
+
+func TestDisableSystemRoleUserFails(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	protected, err := service.CreateUser(ctx, CreateUserInput{
+		Email:       "admin@example.com",
+		DisplayName: "Admin",
+		Password:    "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if err := service.MarkSystemUser(ctx, protected.ID, "system-admin"); err != nil {
+		t.Fatalf("MarkSystemUser() error = %v", err)
+	}
+
+	err = service.DisableUser(ctx, protected.ID)
+	if err == nil {
+		t.Fatal("expected system-role user disable to fail")
+	}
+	if err != ErrProtectedUser {
+		t.Fatalf("DisableUser() error = %v, want %v", err, ErrProtectedUser)
+	}
+}

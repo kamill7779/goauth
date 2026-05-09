@@ -19,10 +19,6 @@ type Service struct {
 	redis *redis.Client
 }
 
-type permissionRow struct {
-	Code string
-}
-
 type memberScope struct {
 	UserID   int64
 	TenantID int64
@@ -56,30 +52,11 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 		return permissions, nil
 	}
 
-	var rows []permissionRow
-	// Permissions are resolved from the tenant member relationship at read time
-	// so role changes and membership revocation do not depend on stale token claims.
-	err := s.db.WithContext(ctx).
-		Table("permissions").
-		Select("DISTINCT permissions.code AS code").
-		Joins("JOIN role_permissions ON role_permissions.permission_id = permissions.id").
-		Joins("JOIN roles ON roles.id = role_permissions.role_id").
-		Joins("JOIN member_roles ON member_roles.role_id = roles.id").
-		Joins("JOIN tenant_members ON tenant_members.id = member_roles.member_id").
-		Joins("JOIN users ON users.id = tenant_members.user_id").
-		Where("users.id = ? AND tenant_members.tenant_id = ? AND roles.tenant_id = ?", userID, tenantID, tenantID).
-		Where("roles.tenant_id = tenant_members.tenant_id").
-		Where("users.status = ? AND tenant_members.status = ?", store.UserStatusActive, store.MemberStatusActive).
-		Where("users.deleted_at IS NULL AND tenant_members.deleted_at IS NULL").
-		Order("permissions.code ASC").
-		Scan(&rows).Error
+	// Resolve permissions from live user/member state so membership changes and
+	// role revocation are enforced independently from token claims.
+	permissions, err := s.lookupPermissionCodes(ctx, userID, tenantID)
 	if err != nil {
 		return nil, err
-	}
-
-	permissions := make([]string, 0, len(rows))
-	for _, row := range rows {
-		permissions = append(permissions, row.Code)
 	}
 	sort.Strings(permissions)
 
@@ -113,14 +90,12 @@ func (s *Service) InvalidateRolePermissions(ctx context.Context, roleID int64) e
 		return nil
 	}
 
-	var scopes []memberScope
-	if err := s.db.WithContext(ctx).
-		Table("tenant_members").
-		Select("tenant_members.user_id AS user_id, tenant_members.tenant_id AS tenant_id").
-		Joins("JOIN member_roles ON member_roles.member_id = tenant_members.id").
-		Where("member_roles.role_id = ?", roleID).
-		Where("tenant_members.deleted_at IS NULL").
-		Scan(&scopes).Error; err != nil {
+	memberIDs, err := s.memberIDsForRole(ctx, roleID)
+	if err != nil {
+		return err
+	}
+	scopes, err := s.memberScopesByIDs(ctx, memberIDs)
+	if err != nil {
 		return err
 	}
 
@@ -130,6 +105,114 @@ func (s *Service) InvalidateRolePermissions(ctx context.Context, roleID int64) e
 		}
 	}
 	return nil
+}
+
+func (s *Service) lookupPermissionCodes(ctx context.Context, userID, tenantID int64) ([]string, error) {
+	memberIDs, err := s.activeMemberIDsForUserTenant(ctx, userID, tenantID)
+	if err != nil || len(memberIDs) == 0 {
+		return []string{}, err
+	}
+
+	roleIDs, err := s.roleIDsForMembersInTenant(ctx, memberIDs, tenantID)
+	if err != nil || len(roleIDs) == 0 {
+		return []string{}, err
+	}
+
+	permissionIDs, err := s.permissionIDsForRoles(ctx, roleIDs)
+	if err != nil || len(permissionIDs) == 0 {
+		return []string{}, err
+	}
+
+	return s.permissionCodesByIDs(ctx, permissionIDs)
+}
+
+func (s *Service) activeMemberIDsForUserTenant(ctx context.Context, userID, tenantID int64) ([]int64, error) {
+	var userCount int64
+	if err := s.db.WithContext(ctx).
+		Model(&store.User{}).
+		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
+		Count(&userCount).Error; err != nil {
+		return nil, err
+	}
+	if userCount == 0 {
+		return nil, nil
+	}
+
+	var memberIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", tenantID, userID, store.MemberStatusActive).
+		Pluck("id", &memberIDs).Error
+	return memberIDs, err
+}
+
+func (s *Service) roleIDsForMembersInTenant(ctx context.Context, memberIDs []int64, tenantID int64) ([]int64, error) {
+	var assignedRoleIDs []int64
+	if err := s.db.WithContext(ctx).
+		Model(&store.MemberRole{}).
+		Distinct("role_id").
+		Where("member_id IN ?", memberIDs).
+		Pluck("role_id", &assignedRoleIDs).Error; err != nil {
+		return nil, err
+	}
+	if len(assignedRoleIDs) == 0 {
+		return nil, nil
+	}
+
+	var roleIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.Role{}).
+		Where("tenant_id = ? AND id IN ?", tenantID, assignedRoleIDs).
+		Pluck("id", &roleIDs).Error
+	return roleIDs, err
+}
+
+func (s *Service) permissionIDsForRoles(ctx context.Context, roleIDs []int64) ([]int64, error) {
+	var permissionIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.RolePermission{}).
+		Distinct("permission_id").
+		Where("role_id IN ?", roleIDs).
+		Pluck("permission_id", &permissionIDs).Error
+	return permissionIDs, err
+}
+
+func (s *Service) permissionCodesByIDs(ctx context.Context, permissionIDs []int64) ([]string, error) {
+	permissions := []string{}
+	err := s.db.WithContext(ctx).
+		Model(&store.Permission{}).
+		Distinct("code").
+		Where("id IN ?", permissionIDs).
+		Order("code ASC").
+		Pluck("code", &permissions).Error
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(permissions)
+	return permissions, nil
+}
+
+func (s *Service) memberIDsForRole(ctx context.Context, roleID int64) ([]int64, error) {
+	var memberIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.MemberRole{}).
+		Where("role_id = ?", roleID).
+		Pluck("member_id", &memberIDs).Error
+	return memberIDs, err
+}
+
+func (s *Service) memberScopesByIDs(ctx context.Context, memberIDs []int64) ([]memberScope, error) {
+	if len(memberIDs) == 0 {
+		return nil, nil
+	}
+
+	var scopes []memberScope
+	err := s.db.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Select("user_id, tenant_id").
+		Where("id IN ? AND deleted_at IS NULL", memberIDs).
+		Scan(&scopes).Error
+	return scopes, err
 }
 
 func (s *Service) loadCachedPermissions(ctx context.Context, userID, tenantID int64) ([]string, bool, error) {

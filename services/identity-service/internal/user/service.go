@@ -14,6 +14,8 @@ import (
 
 var ErrProtectedUser = errors.New("protected user cannot be disabled")
 
+var protectedRoleCodes = []string{"root", "system-admin", "system_admin"}
+
 type Service struct {
 	db    *gorm.DB
 	audit audit.Recorder
@@ -251,13 +253,44 @@ func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
 		return true, nil
 	}
 
+	memberIDs, err := s.memberIDsForUser(ctx, id)
+	if err != nil || len(memberIDs) == 0 {
+		return false, err
+	}
+
+	roleIDs, err := s.roleIDsForMembers(ctx, memberIDs)
+	if err != nil || len(roleIDs) == 0 {
+		return false, err
+	}
+
+	return s.hasProtectedRole(ctx, roleIDs)
+}
+
+func (s *Service) memberIDsForUser(ctx context.Context, userID int64) ([]int64, error) {
+	var memberIDs []int64
+	err := s.db.WithContext(ctx).
+		Table("tenant_members").
+		Where("user_id = ?", userID).
+		Pluck("id", &memberIDs).Error
+	return memberIDs, err
+}
+
+func (s *Service) roleIDsForMembers(ctx context.Context, memberIDs []int64) ([]int64, error) {
+	var roleIDs []int64
+	err := s.db.WithContext(ctx).
+		Model(&store.MemberRole{}).
+		Distinct("role_id").
+		Where("member_id IN ?", memberIDs).
+		Pluck("role_id", &roleIDs).Error
+	return roleIDs, err
+}
+
+func (s *Service) hasProtectedRole(ctx context.Context, roleIDs []int64) (bool, error) {
 	var count int64
 	err := s.db.WithContext(ctx).
-		Table("roles").
-		Joins("JOIN member_roles ON member_roles.role_id = roles.id").
-		Joins("JOIN tenant_members ON tenant_members.id = member_roles.member_id").
-		Where("tenant_members.user_id = ?", id).
-		Where("roles.is_system = ? OR roles.code IN ?", true, []string{"root", "system-admin", "system_admin"}).
+		Model(&store.Role{}).
+		Where("id IN ?", roleIDs).
+		Where("is_system = ? OR code IN ?", true, protectedRoleCodes).
 		Count(&count).Error
 	if err != nil {
 		return false, err

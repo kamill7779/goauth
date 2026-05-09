@@ -92,7 +92,7 @@ type RolePermission struct {
 
 type MemberRole struct {
 	MemberID int64 `gorm:"primaryKey"`
-	RoleID   int64 `gorm:"primaryKey"`
+	RoleID   int64 `gorm:"primaryKey;index:idx_member_roles_role_id"`
 }
 
 type OAuthClient struct {
