@@ -45,6 +45,9 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
 		if err := s.lockActiveSessionWithDB(ctx, tx, current.UserID, current.SessionID); err != nil {
+			if s.wasRefreshTokenReplaced(ctx, tx, current.ID) {
+				return ErrRefreshTokenReuse
+			}
 			return ErrInvalidRefreshToken
 		}
 		result := tx.Model(&store.RefreshToken{}).
@@ -136,6 +139,15 @@ func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, user
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ? AND user_id = ? AND revoked_at IS NULL", sessionID, userID).
 		First(&loginSession).Error
+}
+
+func (s *Service) wasRefreshTokenReplaced(ctx context.Context, db *gorm.DB, tokenID int64) bool {
+	var token store.RefreshToken
+	err := db.WithContext(ctx).
+		Select("revoked_at", "replaced_by_token_id").
+		Where("id = ?", tokenID).
+		First(&token).Error
+	return err == nil && token.RevokedAt != nil && token.ReplacedByTokenID != nil
 }
 
 func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user store.User, tenantID int64, clientID, sessionID, familyID string) (*TokenPair, error) {

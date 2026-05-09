@@ -351,6 +351,10 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	}
 	if strings.TrimSpace(current.SessionID) == "" {
 		if err := h.service.recordRefreshTokenReuse(ctx, current); err != nil {
+			if isSQLiteWriteLock(err) {
+				oauthError(c, http.StatusBadRequest, "invalid_grant")
+				return
+			}
 			oauthError(c, http.StatusInternalServerError, "server_error")
 			return
 		}
@@ -359,6 +363,10 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	}
 	if current.RevokedAt != nil {
 		if err := h.service.recordRefreshTokenReuse(ctx, current); err != nil {
+			if isSQLiteWriteLock(err) {
+				oauthError(c, http.StatusBadRequest, "invalid_grant")
+				return
+			}
 			oauthError(c, http.StatusInternalServerError, "server_error")
 			return
 		}
@@ -446,6 +454,10 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	if err != nil {
 		if errors.Is(err, errInvalidGrant) {
 			if err := h.service.recordRefreshTokenReuse(ctx, current); err != nil {
+				if isSQLiteWriteLock(err) {
+					oauthError(c, http.StatusBadRequest, "invalid_grant")
+					return
+				}
 				oauthError(c, http.StatusInternalServerError, "server_error")
 				return
 			}
