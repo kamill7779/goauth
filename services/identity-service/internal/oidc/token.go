@@ -215,10 +215,13 @@ func (h *Handler) revoke(c *gin.Context) {
 	}
 
 	now := h.service.now()
-	_ = h.service.db.WithContext(c.Request.Context()).
+	if err := h.service.db.WithContext(c.Request.Context()).
 		Model(&store.RefreshToken{}).
 		Where("token_hash = ? AND client_id = ? AND revoked_at IS NULL", h.service.hashToken(rawToken), client.ClientID).
-		Update("revoked_at", now).Error
+		Update("revoked_at", now).Error; err != nil {
+		oauthError(c, http.StatusInternalServerError, "server_error")
+		return
+	}
 	noContentOrJSON(c)
 }
 
@@ -350,12 +353,18 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 		return
 	}
 	if strings.TrimSpace(current.SessionID) == "" {
-		h.service.recordRefreshTokenReuse(ctx, current)
+		if err := h.service.recordRefreshTokenReuse(ctx, current); err != nil {
+			oauthError(c, http.StatusInternalServerError, "server_error")
+			return
+		}
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
 	if current.RevokedAt != nil {
-		h.service.recordRefreshTokenReuse(ctx, current)
+		if err := h.service.recordRefreshTokenReuse(ctx, current); err != nil {
+			oauthError(c, http.StatusInternalServerError, "server_error")
+			return
+		}
 		oauthError(c, http.StatusBadRequest, "invalid_grant")
 		return
 	}
@@ -439,7 +448,10 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	})
 	if err != nil {
 		if errors.Is(err, errInvalidGrant) {
-			h.service.recordRefreshTokenReuse(ctx, current)
+			if err := h.service.recordRefreshTokenReuse(ctx, current); err != nil {
+				oauthError(c, http.StatusInternalServerError, "server_error")
+				return
+			}
 			oauthError(c, http.StatusBadRequest, "invalid_grant")
 			return
 		}
@@ -450,10 +462,14 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	c.JSON(http.StatusOK, response)
 }
 
-func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.RefreshToken) {
-	_ = s.revokeRefreshTokenFamily(ctx, token.FamilyID)
-	_ = s.revokeLoginSession(ctx, token.SessionID)
-	_ = s.audit.Record(ctx, audit.Entry{
+func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.RefreshToken) error {
+	if err := s.revokeRefreshTokenFamily(ctx, token.FamilyID); err != nil {
+		return err
+	}
+	if err := s.revokeLoginSession(ctx, token.SessionID); err != nil {
+		return err
+	}
+	return s.audit.Record(ctx, audit.Entry{
 		ActorUserID: token.UserID,
 		TenantID:    token.TenantID,
 		Action:      audit.ActionRefreshTokenReuseDetected,

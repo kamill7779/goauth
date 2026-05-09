@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +105,9 @@ func TestAutoMigrateBackfillsLoginSessionsOnConfiguredMySQL(t *testing.T) {
 	dsn := os.Getenv("MYSQL_DSN_TEST")
 	if dsn == "" {
 		t.Skip("MYSQL_DSN_TEST not set")
+	}
+	if os.Getenv("MYSQL_DSN_TEST_ALLOW_DESTRUCTIVE") != "1" || !strings.Contains(strings.ToLower(dsn), "test") {
+		t.Skip("MYSQL_DSN_TEST requires MYSQL_DSN_TEST_ALLOW_DESTRUCTIVE=1 and a test database name")
 	}
 
 	db, err := OpenDB(config.Config{MySQLDSN: dsn})

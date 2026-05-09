@@ -375,7 +375,9 @@ func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 		if err := tx.Where("role_id = ?", id).Delete(&store.MemberRole{}).Error; err != nil {
 			return err
 		}
-		if err := s.bumpPermissionScopes(ctx, tx, scopes); err != nil {
+		// Deleting a role is rare and security-sensitive; bump the whole tenant
+		// so concurrent assignments cannot leave version-valid stale grants.
+		if err := s.bumpTenantPermissionVersions(ctx, tx, role.TenantID); err != nil {
 			return err
 		}
 		return tx.Delete(&store.Role{}, id).Error

@@ -23,13 +23,12 @@ func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
 
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/refresh", h.refresh)
+	auth := AuthMiddleware(h.service, h.publicKey)
+	router.POST("/logout", auth, h.logout)
 	if h.publicKey != nil {
-		auth := AuthMiddleware(h.service, h.publicKey)
-		router.POST("/logout", auth, h.logout)
 		router.POST("/logout-all", auth, h.logoutAll)
 		router.GET("/me", auth, h.me)
 	} else {
-		router.POST("/logout", h.logout)
 		router.POST("/logout-all", h.logoutAll)
 		router.GET("/me", h.me)
 	}
