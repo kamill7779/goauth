@@ -38,7 +38,7 @@ GET http://localhost:8080/.well-known/openid-configuration
 | `client_secret` | 只保存在服务端，前端不要持有。 |
 | `redirect_uris` | 精确匹配回调地址，例如 `http://localhost:3000/callback`。 |
 | `allowed_scopes` | 至少包含 `openid`，常用 `openid profile email offline_access`。 |
-| `grant_types` | `authorization_code`。 |
+| `grant_types` | 至少包含 `authorization_code`；如果业务需要长期会话和 refresh token，还要同时配置 `refresh_token`。 |
 | `token_endpoint_auth_method` | `client_secret_post` 或 `client_secret_basic`。 |
 
 ## 3. Authorization Code + PKCE
@@ -94,7 +94,7 @@ code_verifier=<raw-code-verifier>
 | --- | --- |
 | `access_token` | 调用 userinfo 或业务后端鉴权。 |
 | `id_token` | 登录态身份断言，给业务系统建立本地会话。 |
-| `refresh_token` | 刷新会话，需安全保存。 |
+| `refresh_token` | 仅当请求了 `offline_access`，且 client 的 `grant_types` 包含 `refresh_token` 时返回；用于刷新会话，需安全保存。 |
 | `expires_in` | access token 有效秒数。 |
 
 如果 client 使用 `client_secret_basic`，则用 HTTP Basic 传 client 凭证，不要同时在表单里传 `client_id/client_secret`。

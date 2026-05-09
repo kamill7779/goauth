@@ -120,6 +120,32 @@ func TestRegisterRejectsDuplicateEmail(t *testing.T) {
 	}
 }
 
+func TestRegisterNormalizesBlankCodePurpose(t *testing.T) {
+	service, mini, _ := newTestService(t)
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "normalized@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+
+	user, err := service.Register(context.Background(), RegisterInput{
+		Email:       "normalized@example.com",
+		DisplayName: "normalized",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: "",
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if user.Email != "normalized@example.com" {
+		t.Fatalf("email = %q, want normalized@example.com", user.Email)
+	}
+	if mini.Exists(cache.EmailCodeKey(EmailCodePurposeRegister, "normalized@example.com")) {
+		t.Fatal("expected normalized register code to be deleted after successful registration")
+	}
+}
+
 func TestLoginRejectsDisabledUser(t *testing.T) {
 	service, _, _ := newTestService(t)
 

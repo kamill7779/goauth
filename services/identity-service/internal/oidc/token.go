@@ -226,21 +226,56 @@ func (h *Handler) revoke(c *gin.Context) {
 }
 
 func (h *Handler) logout(c *gin.Context) {
-	ctx := c.Request.Context()
-	requestedSessionID := strings.TrimSpace(c.Query("session_id"))
-	cookieSessionID := ""
-	if cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName); err == nil && strings.TrimSpace(cookieValue) != "" {
-		if claims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey); err == nil {
-			cookieSessionID = strings.TrimSpace(claims.SessionID)
-		}
+	request := logoutRequest{
+		ClientID:              c.Query("client_id"),
+		PostLogoutRedirectURI: c.Query("post_logout_redirect_uri"),
+		SessionID:             c.Query("session_id"),
 	}
-	sessionID := cookieSessionID
-	if requestedSessionID != "" {
-		if cookieSessionID == "" || requestedSessionID != cookieSessionID {
+	cookieSessionID := h.currentLogoutCookieSessionID(c)
+	if browserRequestsDocument(c) && cookieSessionID != "" {
+		if request.SessionID == "" {
+			request.SessionID = cookieSessionID
+		}
+		if _, ok := h.resolveLogoutSession(request.SessionID, cookieSessionID); !ok {
 			oauthError(c, http.StatusBadRequest, "invalid_request")
 			return
 		}
-		sessionID = requestedSessionID
+		h.browserLogoutPage(c, request)
+		return
+	}
+	if cookieSessionID != "" {
+		if request.SessionID == "" {
+			request.SessionID = cookieSessionID
+		}
+		if _, ok := h.resolveLogoutSession(request.SessionID, cookieSessionID); !ok {
+			oauthError(c, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		oauthError(c, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	h.performLogout(c, request)
+}
+
+func (h *Handler) logoutPost(c *gin.Context) {
+	if !logoutCSRFValid(c) {
+		c.String(http.StatusForbidden, "invalid csrf token")
+		return
+	}
+	clearLogoutCSRFCookie(c)
+	h.performLogout(c, logoutRequest{
+		ClientID:              c.PostForm("client_id"),
+		PostLogoutRedirectURI: c.PostForm("post_logout_redirect_uri"),
+		SessionID:             c.PostForm("session_id"),
+	})
+}
+
+func (h *Handler) performLogout(c *gin.Context, request logoutRequest) {
+	ctx := c.Request.Context()
+	sessionID, ok := h.resolveLogoutSession(request.SessionID, h.currentLogoutCookieSessionID(c))
+	if !ok {
+		oauthError(c, http.StatusBadRequest, "invalid_request")
+		return
 	}
 	if sessionID != "" {
 		now := h.service.now()
@@ -262,8 +297,9 @@ func (h *Handler) logout(c *gin.Context) {
 		}
 	}
 	session.ClearOIDCAuthorizeCookie(c)
+	clearLogoutCSRFCookie(c)
 
-	redirectURI, err := h.service.resolvePostLogoutRedirectURI(ctx, c.Query("client_id"), c.Query("post_logout_redirect_uri"))
+	redirectURI, err := h.service.resolvePostLogoutRedirectURI(ctx, request.ClientID, request.PostLogoutRedirectURI)
 	if err != nil {
 		oauthError(c, http.StatusBadRequest, "invalid_request")
 		return
@@ -273,6 +309,30 @@ func (h *Handler) logout(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"logout": true})
+}
+
+func (h *Handler) resolveLogoutSession(requestedSessionID, cookieSessionID string) (string, bool) {
+	requestedSessionID = strings.TrimSpace(requestedSessionID)
+	cookieSessionID = strings.TrimSpace(cookieSessionID)
+	if requestedSessionID != "" {
+		if cookieSessionID == "" || requestedSessionID != cookieSessionID {
+			return "", false
+		}
+		return requestedSessionID, true
+	}
+	return cookieSessionID, true
+}
+
+func (h *Handler) currentLogoutCookieSessionID(c *gin.Context) string {
+	cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName)
+	if err != nil || strings.TrimSpace(cookieValue) == "" {
+		return ""
+	}
+	claims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(claims.SessionID)
 }
 
 func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *store.User, client *store.OAuthClient, record *store.OAuthAuthorizationCode) (*tokenResponse, error) {

@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -25,6 +27,17 @@ func generateEmailCode() (string, error) {
 	}
 
 	return fmt.Sprintf("%06d", value.Int64()), nil
+}
+
+func normalizeEmailCodePurpose(purpose string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(purpose)) {
+	case "", EmailCodePurposeRegister:
+		return EmailCodePurposeRegister, nil
+	case EmailCodePurposePasswordReset:
+		return EmailCodePurposePasswordReset, nil
+	default:
+		return "", errors.New("unsupported email code purpose")
+	}
 }
 
 func storeEmailCode(ctx context.Context, client *redis.Client, purpose, email, code string) error {

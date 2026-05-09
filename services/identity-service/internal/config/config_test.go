@@ -14,6 +14,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("ACCESS_TOKEN_TTL", "")
 	t.Setenv("BROWSER_SESSION_TTL", "")
 	t.Setenv("REFRESH_TOKEN_TTL", "")
+	t.Setenv("TRUSTED_PROXIES", "")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "")
 	t.Setenv("CORS_ALLOWED_METHODS", "")
 	t.Setenv("CORS_ALLOWED_HEADERS", "")
@@ -45,6 +46,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if len(cfg.CORSAllowedMethods) != 5 {
 		t.Fatalf("CORSAllowedMethods len = %d, want 5", len(cfg.CORSAllowedMethods))
 	}
+	if cfg.TrustedProxies != nil {
+		t.Fatalf("TrustedProxies = %v, want nil by default", cfg.TrustedProxies)
+	}
 }
 
 func TestLoadParsesTypedValues(t *testing.T) {
@@ -56,6 +60,7 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("ACCESS_TOKEN_TTL", "20m")
 	t.Setenv("BROWSER_SESSION_TTL", "36h")
 	t.Setenv("REFRESH_TOKEN_TTL", "48h")
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, 192.168.1.10")
 	t.Setenv("SMTP_PORT", "2525")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com")
 	t.Setenv("CORS_ALLOWED_METHODS", "GET,POST")
@@ -79,6 +84,15 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 	if got, want := len(cfg.CORSAllowedOrigins), 2; got != want {
 		t.Fatalf("len(CORSAllowedOrigins) = %d, want %d", got, want)
+	}
+	if got, want := len(cfg.TrustedProxies), 2; got != want {
+		t.Fatalf("len(TrustedProxies) = %d, want %d", got, want)
+	}
+	if got := cfg.TrustedProxies[0]; got != "10.0.0.0/8" {
+		t.Fatalf("TrustedProxies[0] = %q, want 10.0.0.0/8", got)
+	}
+	if got := cfg.TrustedProxies[1]; got != "192.168.1.10" {
+		t.Fatalf("TrustedProxies[1] = %q, want 192.168.1.10", got)
 	}
 	if !cfg.CORSAllowCredentials {
 		t.Fatal("CORSAllowCredentials = false, want true")

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -526,5 +527,95 @@ func TestLoginRateLimitReturnsTooManyRequests(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "rate_limited") {
 		t.Fatalf("expected rate_limited error, got %s", recorder.Body.String())
+	}
+}
+
+func TestLoginRateLimitIgnoresSpoofedForwardedIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, _, _ := newTestService(t)
+	handler := NewHandler(service, nil)
+	handler.SetRateLimiter(ratelimit.NewService(service.redis))
+
+	router := gin.New()
+	if err := router.SetTrustedProxies(nil); err != nil {
+		t.Fatalf("SetTrustedProxies(nil) error = %v", err)
+	}
+	handler.RegisterRoutes(router.Group("/v1/auth"))
+
+	body, err := json.Marshal(map[string]string{
+		"email":    "missing@example.com",
+		"password": "wrong-password",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	for i := 0; i < loginRateLimitLimit; i++ {
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+		request.RemoteAddr = "10.0.0.8:12345"
+		request.Header.Set("X-Forwarded-For", "203.0.113."+strconv.Itoa(i+1))
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, want %d body=%s", i+1, recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+	request.RemoteAddr = "10.0.0.8:12345"
+	request.Header.Set("X-Forwarded-For", "198.51.100.10")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusTooManyRequests, recorder.Body.String())
+	}
+}
+
+func TestLoginRateLimitUsesTrustedForwardedIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, _, _ := newTestService(t)
+	handler := NewHandler(service, nil)
+	handler.SetRateLimiter(ratelimit.NewService(service.redis))
+
+	router := gin.New()
+	if err := router.SetTrustedProxies([]string{"10.0.0.0/8"}); err != nil {
+		t.Fatalf("SetTrustedProxies(...) error = %v", err)
+	}
+	handler.RegisterRoutes(router.Group("/v1/auth"))
+
+	body, err := json.Marshal(map[string]string{
+		"email":    "missing@example.com",
+		"password": "wrong-password",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	for i := 0; i < loginRateLimitLimit; i++ {
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+		request.RemoteAddr = "10.0.0.8:12345"
+		request.Header.Set("X-Forwarded-For", "203.0.113.50")
+		request.Header.Set("Content-Type", "application/json")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d status = %d, want %d body=%s", i+1, recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewReader(body))
+	request.RemoteAddr = "10.0.0.8:12345"
+	request.Header.Set("X-Forwarded-For", "203.0.113.50")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusTooManyRequests, recorder.Body.String())
 	}
 }

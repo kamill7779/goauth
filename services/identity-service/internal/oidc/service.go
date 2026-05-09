@@ -130,6 +130,7 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/oauth2/introspect", h.introspect)
 	router.POST("/oauth2/revoke", h.revoke)
 	router.GET("/oauth2/logout", h.logout)
+	router.POST("/oauth2/logout", h.logoutPost)
 }
 
 func (s *Service) hashToken(raw string) string {

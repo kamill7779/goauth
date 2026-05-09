@@ -21,6 +21,7 @@ type Config struct {
 	AccessTokenTTL            time.Duration
 	BrowserSessionTTL         time.Duration
 	RefreshTokenTTL           time.Duration
+	TrustedProxies            []string
 	SMTPHost                  string
 	SMTPPort                  int
 	SMTPUsername              string
@@ -82,6 +83,7 @@ func Load() (Config, error) {
 		AccessTokenTTL:            accessTokenTTL,
 		BrowserSessionTTL:         browserSessionTTL,
 		RefreshTokenTTL:           refreshTokenTTL,
+		TrustedProxies:            splitCSV(envOrDefault("TRUSTED_PROXIES", "")),
 		SMTPHost:                  os.Getenv("SMTP_HOST"),
 		SMTPPort:                  smtpPort,
 		SMTPUsername:              os.Getenv("SMTP_USERNAME"),

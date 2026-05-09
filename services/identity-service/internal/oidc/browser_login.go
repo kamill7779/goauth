@@ -36,6 +36,20 @@ func browserPrefersHTML(c *gin.Context) bool {
 	return strings.Contains(accept, "text/html") || strings.Contains(accept, "application/xhtml+xml")
 }
 
+func browserRequestsDocument(c *gin.Context) bool {
+	if browserPrefersHTML(c) {
+		return true
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(c.GetHeader("Sec-Fetch-Mode")))
+	if mode == "navigate" {
+		return true
+	}
+
+	dest := strings.ToLower(strings.TrimSpace(c.GetHeader("Sec-Fetch-Dest")))
+	return dest == "document"
+}
+
 func buildBrowserLoginRedirectPath(loginPath, returnTo string) string {
 	query := url.Values{
 		"return_to": {returnTo},

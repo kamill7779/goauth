@@ -77,6 +77,13 @@ func (r readinessRegistrar) RegisterRoutes(router gin.IRouter) {
 
 func NewRouter(cfg config.Config, registrars ...Registrar) *gin.Engine {
 	router := gin.New()
+	trustedProxies := cfg.TrustedProxies
+	if len(trustedProxies) == 0 {
+		trustedProxies = nil
+	}
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		panic(err)
+	}
 	router.Use(gin.Logger(), gin.Recovery())
 	router.Use(corsMiddleware(cfg))
 

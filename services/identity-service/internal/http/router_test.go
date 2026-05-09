@@ -24,6 +24,12 @@ func (r *testRegistrar) RegisterRoutes(router gin.IRouter) {
 	})
 }
 
+type registrarFunc func(gin.IRouter)
+
+func (f registrarFunc) RegisterRoutes(router gin.IRouter) {
+	f(router)
+}
+
 func TestHealthzReturnsStructuredSuccessResponse(t *testing.T) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -153,5 +159,53 @@ func TestCORSPreflightUsesConfiguredAllowlist(t *testing.T) {
 	}
 	if got := recorder.Header().Get("Access-Control-Allow-Credentials"); got != "true" {
 		t.Fatalf("Access-Control-Allow-Credentials = %q", got)
+	}
+}
+
+func TestNewRouterUsesRemoteAddrWhenTrustedProxiesUnset(t *testing.T) {
+	router := NewRouter(config.Config{}, registrarFunc(func(r gin.IRouter) {
+		r.GET("/client-ip", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"client_ip": c.ClientIP()})
+		})
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+	request.RemoteAddr = "10.0.0.8:12345"
+	request.Header.Set("X-Forwarded-For", "203.0.113.99")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	var payload map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload["client_ip"] != "10.0.0.8" {
+		t.Fatalf("client_ip = %q, want remote address", payload["client_ip"])
+	}
+}
+
+func TestNewRouterUsesForwardedClientIPForTrustedProxy(t *testing.T) {
+	router := NewRouter(config.Config{
+		TrustedProxies: []string{"10.0.0.0/8"},
+	}, registrarFunc(func(r gin.IRouter) {
+		r.GET("/client-ip", func(c *gin.Context) {
+			c.JSON(http.StatusOK, gin.H{"client_ip": c.ClientIP()})
+		})
+	}))
+
+	request := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+	request.RemoteAddr = "10.0.0.8:12345"
+	request.Header.Set("X-Forwarded-For", "203.0.113.99")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	var payload map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload["client_ip"] != "203.0.113.99" {
+		t.Fatalf("client_ip = %q, want forwarded client IP", payload["client_ip"])
 	}
 }

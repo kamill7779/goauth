@@ -45,13 +45,15 @@ func (h *Handler) sendCode(c *gin.Context) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if request.Purpose == "" {
-		request.Purpose = EmailCodePurposeRegister
-	}
-	if !h.allowJSONRateLimit(c, emailCodeRateLimitScope, rateLimitEmailCodeKey(c, request.Purpose, request.Email), emailCodeRateLimitLimit, emailCodeRateLimitWindow) {
+	purpose, err := normalizeEmailCodePurpose(request.Purpose)
+	if err != nil {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if _, err := h.service.SendEmailCode(c.Request.Context(), request.Purpose, request.Email); err != nil {
+	if !h.allowJSONRateLimit(c, emailCodeRateLimitScope, rateLimitEmailCodeKey(c, purpose, request.Email), emailCodeRateLimitLimit, emailCodeRateLimitWindow) {
+		return
+	}
+	if _, err := h.service.SendEmailCode(c.Request.Context(), purpose, request.Email); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

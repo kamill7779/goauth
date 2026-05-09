@@ -15,12 +15,13 @@
 | `GET` | `/oauth2/userinfo` | 根据 access token 返回用户信息。 |
 | `POST` | `/oauth2/introspect` | token introspection，需 client 凭证。 |
 | `POST` | `/oauth2/revoke` | 撤销 refresh token，需 client 凭证。 |
-| `GET` | `/oauth2/logout` | 清理 OIDC cookie，可按 session 撤销 refresh token。 |
+| `GET` | `/oauth2/logout` | 没有活动浏览器 SSO cookie 时可幂等退出；带活动 cookie 时只用于拿确认页。 |
+| `POST` | `/oauth2/logout` | 提交浏览器退出确认表单，校验 CSRF 后撤销当前 OIDC session。 |
 
 Discovery 中声明：
 
 - `response_types_supported`: `code`
-- `grant_types_supported`: `authorization_code`
+- `grant_types_supported`: `authorization_code`, `refresh_token`
 - `id_token_signing_alg_values_supported`: `RS256`
 - `token_endpoint_auth_methods_supported`: `client_secret_basic`, `client_secret_post`
 - `code_challenge_methods_supported`: `plain`, `S256`
@@ -36,7 +37,12 @@ Discovery 中声明：
 | `email` | 返回邮箱和邮箱验证状态。 |
 | `offline_access` | 表示业务希望获得长期会话能力。 |
 
-当前 token endpoint 在授权码交换成功后会返回 refresh token。业务系统仍应只在需要长期会话时申请 `offline_access`，并把 refresh token 放在服务端安全存储。
+当前 token endpoint 只会在两个条件都满足时返回 refresh token：
+
+- 授权请求包含 `offline_access` scope。
+- 对应 OAuth client 的 `grant_types` 显式包含 `refresh_token`。
+
+业务系统仍应只在需要长期会话时申请 `offline_access`，并把 refresh token 放在服务端安全存储。
 
 ## Client 注册
 
@@ -76,7 +82,7 @@ Discovery 中声明：
 
 ## Token Endpoint
 
-只支持 `authorization_code`：
+支持 `authorization_code` 与 `refresh_token`：
 
 ```http
 POST /oauth2/token
@@ -90,7 +96,18 @@ Client 认证方式：
 - `client_secret_post`: 表单传 `client_id` 和 `client_secret`。
 - `client_secret_basic`: `Authorization: Basic base64(client_id:client_secret)`，表单里不要再传 client 凭证。
 
-成功响应包含 `access_token`、`id_token`、`refresh_token`、`token_type=Bearer`、`expires_in` 和 `scope`。授权码只能使用一次，过期或 PKCE 校验失败会返回 `invalid_grant`。
+授权码成功响应至少包含 `access_token`、`id_token`、`token_type=Bearer`、`expires_in` 和 `scope`；只有在请求了 `offline_access` 且 client 支持 `refresh_token` 时，才会额外返回 `refresh_token`。授权码只能使用一次，过期或 PKCE 校验失败会返回 `invalid_grant`。
+
+Refresh Token 轮换：
+
+```http
+POST /oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token=<refresh_token>
+```
+
+如果 refresh token 已被撤销、复用检测击中，或对应登录 session 已失效，也会返回 `invalid_grant`。
 
 ## JWKS 与 Token 校验
 
@@ -155,6 +172,8 @@ GET /oauth2/logout?client_id=<client_id>&post_logout_redirect_uri=<redirect_uri>
 
 行为：
 
+- 如果请求携带当前 `goauth_oidc_session` cookie，且看起来像浏览器文档导航（例如 `Accept: text/html`、`Sec-Fetch-Mode: navigate` 或 `Sec-Fetch-Dest: document`），服务会先返回确认页，再通过 `POST /oauth2/logout` + CSRF token 完成退出。
+- 其他仍然携带当前 `goauth_oidc_session` cookie 的 `GET /oauth2/logout` 请求会返回 `invalid_request`；这样同站非文档请求也不能直接触发登出。
 - 清理 `goauth_oidc_session` cookie。
 - 如果能从 cookie 或 `session_id` 参数解析出会话，会撤销该 session 下未撤销的 refresh token。
 - 传 `session_id` 时必须和 cookie 中 session 一致。

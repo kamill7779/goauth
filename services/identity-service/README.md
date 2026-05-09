@@ -59,6 +59,7 @@ docker compose down -v
 | `ACCESS_TOKEN_TTL` | `15m` | access token 有效期。 |
 | `BROWSER_SESSION_TTL` | `12h` | 浏览器 SSO 会话时长，对应 `goauth_oidc_session` 授权 cookie；只影响浏览器侧 OIDC 连续登录体验，不改变 access/refresh token 语义。 |
 | `REFRESH_TOKEN_TTL` | `720h` | refresh token 有效期。 |
+| `TRUSTED_PROXIES` | 空 | 逗号分隔的受信任反向代理/CIDR，例如 `10.0.0.0/8,192.168.1.10`。默认空表示不信任任何代理，忽略 `X-Forwarded-For`，避免客户端伪造来源 IP；只有在服务确实部署在受控代理后面时才配置。 |
 | `CORS_ALLOWED_ORIGINS` | 空 | 逗号分隔的允许来源。 |
 | `GITHUB_OAUTH_ENABLED` | `false` | 是否启用 GitHub 外部登录。启用时还需配置 client id/secret/redirect URI。 |
 | `BOOTSTRAP_ADMIN_EMAIL` | 空 | 可选。与 `BOOTSTRAP_ADMIN_PASSWORD` 一起设置后，服务启动时会确保该账号存在并授予系统角色。 |
@@ -66,6 +67,8 @@ docker compose down -v
 | `BOOTSTRAP_ADMIN_ROLE` | `root` | bootstrap 账号授予的系统角色代码，默认 `root`。 |
 
 `.env.example` 列出了服务读取的全部环境变量。Compose 使用 `${VAR:-default}`，复制 `.env.example` 后即使变量值为空，也会使用 Compose 内置默认值；因此示例里的 `PUBLIC_ISSUER_URL` 保持为空，避免覆盖随 `IDENTITY_HTTP_PORT` 变化的 issuer 默认值。
+
+代理部署升级提示：如果服务跑在 Nginx、Ingress、LB 等反向代理后面，并且你依赖真实客户端 IP 做登录/验证码限流，升级到当前版本后需要显式配置 `TRUSTED_PROXIES`；否则服务会安全地退回到“只信任 TCP 对端地址”，多个用户可能共享代理出口的限流桶。
 
 ## 创建第一个管理员
 

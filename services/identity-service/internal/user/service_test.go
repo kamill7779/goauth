@@ -283,12 +283,82 @@ func TestEnsureBootstrapAdminCreatesAndMarksSystemUser(t *testing.T) {
 	}
 }
 
+func TestEnsureBootstrapAdminDoesNotRotateTokensForSameActiveUserAndPassword(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       "existing-bootstrap@example.com",
+		DisplayName: "Existing",
+		Password:    "old-password",
+		RoleCode:    "system-admin",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(create) error = %v", err)
+	}
+
+	updated, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       record.Email,
+		DisplayName: "Existing",
+		Password:    "old-password",
+		RoleCode:    "system-admin",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin() error = %v", err)
+	}
+	if updated.PasswordHash != record.PasswordHash {
+		t.Fatal("expected bootstrap admin password hash to remain unchanged")
+	}
+	if updated.TokenVersion != record.TokenVersion {
+		t.Fatalf("token version = %d, want %d", updated.TokenVersion, record.TokenVersion)
+	}
+
+	protected, err := service.isProtectedUser(ctx, updated.ID)
+	if err != nil {
+		t.Fatalf("isProtectedUser() error = %v", err)
+	}
+	if !protected {
+		t.Fatal("expected existing bootstrap admin to receive system role")
+	}
+}
+
+func TestEnsureBootstrapAdminRotatesTokensWhenPasswordChanges(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       "password-rotation@example.com",
+		DisplayName: "Bootstrap Existing",
+		Password:    "old-password",
+		RoleCode:    "system-admin",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(create) error = %v", err)
+	}
+
+	updated, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       record.Email,
+		DisplayName: "Bootstrap Existing",
+		Password:    "new-password",
+		RoleCode:    "system-admin",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin(update) error = %v", err)
+	}
+	if updated.PasswordHash == record.PasswordHash {
+		t.Fatal("expected bootstrap admin password hash to change")
+	}
+	if updated.TokenVersion != record.TokenVersion+1 {
+		t.Fatalf("token version = %d, want %d", updated.TokenVersion, record.TokenVersion+1)
+	}
+}
+
 func TestEnsureBootstrapAdminReactivatesExistingUser(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()
 
 	record, err := service.CreateUser(ctx, CreateUserInput{
-		Email:       "existing-bootstrap@example.com",
+		Email:       "disabled-bootstrap@example.com",
 		DisplayName: "Existing",
 		Password:    "old-password",
 		Status:      store.UserStatusDisabled,
@@ -301,7 +371,7 @@ func TestEnsureBootstrapAdminReactivatesExistingUser(t *testing.T) {
 	updated, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
 		Email:       record.Email,
 		DisplayName: "Bootstrap Existing",
-		Password:    "new-password",
+		Password:    "old-password",
 		RoleCode:    "system-admin",
 	})
 	if err != nil {
@@ -310,8 +380,14 @@ func TestEnsureBootstrapAdminReactivatesExistingUser(t *testing.T) {
 	if updated.Status != store.UserStatusActive {
 		t.Fatalf("status = %q, want %q", updated.Status, store.UserStatusActive)
 	}
-	if updated.PasswordHash == oldHash {
-		t.Fatal("expected bootstrap admin password hash to change")
+	if updated.PasswordHash != oldHash {
+		t.Fatal("expected bootstrap admin password hash to remain unchanged")
+	}
+	if updated.TokenVersion != record.TokenVersion+1 {
+		t.Fatalf("token version = %d, want %d", updated.TokenVersion, record.TokenVersion+1)
+	}
+	if updated.EmailVerifiedAt == nil {
+		t.Fatal("expected bootstrap admin email to be verified")
 	}
 
 	protected, err := service.isProtectedUser(ctx, updated.ID)
@@ -320,5 +396,44 @@ func TestEnsureBootstrapAdminReactivatesExistingUser(t *testing.T) {
 	}
 	if !protected {
 		t.Fatal("expected existing bootstrap admin to receive system role")
+	}
+}
+
+func TestEnsureBootstrapAdminReactivatesDisabledSystemMembership(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Email:       "disabled-membership@example.com",
+		DisplayName: "Disabled Membership",
+		Password:    "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if err := service.MarkSystemUser(ctx, record.ID, "root"); err != nil {
+		t.Fatalf("MarkSystemUser() error = %v", err)
+	}
+	if err := service.db.Model(&store.TenantMember{}).
+		Where("user_id = ?", record.ID).
+		Updates(map[string]any{"status": store.MemberStatusDisabled}).Error; err != nil {
+		t.Fatalf("disable tenant member: %v", err)
+	}
+
+	if _, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:       record.Email,
+		DisplayName: "Bootstrap Existing",
+		Password:    "new-password",
+		RoleCode:    "root",
+	}); err != nil {
+		t.Fatalf("EnsureBootstrapAdmin() error = %v", err)
+	}
+
+	protected, err := service.isProtectedUser(ctx, record.ID)
+	if err != nil {
+		t.Fatalf("isProtectedUser() error = %v", err)
+	}
+	if !protected {
+		t.Fatal("expected bootstrap admin to reactivate protected membership")
 	}
 }

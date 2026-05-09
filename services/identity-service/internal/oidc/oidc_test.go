@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -98,6 +99,328 @@ func TestAuthorizeValidatesClientAndRedirectURI(t *testing.T) {
 		}
 		assertJSONError(t, recorder.Body.Bytes(), "invalid_request")
 	})
+}
+
+func TestBrowserLogoutRequiresConfirmationAndCSRF(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	getRequest.Header.Set("Accept", "text/html")
+	getRequest.AddCookie(authorizeCookie)
+	getRecorder := httptest.NewRecorder()
+
+	router.ServeHTTP(getRecorder, getRequest)
+
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("logout page status = %d, want %d body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+	var csrfCookie *http.Cookie
+	for _, cookie := range getRecorder.Result().Cookies() {
+		if cookie.Name == logoutCSRFCookieName {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("expected logout csrf cookie")
+	}
+	if !strings.Contains(getRecorder.Body.String(), `name="csrf_token" value="`+csrfCookie.Value+`"`) {
+		t.Fatalf("expected csrf token in logout page body, got %s", getRecorder.Body.String())
+	}
+	renderedSessionID := mustMatch(t, getRecorder.Body.Bytes(), `name="session_id" value="([^"]*)"`)
+	if renderedSessionID != sessionID {
+		t.Fatalf("rendered session_id = %q, want %q", renderedSessionID, sessionID)
+	}
+
+	form := url.Values{
+		"client_id":  {client.ClientID},
+		"session_id": {renderedSessionID},
+		"csrf_token": {csrfCookie.Value},
+	}
+	postRequest := httptest.NewRequest(http.MethodPost, "/oauth2/logout", strings.NewReader(form.Encode()))
+	postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRequest.AddCookie(authorizeCookie)
+	postRequest.AddCookie(csrfCookie)
+	postRecorder := httptest.NewRecorder()
+
+	router.ServeHTTP(postRecorder, postRequest)
+
+	if postRecorder.Code != http.StatusOK {
+		t.Fatalf("logout post status = %d, want %d body=%s", postRecorder.Code, http.StatusOK, postRecorder.Body.String())
+	}
+}
+
+func TestBrowserLogoutPostRevokesSessionAndGrantTokens(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("logout-post-verifier"), "nonce-logout-post")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "logout-post-verifier")
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	getRequest.Header.Set("Accept", "text/html")
+	getRequest.AddCookie(authorizeCookie)
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, getRequest)
+
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("logout page status = %d, want %d body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range getRecorder.Result().Cookies() {
+		if cookie.Name == logoutCSRFCookieName {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("expected logout csrf cookie")
+	}
+
+	form := url.Values{
+		"client_id":  {client.ClientID},
+		"session_id": {sessionID},
+		"csrf_token": {csrfCookie.Value},
+	}
+	postRequest := httptest.NewRequest(http.MethodPost, "/oauth2/logout", strings.NewReader(form.Encode()))
+	postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRequest.AddCookie(authorizeCookie)
+	postRequest.AddCookie(csrfCookie)
+	postRecorder := httptest.NewRecorder()
+	router.ServeHTTP(postRecorder, postRequest)
+
+	if postRecorder.Code != http.StatusOK {
+		t.Fatalf("logout post status = %d, want %d body=%s", postRecorder.Code, http.StatusOK, postRecorder.Body.String())
+	}
+
+	foundCookie := false
+	for _, cookie := range postRecorder.Result().Cookies() {
+		if cookie.Name == session.OIDCAuthorizeCookieName {
+			foundCookie = true
+			if cookie.Value != "" {
+				t.Fatalf("cookie value = %q, want empty", cookie.Value)
+			}
+		}
+	}
+	if !foundCookie {
+		t.Fatal("expected oidc authorize cookie to be cleared")
+	}
+
+	if status := refreshTokenGrantStatus(router, client.ClientID, "super-secret", tokenSet.RefreshToken); status != http.StatusBadRequest {
+		t.Fatalf("refresh status = %d, want %d after logout", status, http.StatusBadRequest)
+	}
+
+	var count int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("session_id = ? AND revoked_at IS NULL", sessionID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count refresh tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("active refresh token count = %d, want 0", count)
+	}
+}
+
+func TestBrowserLogoutPostRejectsChangedCookieSessionAfterConfirmation(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	currentCookie, currentSessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	otherCookie, otherSessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	getRequest.Header.Set("Accept", "text/html")
+	getRequest.AddCookie(currentCookie)
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, getRequest)
+
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("logout page status = %d, want %d body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range getRecorder.Result().Cookies() {
+		if cookie.Name == logoutCSRFCookieName {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("expected logout csrf cookie")
+	}
+
+	renderedSessionID := mustMatch(t, getRecorder.Body.Bytes(), `name="session_id" value="([^"]*)"`)
+	if renderedSessionID != currentSessionID {
+		t.Fatalf("rendered session_id = %q, want %q", renderedSessionID, currentSessionID)
+	}
+
+	form := url.Values{
+		"client_id":  {client.ClientID},
+		"session_id": {renderedSessionID},
+		"csrf_token": {csrfCookie.Value},
+	}
+	postRequest := httptest.NewRequest(http.MethodPost, "/oauth2/logout", strings.NewReader(form.Encode()))
+	postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRequest.AddCookie(otherCookie)
+	postRequest.AddCookie(csrfCookie)
+	postRecorder := httptest.NewRecorder()
+	router.ServeHTTP(postRecorder, postRequest)
+
+	if postRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("logout post status = %d, want %d body=%s", postRecorder.Code, http.StatusBadRequest, postRecorder.Body.String())
+	}
+	assertJSONError(t, postRecorder.Body.Bytes(), "invalid_request")
+
+	var otherCount int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("session_id = ? AND revoked_at IS NULL", otherSessionID).
+		Count(&otherCount).Error; err != nil {
+		t.Fatalf("count other session refresh tokens: %v", err)
+	}
+	if otherCount == 0 {
+		t.Fatal("expected other session to remain active")
+	}
+}
+
+func TestBrowserLogoutRequiresConfirmationForDocumentNavigationFetchMetadata(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+
+	for name, headers := range map[string]map[string]string{
+		"navigate mode": {
+			"Accept":         "*/*",
+			"Sec-Fetch-Mode": "navigate",
+		},
+		"document dest": {
+			"Accept":         "application/json",
+			"Sec-Fetch-Dest": "document",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+			for key, value := range headers {
+				request.Header.Set(key, value)
+			}
+			request.AddCookie(authorizeCookie)
+			recorder := httptest.NewRecorder()
+
+			router.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("logout page status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), "<form method=\"post\" action=\"/oauth2/logout\"") {
+				t.Fatalf("expected logout confirmation form, got %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestLogoutRejectsDirectGETWhenCookieSessionPresentWithoutBrowserNavigationHints(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	request.Header.Set("Accept", "application/json")
+	request.AddCookie(authorizeCookie)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("logout status = %d, want %d body=%s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	assertJSONError(t, recorder.Body.Bytes(), "invalid_request")
+}
+
+func TestLogoutAllowsDirectAPIRequestWithoutBrowserSession(t *testing.T) {
+	_, router, _, _, _, client := newTestProvider(t)
+
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	request.Header.Set("Accept", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("logout status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var payload struct {
+		Logout bool `json:"logout"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !payload.Logout {
+		t.Fatalf("logout = %v, want true", payload.Logout)
+	}
+}
+
+func TestBrowserLogoutPostRejectsMissingOrMismatchedCSRF(t *testing.T) {
+	_, router, db, privateKey, user, client := newTestProvider(t)
+	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
+	getRequest.Header.Set("Accept", "text/html")
+	getRequest.AddCookie(authorizeCookie)
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, getRequest)
+
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("logout page status = %d, want %d body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range getRecorder.Result().Cookies() {
+		if cookie.Name == logoutCSRFCookieName {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("expected logout csrf cookie")
+	}
+
+	for name, tc := range map[string]struct {
+		formToken string
+		addCookie bool
+	}{
+		"missing cookie":   {formToken: csrfCookie.Value, addCookie: false},
+		"mismatched token": {formToken: "different-token", addCookie: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			form := url.Values{
+				"client_id":  {client.ClientID},
+				"session_id": {sessionID},
+				"csrf_token": {tc.formToken},
+			}
+			postRequest := httptest.NewRequest(http.MethodPost, "/oauth2/logout", strings.NewReader(form.Encode()))
+			postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			postRequest.AddCookie(authorizeCookie)
+			if tc.addCookie {
+				postRequest.AddCookie(csrfCookie)
+			}
+			postRecorder := httptest.NewRecorder()
+			router.ServeHTTP(postRecorder, postRequest)
+
+			if postRecorder.Code != http.StatusForbidden {
+				t.Fatalf("logout post status = %d, want %d body=%s", postRecorder.Code, http.StatusForbidden, postRecorder.Body.String())
+			}
+			if !strings.Contains(postRecorder.Body.String(), "invalid csrf token") {
+				t.Fatalf("expected invalid csrf token error, got %s", postRecorder.Body.String())
+			}
+
+			var count int64
+			if err := db.Model(&store.RefreshToken{}).
+				Where("session_id = ? AND revoked_at IS NULL", sessionID).
+				Count(&count).Error; err != nil {
+				t.Fatalf("count refresh tokens: %v", err)
+			}
+			if count == 0 {
+				t.Fatal("expected session refresh tokens to remain active")
+			}
+		})
+	}
 }
 
 func TestAuthorizeRejectsMissingAuthenticatedSession(t *testing.T) {
@@ -872,11 +1195,7 @@ func TestLogoutRevokesSessionAndClearsOIDCCookie(t *testing.T) {
 	_, router, db, privateKey, user, client := newTestProvider(t)
 	authorizeCookie, sessionID := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
 
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID+"&post_logout_redirect_uri="+url.QueryEscape("https://client.example.com/callback"), nil)
-	request.AddCookie(authorizeCookie)
-
-	router.ServeHTTP(recorder, request)
+	recorder := performBrowserLogout(t, router, authorizeCookie, "/oauth2/logout?client_id="+client.ClientID+"&post_logout_redirect_uri="+url.QueryEscape("https://client.example.com/callback"))
 
 	if recorder.Code != http.StatusFound {
 		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusFound, recorder.Body.String())
@@ -918,10 +1237,7 @@ func TestAuthorizationCodeCannotBeExchangedAfterLogout(t *testing.T) {
 	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
 	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("logout-before-exchange-verifier"), "nonce-logout-before-exchange")
 
-	logoutRecorder := httptest.NewRecorder()
-	logoutRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
-	logoutRequest.AddCookie(authorizeCookie)
-	router.ServeHTTP(logoutRecorder, logoutRequest)
+	logoutRecorder := performBrowserLogout(t, router, authorizeCookie, "/oauth2/logout?client_id="+client.ClientID)
 	if logoutRecorder.Code != http.StatusOK {
 		t.Fatalf("logout status = %d, want %d body=%s", logoutRecorder.Code, http.StatusOK, logoutRecorder.Body.String())
 	}
@@ -980,10 +1296,7 @@ func TestLogoutRevokesOIDCGrantTokens(t *testing.T) {
 	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile offline_access", pkceChallengeS256("logout-grant-verifier"), "nonce-logout-grant")
 	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "logout-grant-verifier")
 
-	logoutRecorder := httptest.NewRecorder()
-	logoutRequest := httptest.NewRequest(http.MethodGet, "/oauth2/logout?client_id="+client.ClientID, nil)
-	logoutRequest.AddCookie(authorizeCookie)
-	router.ServeHTTP(logoutRecorder, logoutRequest)
+	logoutRecorder := performBrowserLogout(t, router, authorizeCookie, "/oauth2/logout?client_id="+client.ClientID)
 	if logoutRecorder.Code != http.StatusOK {
 		t.Fatalf("logout status = %d, want %d body=%s", logoutRecorder.Code, http.StatusOK, logoutRecorder.Body.String())
 	}
@@ -1540,6 +1853,53 @@ func exchangeCodeBasic(t *testing.T, router http.Handler, clientID, clientSecret
 	return payload
 }
 
+func performBrowserLogout(t *testing.T, router http.Handler, authorizeCookie *http.Cookie, target string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	parsed, err := url.Parse(target)
+	if err != nil {
+		t.Fatalf("url.Parse(%q) error = %v", target, err)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, target, nil)
+	getRequest.Header.Set("Accept", "text/html")
+	getRequest.AddCookie(authorizeCookie)
+	getRecorder := httptest.NewRecorder()
+	router.ServeHTTP(getRecorder, getRequest)
+
+	if getRecorder.Code != http.StatusOK {
+		t.Fatalf("logout page status = %d, want %d body=%s", getRecorder.Code, http.StatusOK, getRecorder.Body.String())
+	}
+
+	var csrfCookie *http.Cookie
+	for _, cookie := range getRecorder.Result().Cookies() {
+		if cookie.Name == logoutCSRFCookieName {
+			csrfCookie = cookie
+			break
+		}
+	}
+	if csrfCookie == nil {
+		t.Fatal("expected logout csrf cookie")
+	}
+
+	form := url.Values{
+		"client_id":  {parsed.Query().Get("client_id")},
+		"session_id": {mustMatch(t, getRecorder.Body.Bytes(), `name="session_id" value="([^"]*)"`)},
+		"csrf_token": {csrfCookie.Value},
+	}
+	if postLogoutRedirectURI := parsed.Query().Get("post_logout_redirect_uri"); postLogoutRedirectURI != "" {
+		form.Set("post_logout_redirect_uri", postLogoutRedirectURI)
+	}
+
+	postRequest := httptest.NewRequest(http.MethodPost, "/oauth2/logout", strings.NewReader(form.Encode()))
+	postRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRequest.AddCookie(authorizeCookie)
+	postRequest.AddCookie(csrfCookie)
+	postRecorder := httptest.NewRecorder()
+	router.ServeHTTP(postRecorder, postRequest)
+	return postRecorder
+}
+
 func refreshTokenGrant(t *testing.T, router http.Handler, clientID, clientSecret, refreshToken string) exchangedTokens {
 	t.Helper()
 
@@ -1638,6 +1998,15 @@ func assertJSONFieldAbsent(t *testing.T, body []byte, field string) {
 	if _, ok := payload[field]; ok {
 		t.Fatalf("field %q present in response: %s", field, string(body))
 	}
+}
+
+func mustMatch(t *testing.T, body []byte, pattern string) string {
+	t.Helper()
+	match := regexp.MustCompile(pattern).FindSubmatch(body)
+	if len(match) != 2 {
+		t.Fatalf("pattern %q not found in body %s", pattern, string(body))
+	}
+	return string(match[1])
 }
 
 func containsString(values []string, want string) bool {

@@ -75,6 +75,11 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 }
 
 func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (string, error) {
+	purpose, err := normalizeEmailCodePurpose(purpose)
+	if err != nil {
+		return "", err
+	}
+
 	code, err := generateEmailCode()
 	if err != nil {
 		return "", fmt.Errorf("generate email code: %w", err)
@@ -93,8 +98,13 @@ func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (str
 }
 
 func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.User, error) {
+	purpose, err := normalizeEmailCodePurpose(input.CodePurpose)
+	if err != nil {
+		return nil, err
+	}
+
 	email := normalizeEmail(input.Email)
-	if err := s.requireEmailCode(ctx, input.CodePurpose, email, input.EmailCode); err != nil {
+	if err := s.requireEmailCode(ctx, purpose, email, input.EmailCode); err != nil {
 		return nil, err
 	}
 
@@ -122,7 +132,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		return nil, err
 	}
 
-	_ = s.redis.Del(ctx, emailCodeKey(input.CodePurpose, email)).Err()
+	_ = s.redis.Del(ctx, emailCodeKey(purpose, email)).Err()
 	return user, nil
 }
 

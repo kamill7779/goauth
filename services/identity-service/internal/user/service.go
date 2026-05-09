@@ -212,17 +212,16 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 		displayName = email
 	}
 
-	hash, err := auth.HashPassword(input.Password)
-	if err != nil {
-		return nil, err
-	}
-
 	var record store.User
 	now := time.Now().UTC()
-	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		err := tx.Where("email = ?", email).First(&record).Error
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
+			hash, err := auth.HashPassword(input.Password)
+			if err != nil {
+				return err
+			}
 			record = store.User{
 				Email:           email,
 				DisplayName:     displayName,
@@ -236,20 +235,39 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 		case err != nil:
 			return err
 		default:
-			updates := map[string]any{
-				"display_name":  displayName,
-				"password_hash": hash,
-				"status":        store.UserStatusActive,
-				"updated_at":    now,
+			passwordChanged := auth.CheckPassword(record.PasswordHash, input.Password) != nil
+			reactivated := record.Status != store.UserStatusActive
+			needsEmailVerification := record.EmailVerifiedAt == nil
+			displayNameChanged := record.DisplayName != displayName
+
+			updates := map[string]any{}
+			if displayNameChanged {
+				updates["display_name"] = displayName
 			}
-			if record.EmailVerifiedAt == nil {
+			if passwordChanged {
+				hash, err := auth.HashPassword(input.Password)
+				if err != nil {
+					return err
+				}
+				updates["password_hash"] = hash
+			}
+			if reactivated {
+				updates["status"] = store.UserStatusActive
+			}
+			if needsEmailVerification {
 				updates["email_verified_at"] = now
 			}
-			if err := tx.Model(&store.User{}).Where("id = ?", record.ID).Updates(updates).Error; err != nil {
-				return err
+			if reactivated || passwordChanged {
+				updates["token_version"] = gorm.Expr("token_version + 1")
 			}
-			if err := tx.First(&record, record.ID).Error; err != nil {
-				return err
+			if len(updates) > 0 {
+				updates["updated_at"] = now
+				if err := tx.Model(&store.User{}).Where("id = ?", record.ID).Updates(updates).Error; err != nil {
+					return err
+				}
+				if err := tx.First(&record, record.ID).Error; err != nil {
+					return err
+				}
 			}
 		}
 
@@ -290,7 +308,13 @@ func (s *Service) MarkSystemUser(ctx context.Context, userID int64, roleCode str
 			UserID:   userID,
 			Status:   store.MemberStatusActive,
 		}
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&member).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "tenant_id"}, {Name: "user_id"}},
+			DoUpdates: clause.Assignments(map[string]any{
+				"status":     store.MemberStatusActive,
+				"deleted_at": nil,
+			}),
+		}).Create(&member).Error; err != nil {
 			return err
 		}
 		if member.ID == 0 {
