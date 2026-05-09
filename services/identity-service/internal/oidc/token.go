@@ -241,7 +241,7 @@ func (h *Handler) logout(c *gin.Context) {
 	}
 	if sessionID != "" {
 		now := h.service.now()
-		_ = h.service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := h.service.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := h.service.revokeLoginSessionWithDB(ctx, tx, sessionID, now); err != nil {
 				return err
 			}
@@ -253,7 +253,10 @@ func (h *Handler) logout(c *gin.Context) {
 			return tx.Model(&store.OAuthAuthorizationCode{}).
 				Where("session_id = ? AND consumed_at IS NULL", sessionID).
 				Update("consumed_at", now).Error
-		})
+		}); err != nil {
+			oauthError(c, http.StatusInternalServerError, "server_error")
+			return
+		}
 	}
 	session.ClearOIDCAuthorizeCookie(c)
 

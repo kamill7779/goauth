@@ -423,7 +423,7 @@ func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permission
 				return err
 			}
 		}
-		return s.bumpPermissionScopes(ctx, tx, scopes)
+		return s.bumpRolePermissionScopes(ctx, tx, roleID)
 	}); err != nil {
 		return err
 	}
@@ -457,7 +457,7 @@ func (s *Service) RevokePermission(ctx context.Context, roleID, permissionID int
 		if err := tx.Where("role_id = ? AND permission_id = ?", roleID, permissionID).Delete(&store.RolePermission{}).Error; err != nil {
 			return err
 		}
-		return s.bumpPermissionScopes(ctx, tx, scopes)
+		return s.bumpRolePermissionScopes(ctx, tx, roleID)
 	}); err != nil {
 		return err
 	}
@@ -599,6 +599,14 @@ func (s *Service) bumpTenantPermissionVersions(ctx context.Context, tx *gorm.DB,
 	return tx.WithContext(ctx).
 		Model(&store.TenantMember{}).
 		Where("tenant_id = ? AND deleted_at IS NULL", tenantID).
+		Update("permission_version", gorm.Expr("permission_version + 1")).Error
+}
+
+func (s *Service) bumpRolePermissionScopes(ctx context.Context, tx *gorm.DB, roleID int64) error {
+	return tx.WithContext(ctx).
+		Model(&store.TenantMember{}).
+		Where("id IN (?)", tx.Model(&store.MemberRole{}).Select("member_id").Where("role_id = ?", roleID)).
+		Where("deleted_at IS NULL").
 		Update("permission_version", gorm.Expr("permission_version + 1")).Error
 }
 

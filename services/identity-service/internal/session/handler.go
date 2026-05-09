@@ -23,12 +23,13 @@ func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
 
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/refresh", h.refresh)
-	router.POST("/logout", h.logout)
 	if h.publicKey != nil {
 		auth := AuthMiddleware(h.service, h.publicKey)
+		router.POST("/logout", auth, h.logout)
 		router.POST("/logout-all", auth, h.logoutAll)
 		router.GET("/me", auth, h.me)
 	} else {
+		router.POST("/logout", h.logout)
 		router.POST("/logout-all", h.logoutAll)
 		router.GET("/me", h.me)
 	}
@@ -65,6 +66,22 @@ func (h *Handler) logout(c *gin.Context) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+
+	claims, ok := ClaimsFromContext(c)
+	if ok {
+		if request.SessionID == "" {
+			request.SessionID = claims.SessionID
+		}
+		if request.SessionID != claims.SessionID {
+			c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+			return
+		}
+	}
+	if request.SessionID == "" {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "missing session_id"})
+		return
+	}
+
 	if err := h.service.Logout(c.Request.Context(), request.SessionID); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return

@@ -64,6 +64,11 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 		}
 	}
 
+	initialVersion, active, err := s.permissionScopeVersion(ctx, userID, tenantID)
+	if err != nil || !active {
+		return []string{}, err
+	}
+
 	// Resolve permissions from live user/member state so membership changes and
 	// role revocation are enforced independently from token claims.
 	permissions, err := s.lookupPermissionCodes(ctx, userID, tenantID)
@@ -76,7 +81,7 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 	if err != nil {
 		return nil, err
 	}
-	if active {
+	if active && currentVersion == initialVersion {
 		if err := s.storeCachedPermissions(ctx, userID, tenantID, currentVersion, permissions); err != nil {
 			return nil, err
 		}

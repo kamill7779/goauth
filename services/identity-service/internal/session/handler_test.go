@@ -149,6 +149,83 @@ func TestRefreshRejectsDisabledUser(t *testing.T) {
 	}
 }
 
+func TestLogoutRouteRequiresBearerToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	pair := issueSessionPair(t, service, *user, 0)
+	router := gin.New()
+	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(`{"session_id":"`+pair.SessionID+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+}
+
+func TestLogoutRouteOnlyRevokesAuthenticatedSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	currentPair := issueSessionPair(t, service, *user, 0)
+	otherPair := issueSessionPair(t, service, *user, 0)
+	router := gin.New()
+	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(`{"session_id":"`+otherPair.SessionID+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+currentPair.AccessToken)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+
+	var count int64
+	if err := service.db.Model(&store.RefreshToken{}).
+		Where("session_id = ? AND revoked_at IS NULL", otherPair.SessionID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count other session refresh tokens: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("active other session token count = %d, want 1", count)
+	}
+}
+
+func TestLogoutRouteCanUseAuthenticatedSessionFromToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, user := newTestService(t)
+	pair := issueSessionPair(t, service, *user, 0)
+	router := gin.New()
+	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+pair.AccessToken)
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var token store.RefreshToken
+	if err := service.db.Where("session_id = ?", pair.SessionID).First(&token).Error; err != nil {
+		t.Fatalf("load refresh token: %v", err)
+	}
+	if token.RevokedAt == nil {
+		t.Fatal("expected authenticated session refresh token to be revoked")
+	}
+}
+
 func issueSessionPair(t *testing.T, service *Service, user store.User, tenantID int64) *TokenPair {
 	t.Helper()
 
