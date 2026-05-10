@@ -1,0 +1,43 @@
+import axios, { AxiosError, AxiosInstance } from 'axios';
+import type { ApiError, ApiSuccessResponse } from '../types/auth';
+
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.trim() ||
+  (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080');
+
+const client: AxiosInstance = axios.create({
+  baseURL: `${API_BASE_URL}/v1/auth`,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+  withCredentials: true,
+  timeout: 10000,
+});
+
+client.interceptors.request.use((config) => {
+  const token = typeof window !== 'undefined' ? window.localStorage.getItem('access_token') : null;
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+client.interceptors.response.use(
+  (response) => response,
+  (error: AxiosError<ApiError>) => {
+    const message = error.response?.data?.error || error.message || '请求失败';
+    return Promise.reject(new Error(message));
+  }
+);
+
+export async function apiPost<T>(path: string, data?: unknown): Promise<T> {
+  const response = await client.post<ApiSuccessResponse<T>>(path, data);
+  return response.data.data;
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  const response = await client.get<ApiSuccessResponse<T>>(path);
+  return response.data.data;
+}
+
+export default client;
