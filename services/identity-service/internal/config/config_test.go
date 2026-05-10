@@ -21,6 +21,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("CORS_ALLOWED_METHODS", "")
 	t.Setenv("CORS_ALLOWED_HEADERS", "")
 	t.Setenv("CORS_ALLOW_CREDENTIALS", "")
+	t.Setenv("DEFAULT_MEMBER_TENANT_SLUGS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -57,6 +58,9 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.TrustedProxies != nil {
 		t.Fatalf("TrustedProxies = %v, want nil by default", cfg.TrustedProxies)
 	}
+	if cfg.DefaultMemberTenantSlugs != nil {
+		t.Fatalf("DefaultMemberTenantSlugs = %v, want nil by default", cfg.DefaultMemberTenantSlugs)
+	}
 }
 
 func TestLoadParsesTypedValues(t *testing.T) {
@@ -81,6 +85,7 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("GITHUB_CLIENT_ID", "client-id")
 	t.Setenv("GITHUB_CLIENT_SECRET", "client-secret")
 	t.Setenv("GITHUB_REDIRECT_URI", "https://app.example.com/callback")
+	t.Setenv("DEFAULT_MEMBER_TENANT_SLUGS", " public-app, community , public-app ")
 
 	cfg, err := Load()
 	if err != nil {
@@ -122,5 +127,11 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	}
 	if cfg.GitHubRedirectURI != "https://app.example.com/callback" {
 		t.Fatalf("GitHubRedirectURI = %q, want callback URI", cfg.GitHubRedirectURI)
+	}
+	if got, want := len(cfg.DefaultMemberTenantSlugs), 2; got != want {
+		t.Fatalf("len(DefaultMemberTenantSlugs) = %d, want %d", got, want)
+	}
+	if cfg.DefaultMemberTenantSlugs[0] != "public-app" || cfg.DefaultMemberTenantSlugs[1] != "community" {
+		t.Fatalf("DefaultMemberTenantSlugs = %v, want [public-app community]", cfg.DefaultMemberTenantSlugs)
 	}
 }

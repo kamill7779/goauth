@@ -39,6 +39,7 @@ type Config struct {
 	GitHubClientID            string
 	GitHubClientSecret        string
 	GitHubRedirectURI         string
+	DefaultMemberTenantSlugs  []string
 	BootstrapAdminEmail       string
 	BootstrapAdminPassword    string
 	BootstrapAdminDisplayName string
@@ -120,6 +121,7 @@ func Load() (Config, error) {
 		GitHubClientID:            os.Getenv("GITHUB_CLIENT_ID"),
 		GitHubClientSecret:        os.Getenv("GITHUB_CLIENT_SECRET"),
 		GitHubRedirectURI:         os.Getenv("GITHUB_REDIRECT_URI"),
+		DefaultMemberTenantSlugs:  splitUniqueCSV(os.Getenv("DEFAULT_MEMBER_TENANT_SLUGS")),
 		BootstrapAdminEmail:       os.Getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapAdminPassword:    os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
 		BootstrapAdminDisplayName: os.Getenv("BOOTSTRAP_ADMIN_DISPLAY_NAME"),
@@ -186,6 +188,24 @@ func splitCSV(value string) []string {
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
+	}
+	return result
+}
+
+func splitUniqueCSV(value string) []string {
+	parts := splitCSV(value)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
 	}
 	return result
 }
