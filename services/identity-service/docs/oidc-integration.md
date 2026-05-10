@@ -53,6 +53,7 @@ Discovery 中声明：
 - `grant_types` 包含 `authorization_code`。
 - `token_endpoint_auth_method` 只能是 `client_secret_basic` 或 `client_secret_post`。
 - 公共业务系统可开启 `auto_provision_members`，让活跃用户首次访问该 client 时自动加入 client 所属租户；内部系统建议关闭。
+- 若需要“注册后默认入组”，在 GoAuth 运行配置中设置 `DEFAULT_MEMBER_TENANT_SLUGS`，由身份服务按租户 slug 对新用户执行通用 membership 初始化；下游业务系统不需要写 GoAuth 业务规则。
 
 服务端会拒绝未知 client、禁用 client、不匹配 redirect URI、不允许的 scope 和未启用的 grant type。
 
@@ -71,7 +72,7 @@ Discovery 中声明：
 | `code_challenge` | 是 | PKCE challenge。 |
 | `code_challenge_method` | 是 | 推荐 `S256`。未传时按 `plain` 处理。 |
 
-授权端点要求浏览器有有效的 `goauth_oidc_session` cookie，并且用户属于 client 所属租户。若 client 开启 `auto_provision_members`，活跃用户首次授权时会被自动加入该租户；被显式禁用或删除的租户成员不会被自动恢复。
+授权端点要求浏览器有有效的 `goauth_oidc_session` cookie，并且用户属于 client 所属租户。若 GoAuth 配置了 `DEFAULT_MEMBER_TENANT_SLUGS`，新用户创建时会先加入这些默认租户。若 client 开启 `auto_provision_members`，活跃用户首次授权时会被自动加入该 client 租户；被显式禁用或删除的租户成员不会被自动恢复。
 
 - 浏览器导航请求如果缺少或持有失效 cookie，会被 `302` 跳到 `BROWSER_LOGIN_URL?return_to=...`，默认是 `/login?return_to=...`。
 - `return_to` 只允许本地 `/oauth2/authorize?...` 路径，避免开放重定向。

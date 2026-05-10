@@ -44,6 +44,8 @@ GET http://localhost:8080/.well-known/openid-configuration
 | `token_endpoint_auth_method` | `client_secret_post` 或 `client_secret_basic`。 |
 | `auto_provision_members` | 公共业务系统可设为 `true`，允许活跃用户首次访问该 client 时自动加入 client 所属租户；内部系统建议保持 `false`。 |
 
+如果希望用户在 GoAuth 完成注册后立即具备某些公共业务租户的 membership，应在 GoAuth 部署配置中设置 `DEFAULT_MEMBER_TENANT_SLUGS`。这是身份服务的通用数据策略：值是租户 slug 列表，不写入论坛、API 网关等业务项目的任何细节。`auto_provision_members` 仍然是 client 级兜底策略，适合允许活跃用户首次授权时加入该 client 所属租户。
+
 ## 3. Authorization Code + PKCE
 
 业务前端生成 `code_verifier`，再生成 `S256` 方式的 `code_challenge`：

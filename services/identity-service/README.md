@@ -68,6 +68,7 @@ docker compose down -v
 | `TRUSTED_PROXIES` | 空 | 逗号分隔的受信任反向代理/CIDR，例如 `10.0.0.0/8,192.168.1.10`。默认空表示不信任任何代理，忽略 `X-Forwarded-For`，避免客户端伪造来源 IP；只有在服务确实部署在受控代理后面时才配置。 |
 | `CORS_ALLOWED_ORIGINS` | 空 | 逗号分隔的允许来源。 |
 | `GITHUB_OAUTH_ENABLED` | `false` | 是否启用 GitHub 外部登录。启用时还需配置 client id/secret/redirect URI。 |
+| `DEFAULT_MEMBER_TENANT_SLUGS` | 空 | 逗号分隔的租户 slug。配置后，GoAuth 创建新用户时会自动把用户加入这些活跃租户；为空表示不做默认入组。 |
 | `BOOTSTRAP_ADMIN_EMAIL` | 空 | 可选。与 `BOOTSTRAP_ADMIN_PASSWORD` 一起设置后，服务启动时会确保该账号存在并授予系统角色。 |
 | `BOOTSTRAP_ADMIN_PASSWORD` | 空 | 可选。bootstrap 管理员密码；建议首次登录后立即通过管理流程轮换并移除该环境变量。 |
 | `BOOTSTRAP_ADMIN_ROLE` | `root` | bootstrap 账号授予的系统角色代码，默认 `root`。 |
@@ -75,6 +76,8 @@ docker compose down -v
 `.env.example` 列出了服务读取的全部环境变量。Compose 使用 `${VAR:-default}`，复制 `.env.example` 后即使变量值为空，也会使用 Compose 内置默认值；因此示例里的 `PUBLIC_ISSUER_URL` 保持为空，避免覆盖随 `IDENTITY_HTTP_PORT` 变化的 issuer 默认值。
 
 代理部署升级提示：如果服务跑在 Nginx、Ingress、LB 等反向代理后面，并且你依赖真实客户端 IP 做登录/验证码限流，升级到当前版本后需要显式配置 `TRUSTED_PROXIES`；否则服务会安全地退回到“只信任 TCP 对端地址”，多个用户可能共享代理出口的限流桶。
+
+默认入组策略只读取 GoAuth 租户数据，不包含任何下游业务代码。需要让新注册用户默认可访问某些公共业务系统时，先创建对应租户，再把租户 slug 写入 `DEFAULT_MEMBER_TENANT_SLUGS`，例如 `DEFAULT_MEMBER_TENANT_SLUGS=public-app,community`。如果配置了不存在或禁用的租户 slug，注册/外部 IdP 创建用户会失败，以便暴露部署配置错误。
 
 ## 创建第一个管理员
 

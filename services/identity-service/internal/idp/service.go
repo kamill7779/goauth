@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -37,6 +38,7 @@ type Service struct {
 	db        *gorm.DB
 	providers map[string]Provider
 	audit     audit.Recorder
+	policy    *provisioning.DefaultMembershipPolicy
 	now       func() time.Time
 }
 
@@ -55,6 +57,10 @@ func NewService(db *gorm.DB, providers ...Provider) *Service {
 		audit:     audit.NoopRecorder{},
 		now:       time.Now,
 	}
+}
+
+func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
+	s.policy = policy
 }
 
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
@@ -110,6 +116,7 @@ func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirect
 			return nil, ErrLocalLoginRequired
 		}
 
+		var provisionedMembers []store.TenantMember
 		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			now := s.now()
 			user = &store.User{
@@ -126,11 +133,19 @@ func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirect
 			if err := tx.Create(user).Error; err != nil {
 				return err
 			}
+			members, err := s.policy.Apply(ctx, tx, user.ID)
+			if err != nil {
+				return err
+			}
+			provisionedMembers = members
 
 			createdIdentity = newIdentity(user.ID, provider.Slug(), profile)
 			return tx.Create(createdIdentity).Error
 		})
 		if err != nil {
+			return nil, err
+		}
+		if err := provisioning.RecordMembershipAudits(ctx, s.audit, provisionedMembers); err != nil {
 			return nil, err
 		}
 		created = true
