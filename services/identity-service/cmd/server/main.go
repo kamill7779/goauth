@@ -19,6 +19,7 @@ import (
 	githubidp "goauth/services/identity-service/internal/idp/github"
 	"goauth/services/identity-service/internal/mailer"
 	"goauth/services/identity-service/internal/oidc"
+	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/rbac"
 	"goauth/services/identity-service/internal/session"
@@ -137,6 +138,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	oidcService.SetAuditRecorder(auditService)
 	oidcService.SetRateLimiter(rateLimiter)
 	oidcService.SetBrowserLoginURL(cfg.BrowserLoginURL)
+	defaultMembershipPolicy := provisioning.NewDefaultMembershipPolicy(cfg.DefaultMemberTenantSlugs)
 
 	registrars := []httpserver.Registrar{
 		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
@@ -149,6 +151,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		})
 		idpService := idp.NewService(db, githubProvider)
 		idpService.SetAuditRecorder(auditService)
+		idpService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
 		registrars = append(registrars, idp.NewHandler(idpService, sessionService, authMiddleware))
 	}
 
@@ -173,6 +176,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	if redisClient != nil {
 		authService := auth.NewService(db, redisClient, buildMailSender(cfg))
 		authService.SetAuditRecorder(auditService)
+		authService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.SetRateLimiter(rateLimiter)
 		authHandler.RegisterRoutes(authGroup)

@@ -8,6 +8,7 @@ import (
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
 )
 
@@ -299,6 +300,43 @@ func TestAuthenticateRecordsAuditLogForCreatedUser(t *testing.T) {
 	}
 	if metadata["created"] != true {
 		t.Fatalf("metadata created = %v, want true", metadata["created"])
+	}
+}
+
+func TestAuthenticateAppliesDefaultMembershipPolicyForCreatedUser(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	tenantRecord := store.Tenant{Name: "Community", Slug: "community", Status: store.TenantStatusActive}
+	if err := service.db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	service.SetDefaultMembershipPolicy(provisioning.NewDefaultMembershipPolicy([]string{"community"}))
+
+	result, err := service.Authenticate(context.Background(), "github", "oauth-code", "https://app.example.com/callback")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ? AND status = ?", tenantRecord.ID, result.User.ID, store.MemberStatusActive).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count tenant members: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("active tenant member count = %d, want 1", count)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/mailer"
+	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
 
 	"github.com/redis/go-redis/v9"
@@ -49,6 +50,7 @@ type Service struct {
 	redis  *redis.Client
 	mailer MailSender
 	audit  audit.Recorder
+	policy *provisioning.DefaultMembershipPolicy
 	now    func() time.Time
 }
 
@@ -64,6 +66,10 @@ func NewService(db *gorm.DB, redisClient *redis.Client, mailSender MailSender) *
 		audit:  audit.NoopRecorder{},
 		now:    time.Now,
 	}
+}
+
+func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
+	s.policy = policy
 }
 
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
@@ -125,10 +131,24 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		user.DisplayName = email
 	}
 
-	if err := s.db.WithContext(ctx).Create(user).Error; err != nil {
+	var provisionedMembers []store.TenantMember
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(user).Error; err != nil {
+			return err
+		}
+		members, err := s.policy.Apply(ctx, tx, user.ID)
+		if err != nil {
+			return err
+		}
+		provisionedMembers = members
+		return nil
+	}); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
 			return nil, ErrEmailAlreadyUsed
 		}
+		return nil, err
+	}
+	if err := provisioning.RecordMembershipAudits(ctx, s.audit, provisionedMembers); err != nil {
 		return nil, err
 	}
 

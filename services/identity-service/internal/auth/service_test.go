@@ -7,6 +7,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/provisioning"
 
 	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/config"
@@ -143,6 +144,51 @@ func TestRegisterNormalizesBlankCodePurpose(t *testing.T) {
 	}
 	if mini.Exists(cache.EmailCodeKey(EmailCodePurposeRegister, "normalized@example.com")) {
 		t.Fatal("expected normalized register code to be deleted after successful registration")
+	}
+}
+
+func TestRegisterAppliesDefaultMembershipPolicy(t *testing.T) {
+	service, _, _ := newTestService(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+	tenantRecord := store.Tenant{Name: "Public App", Slug: "public-app", Status: store.TenantStatusActive}
+	if err := service.db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	service.SetDefaultMembershipPolicy(provisioning.NewDefaultMembershipPolicy([]string{"public-app"}))
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "member@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+
+	user, err := service.Register(context.Background(), RegisterInput{
+		Email:       "member@example.com",
+		DisplayName: "member",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ? AND status = ?", tenantRecord.ID, user.ID, store.MemberStatusActive).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count tenant members: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("active tenant member count = %d, want 1", count)
+	}
+
+	if err := service.db.Model(&store.AuditLog{}).
+		Where("action = ? AND tenant_id = ?", audit.ActionTenantMembershipAdded, tenantRecord.ID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count membership audit logs: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("membership audit log count = %d, want 1", count)
 	}
 }
 
