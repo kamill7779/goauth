@@ -79,6 +79,9 @@ internal/idp/github
 internal/rbac
   租户级角色与权限校验。
 
+internal/provisioning
+  用户创建后的通用数据初始化策略，例如按配置租户 slug 创建默认租户成员关系。
+
 internal/user
   用户资料与后台用户管理。
 
@@ -469,6 +472,7 @@ SMTP_USERNAME
 SMTP_PASSWORD
 SMTP_FROM
 CORS_ALLOWED_ORIGINS
+DEFAULT_MEMBER_TENANT_SLUGS
 ```
 
 GitHub 外部提供方配置：
@@ -479,6 +483,14 @@ GITHUB_CLIENT_ID
 GITHUB_CLIENT_SECRET
 GITHUB_REDIRECT_URI
 ```
+
+默认租户成员策略：
+
+```text
+DEFAULT_MEMBER_TENANT_SLUGS=public-app,community
+```
+
+该配置只表达身份服务自己的租户数据策略：当 GoAuth 创建新用户时，把用户加入指定 slug 对应的活跃租户。配置值是部署数据，不是业务代码；GoAuth 不应在源码中识别论坛、API 网关或其他下游系统的业务概念。若配置的 slug 不存在或租户被禁用，用户创建应失败并暴露配置错误。
 
 ## 安全要求
 
