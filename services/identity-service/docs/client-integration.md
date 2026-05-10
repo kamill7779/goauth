@@ -42,6 +42,7 @@ GET http://localhost:8080/.well-known/openid-configuration
 | `allowed_scopes` | 至少包含 `openid`，常用 `openid profile email offline_access`。 |
 | `grant_types` | 至少包含 `authorization_code`；如果业务需要长期会话和 refresh token，还要同时配置 `refresh_token`。 |
 | `token_endpoint_auth_method` | `client_secret_post` 或 `client_secret_basic`。 |
+| `auto_provision_members` | 公共业务系统可设为 `true`，允许活跃用户首次访问该 client 时自动加入 client 所属租户；内部系统建议保持 `false`。 |
 
 ## 3. Authorization Code + PKCE
 

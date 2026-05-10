@@ -106,6 +106,7 @@ type OAuthClient struct {
 	AllowedScopes           datatypes.JSON `gorm:"not null"`
 	GrantTypes              datatypes.JSON `gorm:"not null"`
 	TokenEndpointAuthMethod string         `gorm:"size:64;not null"`
+	AutoProvisionMembers    bool           `gorm:"not null;default:false"`
 	Status                  string         `gorm:"size:32;not null;index"`
 	CreatedAt               time.Time      `gorm:"not null"`
 	UpdatedAt               time.Time      `gorm:"not null"`

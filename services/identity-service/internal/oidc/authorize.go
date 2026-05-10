@@ -88,7 +88,12 @@ func (h *Handler) authorize(c *gin.Context) {
 		oauthError(c, http.StatusUnauthorized, "login_required")
 		return
 	}
-	if !h.service.hasActiveTenantMembership(ctx, userID, client.TenantID) {
+	membershipOK, err := h.service.ensureClientTenantMembership(ctx, userID, client)
+	if err != nil {
+		oauthError(c, http.StatusInternalServerError, "server_error")
+		return
+	}
+	if !membershipOK {
 		oauthError(c, http.StatusForbidden, "access_denied")
 		return
 	}

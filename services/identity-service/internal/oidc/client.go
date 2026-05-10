@@ -25,6 +25,7 @@ type CreateClientInput struct {
 	AllowedScopes           []string `json:"allowed_scopes"`
 	GrantTypes              []string `json:"grant_types"`
 	TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+	AutoProvisionMembers    bool     `json:"auto_provision_members"`
 }
 
 func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*store.OAuthClient, error) {
@@ -84,6 +85,7 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 		AllowedScopes:           allowedScopes,
 		GrantTypes:              grantTypes,
 		TokenEndpointAuthMethod: authMethod,
+		AutoProvisionMembers:    input.AutoProvisionMembers,
 		Status:                  store.UserStatusActive,
 	}
 	if err := s.db.WithContext(ctx).Create(client).Error; err != nil {

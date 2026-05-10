@@ -128,6 +128,7 @@ func oauthClientPayload(client store.OAuthClient) (gin.H, error) {
 		"allowed_scopes":             allowedScopes,
 		"grant_types":                grantTypes,
 		"token_endpoint_auth_method": client.TokenEndpointAuthMethod,
+		"auto_provision_members":     client.AutoProvisionMembers,
 		"status":                     client.Status,
 		"created_at":                 client.CreatedAt,
 		"updated_at":                 client.UpdatedAt,

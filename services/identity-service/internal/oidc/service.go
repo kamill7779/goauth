@@ -225,6 +225,60 @@ func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantI
 	return err == nil && count > 0
 }
 
+func (s *Service) ensureClientTenantMembership(ctx context.Context, userID int64, client *store.OAuthClient) (bool, error) {
+	if client == nil || userID == 0 || client.TenantID == 0 {
+		return false, nil
+	}
+	if s.hasActiveTenantMembership(ctx, userID, client.TenantID) {
+		return true, nil
+	}
+	if !client.AutoProvisionMembers {
+		return false, nil
+	}
+	if _, err := s.loadActiveUser(ctx, userID); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !s.hasActiveTenant(ctx, client.TenantID) {
+		return false, nil
+	}
+
+	var existingCount int64
+	if err := s.db.WithContext(ctx).
+		Unscoped().
+		Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ?", client.TenantID, userID).
+		Count(&existingCount).Error; err != nil {
+		return false, err
+	}
+	if existingCount > 0 {
+		// Existing inactive or deleted memberships are explicit access decisions.
+		return false, nil
+	}
+
+	member := store.TenantMember{
+		TenantID: client.TenantID,
+		UserID:   userID,
+		Status:   store.MemberStatusActive,
+	}
+	if err := s.db.WithContext(ctx).Create(&member).Error; err != nil {
+		if s.hasActiveTenantMembership(ctx, userID, client.TenantID) {
+			return true, nil
+		}
+		if lookupErr := s.db.WithContext(ctx).
+			Unscoped().
+			Model(&store.TenantMember{}).
+			Where("tenant_id = ? AND user_id = ?", client.TenantID, userID).
+			Count(&existingCount).Error; lookupErr == nil && existingCount > 0 {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Service) hasActiveTenant(ctx context.Context, tenantID int64) bool {
 	var count int64
 	err := s.db.WithContext(ctx).

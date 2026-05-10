@@ -528,6 +528,45 @@ func TestAuthorizeRejectsUserWithoutTenantMembership(t *testing.T) {
 	assertJSONError(t, recorder.Body.Bytes(), "access_denied")
 }
 
+func TestAuthorizeAutoProvisionsTenantMembershipWhenClientAllowsIt(t *testing.T) {
+	service, router, db, privateKey, user, _ := newTestProvider(t)
+	tenantRecord := store.Tenant{Name: "Public App", Slug: "public-app", Status: store.TenantStatusActive}
+	if err := db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	client := mustCreateClient(t, service, CreateClientInput{
+		TenantID:                tenantRecord.ID,
+		ClientID:                "public-app-client",
+		ClientSecret:            "public-app-secret",
+		Name:                    "Public App Client",
+		RedirectURIs:            []string{"https://public.example.com/callback"},
+		AllowedScopes:           []string{"openid", "profile", "email"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_post",
+		AutoProvisionMembers:    true,
+	})
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, 0)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://public.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain", nil)
+	request.AddCookie(authorizeCookie)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusFound, recorder.Body.String())
+	}
+	var count int64
+	if err := db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id = ? AND status = ? AND deleted_at IS NULL", tenantRecord.ID, user.ID, store.MemberStatusActive).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count provisioned membership: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("provisioned membership count = %d, want 1", count)
+	}
+}
+
 func TestAuthorizeStoresAuthorizationCodeHash(t *testing.T) {
 	service, router, db, privateKey, user, client := newTestProvider(t)
 	verifier := "test-verifier-1234567890"
@@ -1445,7 +1484,8 @@ func TestAdminOAuthClientsCreateListAndUpdateStatus(t *testing.T) {
 		"redirect_uris": ["https://admin.example.com/callback"],
 		"allowed_scopes": ["openid", "profile", "email"],
 		"grant_types": ["authorization_code", "refresh_token"],
-		"token_endpoint_auth_method": "client_secret_post"
+		"token_endpoint_auth_method": "client_secret_post",
+		"auto_provision_members": true
 	}`
 	createRequest := httptest.NewRequest(http.MethodPost, "/v1/admin/oauth-clients", strings.NewReader(body))
 	createRequest.Header.Set("Content-Type", "application/json")
@@ -1460,9 +1500,10 @@ func TestAdminOAuthClientsCreateListAndUpdateStatus(t *testing.T) {
 
 	var created struct {
 		Data struct {
-			ClientID     string   `json:"client_id"`
-			RedirectURIs []string `json:"redirect_uris"`
-			Status       string   `json:"status"`
+			ClientID             string   `json:"client_id"`
+			RedirectURIs         []string `json:"redirect_uris"`
+			Status               string   `json:"status"`
+			AutoProvisionMembers bool     `json:"auto_provision_members"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(createRecorder.Body.Bytes(), &created); err != nil {
@@ -1477,6 +1518,9 @@ func TestAdminOAuthClientsCreateListAndUpdateStatus(t *testing.T) {
 	if created.Data.Status != store.UserStatusActive {
 		t.Fatalf("status = %q, want %q", created.Data.Status, store.UserStatusActive)
 	}
+	if !created.Data.AutoProvisionMembers {
+		t.Fatal("auto_provision_members = false, want true")
+	}
 
 	var stored store.OAuthClient
 	if err := db.Where("client_id = ?", "admin-web").First(&stored).Error; err != nil {
@@ -1484,6 +1528,9 @@ func TestAdminOAuthClientsCreateListAndUpdateStatus(t *testing.T) {
 	}
 	if stored.ClientSecretHash == "" || stored.ClientSecretHash == "admin-secret" {
 		t.Fatalf("client secret hash was not stored securely")
+	}
+	if !stored.AutoProvisionMembers {
+		t.Fatal("stored auto_provision_members = false, want true")
 	}
 
 	listRequest := httptest.NewRequest(http.MethodGet, "/v1/admin/oauth-clients", nil)
