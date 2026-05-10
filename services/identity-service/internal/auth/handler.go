@@ -31,11 +31,6 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/password/reset", h.resetPassword)
 }
 
-func (h *Handler) RegisterBrowserRoutes(router gin.IRoutes) {
-	router.GET("/oauth2/login", h.browserLoginPage)
-	router.POST("/oauth2/login", h.browserLoginSubmit)
-}
-
 func (h *Handler) sendCode(c *gin.Context) {
 	var request struct {
 		Purpose string `json:"purpose"`
@@ -121,7 +116,7 @@ func (h *Handler) login(c *gin.Context) {
 		return
 	}
 
-	session.SetOIDCAuthorizeCookie(c, result.cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
+	h.session.SetOIDCAuthorizeCookie(c, result.cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
 	httpserver.Success(c, stdhttp.StatusOK, result.pair)
 }
 

@@ -142,7 +142,7 @@ func (h *Handler) authorize(c *gin.Context) {
 }
 
 func (h *Handler) redirectBrowserToLogin(c *gin.Context) bool {
-	if h.service.browserLoginPath == "" || !browserPrefersHTML(c) {
+	if h.service.browserLoginURL == "" || !browserPrefersHTML(c) {
 		return false
 	}
 
@@ -151,6 +151,6 @@ func (h *Handler) redirectBrowserToLogin(c *gin.Context) bool {
 		return false
 	}
 
-	c.Redirect(http.StatusFound, buildBrowserLoginRedirectPath(h.service.browserLoginPath, returnTo))
+	c.Redirect(http.StatusFound, buildBrowserLoginRedirectURL(h.service.browserLoginURL, returnTo))
 	return true
 }

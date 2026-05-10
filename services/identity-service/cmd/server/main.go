@@ -136,6 +136,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	oidcService := oidc.NewService(db, cfg, privateKey)
 	oidcService.SetAuditRecorder(auditService)
 	oidcService.SetRateLimiter(rateLimiter)
+	oidcService.SetBrowserLoginURL(cfg.BrowserLoginURL)
 
 	registrars := []httpserver.Registrar{
 		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
@@ -170,16 +171,29 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	)
 
 	if redisClient != nil {
-		authService := auth.NewService(db, redisClient, mailer.NoopSender{})
+		authService := auth.NewService(db, redisClient, buildMailSender(cfg))
 		authService.SetAuditRecorder(auditService)
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.SetRateLimiter(rateLimiter)
 		authHandler.RegisterRoutes(authGroup)
-		authHandler.RegisterBrowserRoutes(router)
-		oidcService.SetBrowserLoginPath("/oauth2/login")
 	}
 
 	return router
+}
+
+func buildMailSender(cfg config.Config) mailer.Sender {
+	if strings.TrimSpace(cfg.SMTPHost) == "" || strings.TrimSpace(cfg.SMTPFrom) == "" {
+		return mailer.NoopSender{}
+	}
+	return mailer.NewSMTPSender(mailer.SMTPConfig{
+		Host:      cfg.SMTPHost,
+		Port:      cfg.SMTPPort,
+		Username:  cfg.SMTPUsername,
+		Password:  cfg.SMTPPassword,
+		From:      cfg.SMTPFrom,
+		SSL:       cfg.SMTPSSLEnabled,
+		AuthLogin: cfg.SMTPAuthLogin,
+	})
 }
 
 func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.ReadinessCheck {

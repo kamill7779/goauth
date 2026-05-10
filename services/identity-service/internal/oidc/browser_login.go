@@ -50,9 +50,19 @@ func browserRequestsDocument(c *gin.Context) bool {
 	return dest == "document"
 }
 
-func buildBrowserLoginRedirectPath(loginPath, returnTo string) string {
-	query := url.Values{
-		"return_to": {returnTo},
+func buildBrowserLoginRedirectURL(loginURL, returnTo string) string {
+	loginURL = strings.TrimSpace(loginURL)
+	if loginURL == "" {
+		return ""
 	}
-	return loginPath + "?" + query.Encode()
+
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		query := url.Values{"return_to": {returnTo}}
+		return loginURL + "?" + query.Encode()
+	}
+	query := parsed.Query()
+	query.Set("return_to", returnTo)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }

@@ -33,10 +33,11 @@ func newTestService(t *testing.T) (*Service, *store.User) {
 	}
 
 	service := NewService(db, config.Config{
-		JWTKeyID:          "test-key",
-		AccessTokenTTL:    15 * time.Minute,
-		BrowserSessionTTL: 12 * time.Hour,
-		RefreshTokenTTL:   30 * 24 * time.Hour,
+		JWTKeyID:            "test-key",
+		AccessTokenTTL:      15 * time.Minute,
+		BrowserSessionTTL:   12 * time.Hour,
+		RefreshTokenTTL:     30 * 24 * time.Hour,
+		BrowserCookieSecure: true,
 	}, privateKey)
 
 	user := &store.User{

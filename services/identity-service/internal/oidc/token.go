@@ -262,7 +262,7 @@ func (h *Handler) logoutPost(c *gin.Context) {
 		c.String(http.StatusForbidden, "invalid csrf token")
 		return
 	}
-	clearLogoutCSRFCookie(c)
+	clearLogoutCSRFCookie(c, h.service.browserCookieSecure)
 	h.performLogout(c, logoutRequest{
 		ClientID:              c.PostForm("client_id"),
 		PostLogoutRedirectURI: c.PostForm("post_logout_redirect_uri"),
@@ -296,8 +296,8 @@ func (h *Handler) performLogout(c *gin.Context, request logoutRequest) {
 			return
 		}
 	}
-	session.ClearOIDCAuthorizeCookie(c)
-	clearLogoutCSRFCookie(c)
+	session.ClearOIDCAuthorizeCookie(c, h.service.browserCookieSecure)
+	clearLogoutCSRFCookie(c, h.service.browserCookieSecure)
 
 	redirectURI, err := h.service.resolvePostLogoutRedirectURI(ctx, request.ClientID, request.PostLogoutRedirectURI)
 	if err != nil {

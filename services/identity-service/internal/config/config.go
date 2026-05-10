@@ -14,6 +14,8 @@ type Config struct {
 	AppEnv                    string
 	HTTPAddr                  string
 	PublicIssuerURL           string
+	BrowserLoginURL           string
+	BrowserCookieSecure       bool
 	MySQLDSN                  string
 	RedisURL                  string
 	JWTPrivateKeyPath         string
@@ -27,6 +29,8 @@ type Config struct {
 	SMTPUsername              string
 	SMTPPassword              string
 	SMTPFrom                  string
+	SMTPSSLEnabled            bool
+	SMTPAuthLogin             bool
 	CORSAllowedOrigins        []string
 	CORSAllowedMethods        []string
 	CORSAllowedHeaders        []string
@@ -72,10 +76,27 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	smtpSSLEnabled, err := parseBoolEnv("SMTP_SSL", false)
+	if err != nil {
+		return Config{}, err
+	}
+	smtpAuthLogin, err := parseBoolEnv("SMTP_AUTH_LOGIN", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	publicIssuerURL := envOrDefault("PUBLIC_ISSUER_URL", "http://127.0.0.1:8080")
+	browserCookieSecure, err := parseBoolEnv("BROWSER_COOKIE_SECURE", strings.HasPrefix(strings.ToLower(publicIssuerURL), "https://"))
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		AppEnv:                    envOrDefault("APP_ENV", "development"),
 		HTTPAddr:                  envOrDefault("HTTP_ADDR", ":8080"),
-		PublicIssuerURL:           envOrDefault("PUBLIC_ISSUER_URL", "http://127.0.0.1:8080"),
+		PublicIssuerURL:           publicIssuerURL,
+		BrowserLoginURL:           envOrDefault("BROWSER_LOGIN_URL", "/login"),
+		BrowserCookieSecure:       browserCookieSecure,
 		MySQLDSN:                  os.Getenv("MYSQL_DSN"),
 		RedisURL:                  os.Getenv("REDIS_URL"),
 		JWTPrivateKeyPath:         os.Getenv("JWT_PRIVATE_KEY_PATH"),
@@ -89,6 +110,8 @@ func Load() (Config, error) {
 		SMTPUsername:              os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:              os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:                  os.Getenv("SMTP_FROM"),
+		SMTPSSLEnabled:            smtpSSLEnabled,
+		SMTPAuthLogin:             smtpAuthLogin,
 		CORSAllowedOrigins:        splitCSV(envOrDefault("CORS_ALLOWED_ORIGINS", "")),
 		CORSAllowedMethods:        splitCSV(envOrDefault("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE")),
 		CORSAllowedHeaders:        splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type")),

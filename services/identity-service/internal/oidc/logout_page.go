@@ -16,7 +16,7 @@ type logoutRequest struct {
 }
 
 func (h *Handler) browserLogoutPage(c *gin.Context, request logoutRequest) {
-	csrfToken, err := issueLogoutCSRFCookie(c)
+	csrfToken, err := issueLogoutCSRFCookie(c, h.service.browserCookieSecure)
 	if err != nil {
 		c.String(stdhttp.StatusInternalServerError, "failed to create csrf token")
 		return

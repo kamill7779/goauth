@@ -28,6 +28,8 @@ GET http://localhost:8080/.well-known/openid-configuration
 
 `PUBLIC_ISSUER_URL` 必须配置成业务系统能访问的地址，否则 discovery 和 token `iss` 会不一致。
 
+典型前后端分离部署中，Nginx 可以把 `/`、`/login` 等前端路由交给静态前端，把 `/v1/auth/*`、`/oauth2/*` 反代到 GoAuth 后端。这样登录接口返回的 `goauth_oidc_session` cookie 与后续 `/oauth2/authorize` 请求同源，浏览器 SSO 流程最简单。
+
 ## 2. 准备 OAuth Client
 
 当前服务没有公开的动态 client 注册 HTTP 接口。联调时需要由管理端、初始化脚本或后台任务写入 OAuth client 记录，字段含义如下：
@@ -67,7 +69,8 @@ GET /oauth2/authorize?
 
 - `redirect_uri` 必须和 client 注册值完全一致。
 - `scope` 必须包含 `openid`。
-- 用户浏览器可以直接访问 `/oauth2/authorize`。如果还没有 `goauth_oidc_session` cookie，GoAuth 会自动跳转到内置 `/oauth2/login` 页面，登录成功后继续原始授权请求。
+- 用户浏览器可以直接访问 `/oauth2/authorize`。如果还没有 `goauth_oidc_session` cookie，GoAuth 会自动跳转到 `BROWSER_LOGIN_URL` 指向的独立前端登录页，默认 `/login`。
+- 登录页应调用 `POST /v1/auth/login`。成功后前端跳回 URL 参数里的 `return_to`，继续原始授权请求。
 - 非浏览器调用方如果直接请求授权端点，在缺少登录态时仍会收到 `login_required` JSON 错误。
 - 本地 HTTP 调试如果遇到 Secure Cookie 不写入，建议通过 HTTPS 反向代理或浏览器信任的本地域名测试完整登录跳转。
 - 回调时业务系统必须校验 `state`，并用 `nonce` 校验 ID Token。

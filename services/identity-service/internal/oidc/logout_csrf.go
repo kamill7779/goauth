@@ -15,20 +15,20 @@ const (
 	logoutCSRFCookieMaxAgeS = 10 * 60
 )
 
-func issueLogoutCSRFCookie(c *gin.Context) (string, error) {
+func issueLogoutCSRFCookie(c *gin.Context, secure bool) (string, error) {
 	token, err := randomLogoutCSRFToken()
 	if err != nil {
 		return "", err
 	}
 
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
-	c.SetCookie(logoutCSRFCookieName, token, logoutCSRFCookieMaxAgeS, "/oauth2/logout", "", true, true)
+	c.SetCookie(logoutCSRFCookieName, token, logoutCSRFCookieMaxAgeS, "/oauth2/logout", "", secure, true)
 	return token, nil
 }
 
-func clearLogoutCSRFCookie(c *gin.Context) {
+func clearLogoutCSRFCookie(c *gin.Context, secure bool) {
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
-	c.SetCookie(logoutCSRFCookieName, "", -1, "/oauth2/logout", "", true, true)
+	c.SetCookie(logoutCSRFCookieName, "", -1, "/oauth2/logout", "", secure, true)
 }
 
 func logoutCSRFValid(c *gin.Context) bool {

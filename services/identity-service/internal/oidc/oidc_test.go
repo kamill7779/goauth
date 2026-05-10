@@ -438,8 +438,8 @@ func TestAuthorizeRejectsMissingAuthenticatedSession(t *testing.T) {
 		assertJSONError(t, recorder.Body.Bytes(), "login_required")
 	})
 
-	t.Run("browser request redirects to hosted login", func(t *testing.T) {
-		service.SetBrowserLoginPath("/oauth2/login")
+	t.Run("browser request redirects to frontend login", func(t *testing.T) {
+		service.SetBrowserLoginURL("/login")
 
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain&state=browser-state", nil)
@@ -455,8 +455,8 @@ func TestAuthorizeRejectsMissingAuthenticatedSession(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Location() error = %v", err)
 		}
-		if location.Path != "/oauth2/login" {
-			t.Fatalf("path = %q, want /oauth2/login", location.Path)
+		if location.Path != "/login" {
+			t.Fatalf("path = %q, want /login", location.Path)
 		}
 		if got := location.Query().Get("return_to"); got != "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain&state=browser-state" {
 			t.Fatalf("return_to = %q", got)

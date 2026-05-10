@@ -29,14 +29,15 @@ var (
 const accessTokenUseSession = "session"
 
 type Service struct {
-	db                *gorm.DB
-	privateKey        *rsa.PrivateKey
-	keyID             string
-	accessTokenTTL    time.Duration
-	browserSessionTTL time.Duration
-	refreshTokenTTL   time.Duration
-	audit             audit.Recorder
-	now               func() time.Time
+	db                  *gorm.DB
+	privateKey          *rsa.PrivateKey
+	keyID               string
+	accessTokenTTL      time.Duration
+	browserSessionTTL   time.Duration
+	browserCookieSecure bool
+	refreshTokenTTL     time.Duration
+	audit               audit.Recorder
+	now                 func() time.Time
 }
 
 type IssueTokensInput struct {
@@ -65,14 +66,15 @@ type accessClaims struct {
 
 func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Service {
 	return &Service{
-		db:                db,
-		privateKey:        privateKey,
-		keyID:             cfg.JWTKeyID,
-		accessTokenTTL:    cfg.AccessTokenTTL,
-		browserSessionTTL: cfg.BrowserSessionTTL,
-		refreshTokenTTL:   cfg.RefreshTokenTTL,
-		audit:             audit.NoopRecorder{},
-		now:               time.Now,
+		db:                  db,
+		privateKey:          privateKey,
+		keyID:               cfg.JWTKeyID,
+		accessTokenTTL:      cfg.AccessTokenTTL,
+		browserSessionTTL:   cfg.BrowserSessionTTL,
+		browserCookieSecure: cfg.BrowserCookieSecure,
+		refreshTokenTTL:     cfg.RefreshTokenTTL,
+		audit:               audit.NoopRecorder{},
+		now:                 time.Now,
 	}
 }
 

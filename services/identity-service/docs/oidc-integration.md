@@ -9,8 +9,6 @@
 | `GET` | `/.well-known/openid-configuration` | OIDC discovery。 |
 | `GET` | `/oauth2/jwks` | RS256 公钥集合。 |
 | `GET` | `/oauth2/authorize` | Authorization Code 授权端点。 |
-| `GET` | `/oauth2/login` | 内置浏览器登录页，供 authorize 缺少登录态时跳转。 |
-| `POST` | `/oauth2/login` | 内置浏览器登录表单提交，成功后回到原 authorize 请求。 |
 | `POST` | `/oauth2/token` | code 换 token。 |
 | `GET` | `/oauth2/userinfo` | 根据 access token 返回用户信息。 |
 | `POST` | `/oauth2/introspect` | token introspection，需 client 凭证。 |
@@ -74,11 +72,11 @@ Discovery 中声明：
 
 授权端点要求浏览器有有效的 `goauth_oidc_session` cookie，并且用户属于 client 所属租户。
 
-- 浏览器导航请求如果缺少或持有失效 cookie，会被 `302` 跳到 `/oauth2/login?return_to=...`，登录成功后继续原始 `/oauth2/authorize` 请求。
+- 浏览器导航请求如果缺少或持有失效 cookie，会被 `302` 跳到 `BROWSER_LOGIN_URL?return_to=...`，默认是 `/login?return_to=...`。
 - `return_to` 只允许本地 `/oauth2/authorize?...` 路径，避免开放重定向。
 - 非浏览器调用方仍会收到 JSON `login_required`，无租户权限返回 `access_denied`。
 
-内置登录页复用现有账号密码登录能力，只是在成功后额外设置 `goauth_oidc_session` cookie 并恢复 authorize 流程；`/v1/auth/login` 的 JSON contract 不变。
+GoAuth 后端不托管登录/注册 UI。独立前端应调用 `POST /v1/auth/login` 完成登录；该接口返回 token pair，并设置 `goauth_oidc_session` cookie。前端登录成功后把浏览器跳回 `return_to`，继续原始 `/oauth2/authorize` 流程。
 
 ## Token Endpoint
 

@@ -37,7 +37,8 @@ type Service struct {
 	privateKey           *rsa.PrivateKey
 	publicKey            *rsa.PublicKey
 	issuer               string
-	browserLoginPath     string
+	browserLoginURL      string
+	browserCookieSecure  bool
 	keyID                string
 	accessTokenTTL       time.Duration
 	refreshTokenTTL      time.Duration
@@ -92,6 +93,7 @@ func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Ser
 		db:                   db,
 		privateKey:           privateKey,
 		issuer:               issuer,
+		browserCookieSecure:  cfg.BrowserCookieSecure,
 		keyID:                cfg.JWTKeyID,
 		accessTokenTTL:       accessTokenTTL,
 		refreshTokenTTL:      refreshTokenTTL,
@@ -113,8 +115,8 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	s.audit = recorder
 }
 
-func (s *Service) SetBrowserLoginPath(path string) {
-	s.browserLoginPath = strings.TrimSpace(path)
+func (s *Service) SetBrowserLoginURL(loginURL string) {
+	s.browserLoginURL = strings.TrimSpace(loginURL)
 }
 
 func RegisterRoutes(router gin.IRoutes, service *Service) {

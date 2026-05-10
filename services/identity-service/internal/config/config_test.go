@@ -9,6 +9,8 @@ func TestLoadUsesDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
 	t.Setenv("HTTP_ADDR", "")
 	t.Setenv("PUBLIC_ISSUER_URL", "")
+	t.Setenv("BROWSER_LOGIN_URL", "")
+	t.Setenv("BROWSER_COOKIE_SECURE", "")
 	t.Setenv("MYSQL_DSN", "")
 	t.Setenv("REDIS_URL", "")
 	t.Setenv("ACCESS_TOKEN_TTL", "")
@@ -34,6 +36,12 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if cfg.PublicIssuerURL != "http://127.0.0.1:8080" {
 		t.Fatalf("PublicIssuerURL = %q, want default issuer", cfg.PublicIssuerURL)
 	}
+	if cfg.BrowserLoginURL != "/login" {
+		t.Fatalf("BrowserLoginURL = %q, want /login", cfg.BrowserLoginURL)
+	}
+	if cfg.BrowserCookieSecure {
+		t.Fatal("BrowserCookieSecure = true, want false for http default issuer")
+	}
 	if cfg.AccessTokenTTL != 15*time.Minute {
 		t.Fatalf("AccessTokenTTL = %v, want 15m", cfg.AccessTokenTTL)
 	}
@@ -55,6 +63,8 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("HTTP_ADDR", ":9090")
 	t.Setenv("PUBLIC_ISSUER_URL", "https://auth.example.com")
+	t.Setenv("BROWSER_LOGIN_URL", "https://auth.example.com/login")
+	t.Setenv("BROWSER_COOKIE_SECURE", "")
 	t.Setenv("MYSQL_DSN", "root:root@tcp(localhost:3306)/goauth")
 	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
 	t.Setenv("ACCESS_TOKEN_TTL", "20m")
@@ -62,6 +72,7 @@ func TestLoadParsesTypedValues(t *testing.T) {
 	t.Setenv("REFRESH_TOKEN_TTL", "48h")
 	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, 192.168.1.10")
 	t.Setenv("SMTP_PORT", "2525")
+	t.Setenv("SMTP_SSL", "true")
 	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com")
 	t.Setenv("CORS_ALLOWED_METHODS", "GET,POST")
 	t.Setenv("CORS_ALLOWED_HEADERS", "Authorization, Content-Type")
@@ -78,6 +89,15 @@ func TestLoadParsesTypedValues(t *testing.T) {
 
 	if cfg.SMTPPort != 2525 {
 		t.Fatalf("SMTPPort = %d, want 2525", cfg.SMTPPort)
+	}
+	if !cfg.SMTPSSLEnabled {
+		t.Fatal("SMTPSSLEnabled = false, want true")
+	}
+	if cfg.BrowserLoginURL != "https://auth.example.com/login" {
+		t.Fatalf("BrowserLoginURL = %q, want configured URL", cfg.BrowserLoginURL)
+	}
+	if !cfg.BrowserCookieSecure {
+		t.Fatal("BrowserCookieSecure = false, want true for https issuer")
 	}
 	if cfg.BrowserSessionTTL != 36*time.Hour {
 		t.Fatalf("BrowserSessionTTL = %v, want 36h", cfg.BrowserSessionTTL)
