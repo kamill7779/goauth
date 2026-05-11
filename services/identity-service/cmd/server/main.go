@@ -170,7 +170,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		router,
 		rbac.NewHandler(rbacService, authMiddleware, systemMiddleware),
 		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
-		user.NewHandler(userService, authMiddleware, systemMiddleware),
+		user.NewHandler(userService, tenantService, sessionService, authMiddleware, systemMiddleware),
 		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
 		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware),
 	)

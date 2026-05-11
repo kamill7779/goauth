@@ -36,6 +36,23 @@ type UpdateUserInput struct {
 	AvatarURL   *string `json:"avatar_url"`
 }
 
+type ListUsersInput struct {
+	Search   string
+	Status   string
+	Sort     string
+	TenantID int64
+	RoleID   int64
+	Page     int
+	PageSize int
+}
+
+type ListUsersResult struct {
+	Users    []store.User
+	Total    int64
+	Page     int
+	PageSize int
+}
+
 type BootstrapAdminInput struct {
 	Email       string
 	DisplayName string
@@ -57,6 +74,67 @@ func (s *Service) ListUsers(ctx context.Context) ([]store.User, error) {
 	var users []store.User
 	err := s.db.WithContext(ctx).Order("id ASC").Find(&users).Error
 	return users, err
+}
+
+func (s *Service) ListUsersPage(ctx context.Context, input ListUsersInput) (*ListUsersResult, error) {
+	page := input.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := input.PageSize
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	query := s.db.WithContext(ctx).Model(&store.User{})
+	if search := strings.ToLower(strings.TrimSpace(input.Search)); search != "" {
+		like := "%" + search + "%"
+		query = query.Where("LOWER(email) LIKE ? OR LOWER(display_name) LIKE ?", like, like)
+	}
+	if status := strings.TrimSpace(input.Status); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if input.TenantID > 0 {
+		query = query.Where(
+			"EXISTS (SELECT 1 FROM tenant_members tm WHERE tm.user_id = users.id AND tm.tenant_id = ? AND tm.deleted_at IS NULL)",
+			input.TenantID,
+		)
+	}
+	if input.RoleID > 0 {
+		query = query.Where(
+			`EXISTS (
+				SELECT 1
+				FROM tenant_members tm
+				JOIN member_roles mr ON mr.member_id = tm.id
+				WHERE tm.user_id = users.id AND mr.role_id = ? AND tm.deleted_at IS NULL
+			)`,
+			input.RoleID,
+		)
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+
+	var users []store.User
+	if err := query.
+		Order(userListOrder(input.Sort)).
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&users).Error; err != nil {
+		return nil, err
+	}
+
+	return &ListUsersResult{
+		Users:    users,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 func (s *Service) GetUser(ctx context.Context, id int64) (*store.User, error) {
@@ -369,4 +447,25 @@ func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
 
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func userListOrder(sort string) string {
+	switch strings.TrimSpace(sort) {
+	case "email_asc":
+		return "email ASC, id ASC"
+	case "email_desc":
+		return "email DESC, id DESC"
+	case "created_at_asc":
+		return "created_at ASC, id ASC"
+	case "updated_at_desc":
+		return "updated_at DESC, id DESC"
+	case "updated_at_asc":
+		return "updated_at ASC, id ASC"
+	case "id_asc":
+		return "id ASC"
+	case "id_desc":
+		return "id DESC"
+	default:
+		return "created_at DESC, id DESC"
+	}
 }

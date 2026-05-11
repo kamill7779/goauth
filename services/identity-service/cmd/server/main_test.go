@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -273,6 +274,164 @@ func TestAdminOAuthClientSecretRotation(t *testing.T) {
 	}
 }
 
+func TestAdminManagementListsReturnUsablePayloads(t *testing.T) {
+	router, db, sessionService, adminUser, otherUser := newIntegrationRouter(t)
+	makeSystemUser(t, db, adminUser.ID)
+	pair := issueIntegrationTokens(t, sessionService, *adminUser, 0)
+
+	tenantRecord := store.Tenant{Name: "Community Forum", Slug: "community-forum", Status: store.TenantStatusActive}
+	if err := db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("db.Create(tenant) error = %v", err)
+	}
+	member := store.TenantMember{TenantID: tenantRecord.ID, UserID: otherUser.ID, Status: store.MemberStatusActive}
+	if err := db.Create(&member).Error; err != nil {
+		t.Fatalf("db.Create(member) error = %v", err)
+	}
+	role := store.Role{TenantID: tenantRecord.ID, Name: "Moderator", Code: "moderator", Description: "Moderates forum content"}
+	if err := db.Create(&role).Error; err != nil {
+		t.Fatalf("db.Create(role) error = %v", err)
+	}
+	permission := store.Permission{Resource: "post", Action: "moderate", Code: "post:moderate", Description: "Moderate posts"}
+	if err := db.Create(&permission).Error; err != nil {
+		t.Fatalf("db.Create(permission) error = %v", err)
+	}
+	if err := db.Create(&store.RolePermission{RoleID: role.ID, PermissionID: permission.ID}).Error; err != nil {
+		t.Fatalf("db.Create(role permission) error = %v", err)
+	}
+	if err := db.Create(&store.MemberRole{MemberID: member.ID, RoleID: role.ID}).Error; err != nil {
+		t.Fatalf("db.Create(member role) error = %v", err)
+	}
+	_ = issueIntegrationTokens(t, sessionService, *otherUser, tenantRecord.ID)
+
+	users := performJSON(t, router, http.MethodGet, "/v1/admin/users?search=other&page=1&page_size=1&sort=email_desc", "", pair.AccessToken)
+	if users.Code != http.StatusOK {
+		t.Fatalf("users status = %d, want %d body=%s", users.Code, http.StatusOK, users.Body.String())
+	}
+	userData := decodeData(t, users)
+	userItems := asSlice(t, userData["users"], "users")
+	if len(userItems) != 1 {
+		t.Fatalf("users length = %d, want 1 body=%s", len(userItems), users.Body.String())
+	}
+	if total := numberFromAny(userData["total"]); total != 1 {
+		t.Fatalf("users total = %d, want 1 body=%s", total, users.Body.String())
+	}
+	userItem := asMap(t, userItems[0], "users[0]")
+	if got := stringFromAny(userItem["email"]); got != "other@example.com" {
+		t.Fatalf("user email = %q, want other@example.com", got)
+	}
+	if got := stringFromAny(userItem["tenant"]); !strings.Contains(got, "Community Forum") {
+		t.Fatalf("user tenant = %q, want Community Forum", got)
+	}
+	if got := stringFromAny(userItem["role"]); !strings.Contains(got, "Moderator") {
+		t.Fatalf("user role = %q, want Moderator", got)
+	}
+	if _, ok := userItem["email_verified"]; !ok {
+		t.Fatalf("user payload missing email_verified: %#v", userItem)
+	}
+	if got := stringFromAny(userItem["last_login"]); got == "" {
+		t.Fatalf("user last_login is empty: %#v", userItem)
+	}
+
+	tenants := performJSON(t, router, http.MethodGet, "/v1/admin/tenants?search=community&page=1&page_size=10", "", pair.AccessToken)
+	if tenants.Code != http.StatusOK {
+		t.Fatalf("tenants status = %d, want %d body=%s", tenants.Code, http.StatusOK, tenants.Body.String())
+	}
+	tenantData := decodeData(t, tenants)
+	tenantItems := asSlice(t, tenantData["tenants"], "tenants")
+	if len(tenantItems) != 1 {
+		t.Fatalf("tenants length = %d, want 1 body=%s", len(tenantItems), tenants.Body.String())
+	}
+	tenantItem := asMap(t, tenantItems[0], "tenants[0]")
+	if got := stringFromAny(tenantItem["name"]); got != "Community Forum" {
+		t.Fatalf("tenant name = %q, want Community Forum", got)
+	}
+	if got := numberFromAny(tenantItem["members_count"]); got != 1 {
+		t.Fatalf("tenant members_count = %d, want 1", got)
+	}
+	if got := numberFromAny(tenantItem["roles_count"]); got != 1 {
+		t.Fatalf("tenant roles_count = %d, want 1", got)
+	}
+
+	roles := performJSON(t, router, http.MethodGet, "/v1/admin/roles?tenant_id="+tenantIDString(tenantRecord.ID), "", pair.AccessToken)
+	if roles.Code != http.StatusOK {
+		t.Fatalf("roles status = %d, want %d body=%s", roles.Code, http.StatusOK, roles.Body.String())
+	}
+	roleData := decodeData(t, roles)
+	roleItems := asSlice(t, roleData["roles"], "roles")
+	if len(roleItems) != 1 {
+		t.Fatalf("roles length = %d, want 1 body=%s", len(roleItems), roles.Body.String())
+	}
+	roleItem := asMap(t, roleItems[0], "roles[0]")
+	if got := stringFromAny(roleItem["name"]); got != "Moderator" {
+		t.Fatalf("role name = %q, want Moderator", got)
+	}
+	if got := numberFromAny(roleItem["permissions_count"]); got != 1 {
+		t.Fatalf("role permissions_count = %d, want 1", got)
+	}
+	if got := numberFromAny(roleItem["users_count"]); got != 1 {
+		t.Fatalf("role users_count = %d, want 1", got)
+	}
+	permissionIDs := asSlice(t, roleItem["permission_ids"], "permission_ids")
+	if len(permissionIDs) != 1 || numberFromAny(permissionIDs[0]) != int(permission.ID) {
+		t.Fatalf("permission_ids = %#v, want [%d]", permissionIDs, permission.ID)
+	}
+}
+
+func TestAdminBulkUserOperations(t *testing.T) {
+	router, db, sessionService, adminUser, otherUser := newIntegrationRouter(t)
+	makeSystemUser(t, db, adminUser.ID)
+	pair := issueIntegrationTokens(t, sessionService, *adminUser, 0)
+	otherPair := issueIntegrationTokens(t, sessionService, *otherUser, 0)
+	thirdUser := store.User{
+		Email:        "bulk-third@example.com",
+		DisplayName:  "Bulk Third",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := db.Create(&thirdUser).Error; err != nil {
+		t.Fatalf("db.Create(thirdUser) error = %v", err)
+	}
+	thirdPair := issueIntegrationTokens(t, sessionService, thirdUser, 0)
+	userIDs := "[" + userIDString(otherUser.ID) + "," + userIDString(thirdUser.ID) + "]"
+
+	disable := performJSON(t, router, http.MethodPost, "/v1/admin/users/bulk-disable", `{"user_ids":`+userIDs+`}`, pair.AccessToken)
+	if disable.Code != http.StatusOK {
+		t.Fatalf("bulk disable status = %d, want %d body=%s", disable.Code, http.StatusOK, disable.Body.String())
+	}
+	assertUserStatus(t, db, otherUser.ID, store.UserStatusDisabled)
+	assertUserStatus(t, db, thirdUser.ID, store.UserStatusDisabled)
+
+	enable := performJSON(t, router, http.MethodPost, "/v1/admin/users/bulk-enable", `{"user_ids":`+userIDs+`}`, pair.AccessToken)
+	if enable.Code != http.StatusOK {
+		t.Fatalf("bulk enable status = %d, want %d body=%s", enable.Code, http.StatusOK, enable.Body.String())
+	}
+	assertUserStatus(t, db, otherUser.ID, store.UserStatusActive)
+	assertUserStatus(t, db, thirdUser.ID, store.UserStatusActive)
+
+	tenantRecord := store.Tenant{Name: "Bulk Tenant", Slug: "bulk-tenant", Status: store.TenantStatusActive}
+	if err := db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("db.Create(tenant) error = %v", err)
+	}
+	addMember := performJSON(t, router, http.MethodPost, "/v1/admin/users/bulk-add-to-tenant", `{"tenant_id":`+tenantIDString(tenantRecord.ID)+`,"user_ids":`+userIDs+`}`, pair.AccessToken)
+	if addMember.Code != http.StatusOK {
+		t.Fatalf("bulk add tenant status = %d, want %d body=%s", addMember.Code, http.StatusOK, addMember.Body.String())
+	}
+	assertTenantMembershipCount(t, db, tenantRecord.ID, []int64{otherUser.ID, thirdUser.ID}, 2)
+
+	removeMember := performJSON(t, router, http.MethodPost, "/v1/admin/users/bulk-remove-from-tenant", `{"tenant_id":`+tenantIDString(tenantRecord.ID)+`,"user_ids":`+userIDs+`}`, pair.AccessToken)
+	if removeMember.Code != http.StatusOK {
+		t.Fatalf("bulk remove tenant status = %d, want %d body=%s", removeMember.Code, http.StatusOK, removeMember.Body.String())
+	}
+	assertTenantMembershipCount(t, db, tenantRecord.ID, []int64{otherUser.ID, thirdUser.ID}, 0)
+
+	logout := performJSON(t, router, http.MethodPost, "/v1/admin/users/bulk-logout", `{"user_ids":`+userIDs+`}`, pair.AccessToken)
+	if logout.Code != http.StatusOK {
+		t.Fatalf("bulk logout status = %d, want %d body=%s", logout.Code, http.StatusOK, logout.Body.String())
+	}
+	assertSessionRevoked(t, db, otherPair.SessionID)
+	assertSessionRevoked(t, db, thirdPair.SessionID)
+}
+
 func newIntegrationRouter(t *testing.T) (*gin.Engine, *gorm.DB, *session.Service, *store.User, *store.User) {
 	t.Helper()
 
@@ -405,6 +564,32 @@ func assertSessionRevoked(t *testing.T, db *gorm.DB, sessionID string) {
 	}
 }
 
+func assertUserStatus(t *testing.T, db *gorm.DB, userID int64, status string) {
+	t.Helper()
+
+	var userRecord store.User
+	if err := db.First(&userRecord, userID).Error; err != nil {
+		t.Fatalf("load user %d: %v", userID, err)
+	}
+	if userRecord.Status != status {
+		t.Fatalf("user %d status = %q, want %q", userID, userRecord.Status, status)
+	}
+}
+
+func assertTenantMembershipCount(t *testing.T, db *gorm.DB, tenantID int64, userIDs []int64, want int64) {
+	t.Helper()
+
+	var count int64
+	if err := db.Model(&store.TenantMember{}).
+		Where("tenant_id = ? AND user_id IN ?", tenantID, userIDs).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count tenant memberships: %v", err)
+	}
+	if count != want {
+		t.Fatalf("tenant membership count = %d, want %d", count, want)
+	}
+}
+
 func makeSystemUser(t *testing.T, db *gorm.DB, userID int64) {
 	t.Helper()
 
@@ -426,6 +611,62 @@ func performJSON(t *testing.T, router http.Handler, method, target, body, access
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func decodeData(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+
+	var envelope struct {
+		Success bool           `json:"success"`
+		Data    map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("decode response %q: %v", recorder.Body.String(), err)
+	}
+	if !envelope.Success {
+		t.Fatalf("success = false body=%s", recorder.Body.String())
+	}
+	return envelope.Data
+}
+
+func asSlice(t *testing.T, value any, name string) []any {
+	t.Helper()
+
+	items, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want slice", name, value)
+	}
+	return items
+}
+
+func asMap(t *testing.T, value any, name string) map[string]any {
+	t.Helper()
+
+	item, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %#v, want object", name, value)
+	}
+	return item
+}
+
+func stringFromAny(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func numberFromAny(value any) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	default:
+		return 0
+	}
 }
 
 func mustRSAKey(t *testing.T) *rsa.PrivateKey {
