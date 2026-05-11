@@ -8,6 +8,7 @@ import (
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/auth"
+	"goauth/services/identity-service/internal/identity"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -446,7 +447,7 @@ func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
 }
 
 func normalizeEmail(email string) string {
-	return strings.ToLower(strings.TrimSpace(email))
+	return identity.NormalizeEmail(email)
 }
 
 func userListOrder(sort string) string {

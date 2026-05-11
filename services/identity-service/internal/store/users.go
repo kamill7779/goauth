@@ -4,52 +4,17 @@ import (
 	"fmt"
 	"strings"
 
+	"goauth/services/identity-service/internal/identity"
+
 	"gorm.io/gorm"
 )
 
 const (
 	usernameMaxLength = 64
-	usernameMinLength = 3
 )
 
-// deriveUsernameBase produces a deterministic username candidate from an email
-// local-part. The result is lowercase, contains only a-z, 0-9, "_" or "-",
-// has dashes folded, and is trimmed to the column width. An empty string is
-// returned when the email is malformed or the sanitised local-part is too
-// short — callers must fall back to a synthesised name such as "user<ID>".
 func deriveUsernameBase(email string) string {
-	email = strings.TrimSpace(email)
-	at := strings.Index(email, "@")
-	if at <= 0 {
-		return ""
-	}
-	local := strings.ToLower(email[:at])
-
-	var b strings.Builder
-	prevDash := false
-	for _, r := range local {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			prevDash = false
-		case r == '_':
-			b.WriteRune(r)
-			prevDash = false
-		case r == '-', r == '.', r == '+':
-			if b.Len() > 0 && !prevDash {
-				b.WriteRune('-')
-				prevDash = true
-			}
-		}
-	}
-	candidate := strings.Trim(b.String(), "-_")
-	if len(candidate) < usernameMinLength {
-		return ""
-	}
-	if len(candidate) > usernameMaxLength {
-		candidate = candidate[:usernameMaxLength]
-	}
-	return candidate
+	return identity.UsernameFromEmail(email)
 }
 
 // deriveNicknameForUser returns the nickname to write when a caller did not

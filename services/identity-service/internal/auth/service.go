@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/identity"
 	"goauth/services/identity-service/internal/mailer"
 	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
@@ -261,5 +262,5 @@ func emailCodeKey(purpose, email string) string {
 }
 
 func normalizeEmail(email string) string {
-	return strings.ToLower(strings.TrimSpace(email))
+	return identity.NormalizeEmail(email)
 }
