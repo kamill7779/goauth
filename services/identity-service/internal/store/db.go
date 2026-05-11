@@ -21,6 +21,11 @@ func OpenDB(cfg config.Config) (*gorm.DB, error) {
 }
 
 func AutoMigrate(db *gorm.DB) error {
+	// For pre-existing tables, add the new columns with a safe default so
+	// GORM can run its own migration without constraint violations.
+	if err := setupUserIdentityColumns(db); err != nil {
+		return err
+	}
 	if err := db.AutoMigrate(
 		&User{},
 		&UserIdentity{},
@@ -39,7 +44,66 @@ func AutoMigrate(db *gorm.DB) error {
 	); err != nil {
 		return err
 	}
+	// Backfill happens after GORM has stabilised the schema so that table
+	// rebuilds inside the driver cannot undo our updates.
+	if err := backfillUserIdentityFields(db); err != nil {
+		return err
+	}
+	if err := ensureUsernameUniqueIndex(db); err != nil {
+		return err
+	}
 	return backfillLoginSessions(db)
+}
+
+// setupUserIdentityColumns adds the new username and nickname columns to
+// pre-existing user tables. GORM may rebuild the table during its own
+// AutoMigrate pass so we defer the backfill and unique index to later.
+func setupUserIdentityColumns(db *gorm.DB) error {
+	if db == nil {
+		return nil
+	}
+	migrator := db.Migrator()
+	if !migrator.HasTable(&User{}) {
+		return nil
+	}
+	if !migrator.HasColumn(&User{}, "username") {
+		if err := db.Exec(`ALTER TABLE users ADD COLUMN username VARCHAR(64) NOT NULL DEFAULT ''`).Error; err != nil {
+			return fmt.Errorf("add users.username column: %w", err)
+		}
+	}
+	if !migrator.HasColumn(&User{}, "nickname") {
+		if err := db.Exec(`ALTER TABLE users ADD COLUMN nickname VARCHAR(255) NOT NULL DEFAULT ''`).Error; err != nil {
+			return fmt.Errorf("add users.nickname column: %w", err)
+		}
+	}
+	return nil
+}
+
+func ensureUsernameUniqueIndex(db *gorm.DB) error {
+	indexName := "idx_users_username"
+	if hasIndex(db.Migrator(), "users", indexName) {
+		return nil
+	}
+	if !db.Migrator().HasColumn(&User{}, "username") {
+		return nil
+	}
+	return db.Exec(fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %s ON users(username)`, indexName)).Error
+}
+
+func hasIndex(migrator gorm.Migrator, table, indexName string) bool {
+	if migrator == nil {
+		return false
+	}
+	indexes, err := migrator.GetIndexes(table)
+	if err != nil {
+		return false
+	}
+	for _, idx := range indexes {
+		if idx.Name() == indexName {
+			return true
+		}
+	}
+	return false
 }
 
 func backfillLoginSessions(db *gorm.DB) error {

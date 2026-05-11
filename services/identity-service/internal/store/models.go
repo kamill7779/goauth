@@ -19,6 +19,8 @@ const (
 type User struct {
 	ID              int64  `gorm:"primaryKey;autoIncrement"`
 	Email           string `gorm:"size:255;not null;uniqueIndex"`
+	Username        string `gorm:"size:64;not null;default:''"`
+	Nickname        string `gorm:"size:255;not null;default:''"`
 	EmailVerifiedAt *time.Time
 	PasswordHash    string         `gorm:"size:255;not null"`
 	DisplayName     string         `gorm:"size:255;not null"`
@@ -28,6 +30,20 @@ type User struct {
 	CreatedAt       time.Time      `gorm:"not null"`
 	UpdatedAt       time.Time      `gorm:"not null"`
 	DeletedAt       gorm.DeletedAt `gorm:"index"`
+}
+
+// BeforeCreate fills derived identity fields so callers that have not yet been
+// migrated to the new contract (Task 3+) still get valid, unique usernames and
+// nicknames. The migration backfill uses the same helpers, so the two paths
+// stay in sync.
+func (u *User) BeforeCreate(tx *gorm.DB) error {
+	if u.Nickname == "" {
+		u.Nickname = deriveNicknameForUser(u)
+	}
+	if u.Username == "" {
+		u.Username = ensureUniqueUsername(tx, deriveUsernameBase(u.Email), 0)
+	}
+	return nil
 }
 
 type UserIdentity struct {
