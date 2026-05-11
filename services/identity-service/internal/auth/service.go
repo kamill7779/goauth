@@ -18,16 +18,20 @@ import (
 )
 
 var (
-	ErrInvalidEmailCode  = errors.New("invalid email code")
-	ErrEmailAlreadyUsed  = errors.New("email already exists")
-	ErrInvalidCredential = errors.New("invalid credentials")
-	ErrUserDisabled      = errors.New("user disabled")
+	ErrInvalidEmailCode   = errors.New("invalid email code")
+	ErrEmailAlreadyUsed   = errors.New("email already exists")
+	ErrUsernameAlreadyUsed = errors.New("username already exists")
+	ErrInvalidUsername     = errors.New("invalid username")
+	ErrInvalidCredential   = errors.New("invalid credentials")
+	ErrUserDisabled        = errors.New("user disabled")
 )
 
 type MailMessage = mailer.Message
 type MailSender = mailer.Sender
 
 type RegisterInput struct {
+	Username    string
+	Nickname    string
 	Email       string
 	DisplayName string
 	Password    string
@@ -36,8 +40,9 @@ type RegisterInput struct {
 }
 
 type LoginInput struct {
-	Email    string
-	Password string
+	Identifier string
+	Email      string // legacy fallback
+	Password   string
 }
 
 type ResetPasswordInput struct {
@@ -115,6 +120,24 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		return nil, err
 	}
 
+	username := strings.TrimSpace(input.Username)
+	if username == "" {
+		username = identity.UsernameFromEmail(email)
+		if username == "" {
+			return nil, fmt.Errorf("%w: cannot derive username from %q", ErrInvalidUsername, email)
+		}
+	}
+	normalizedUser, err := identity.NormalizeUsername(username)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidUsername, err)
+	}
+
+	nickname := identity.NormalizeNickname(input.Nickname, normalizedUser)
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		displayName = nickname
+	}
+
 	hash, err := HashPassword(input.Password)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
@@ -122,14 +145,13 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 
 	now := s.now()
 	user := &store.User{
+		Username:        normalizedUser,
+		Nickname:        nickname,
 		Email:           email,
 		EmailVerifiedAt: &now,
 		PasswordHash:    hash,
-		DisplayName:     strings.TrimSpace(input.DisplayName),
+		DisplayName:     displayName,
 		Status:          store.UserStatusActive,
-	}
-	if user.DisplayName == "" {
-		user.DisplayName = email
 	}
 
 	var provisionedMembers []store.TenantMember
@@ -144,7 +166,11 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		provisionedMembers = members
 		return nil
 	}); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+		lower := strings.ToLower(err.Error())
+		if strings.Contains(lower, "unique") || strings.Contains(lower, "duplicate") {
+			if strings.Contains(lower, "username") {
+				return nil, ErrUsernameAlreadyUsed
+			}
 			return nil, ErrEmailAlreadyUsed
 		}
 		return nil, err
@@ -158,13 +184,37 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 }
 
 func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, error) {
+	identifier := strings.TrimSpace(input.Identifier)
+	identifierType := "unknown"
+
 	var user store.User
-	if err := s.db.WithContext(ctx).Where("email = ?", normalizeEmail(input.Email)).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrInvalidCredential
+	if identifier != "" {
+		identifierType = loginIdentifierType(identifier)
+		var err error
+		if identity.IsUsernameLikeIdentifier(identifier) {
+			user, err = s.lookupUserByUsername(ctx, identifier)
+		} else {
+			user, err = s.lookupUserByEmail(ctx, identifier)
 		}
-		return nil, err
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrInvalidCredential
+			}
+			return nil, err
+		}
+	} else {
+		// Legacy fallback: email field
+		identifierType = "email"
+		var err error
+		user, err = s.lookupUserByEmail(ctx, input.Email)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrInvalidCredential
+			}
+			return nil, err
+		}
 	}
+
 	if user.Status == store.UserStatusDisabled {
 		return nil, ErrUserDisabled
 	}
@@ -177,12 +227,35 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, err
 		TargetType:  audit.TargetTypeUser,
 		TargetID:    audit.UserTargetID(user.ID),
 		Metadata: map[string]any{
-			"email": user.Email,
+			"identifier_type": identifierType,
 		},
 	}); err != nil {
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (s *Service) lookupUserByEmail(ctx context.Context, email string) (store.User, error) {
+	var user store.User
+	err := s.db.WithContext(ctx).Where("email = ?", normalizeEmail(email)).First(&user).Error
+	return user, err
+}
+
+func (s *Service) lookupUserByUsername(ctx context.Context, raw string) (store.User, error) {
+	username, err := identity.NormalizeUsername(raw)
+	if err != nil {
+		return store.User{}, gorm.ErrRecordNotFound
+	}
+	var user store.User
+	dbErr := s.db.WithContext(ctx).Where("username = ?", username).First(&user).Error
+	return user, dbErr
+}
+
+func loginIdentifierType(identifier string) string {
+	if identity.IsUsernameLikeIdentifier(identifier) {
+		return "username"
+	}
+	return "email"
 }
 
 func (s *Service) ForgotPassword(ctx context.Context, email string) error {

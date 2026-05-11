@@ -253,6 +253,163 @@ func TestLoginWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestRegisterRequiresUniqueUsername(t *testing.T) {
+	service, _, _ := newTestService(t)
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "user1@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+	if _, err := service.Register(context.Background(), RegisterInput{
+		Username:    "kamuii",
+		Nickname:    "卡密",
+		Email:       "user1@example.com",
+		DisplayName: "卡密",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	}); err != nil {
+		t.Fatalf("first Register() error = %v", err)
+	}
+
+	code2, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "user2@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() second error = %v", err)
+	}
+	_, err = service.Register(context.Background(), RegisterInput{
+		Username:    "kamuii",
+		Nickname:    "卡密2",
+		Email:       "user2@example.com",
+		DisplayName: "卡密2",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code2,
+		CodePurpose: EmailCodePurposeRegister,
+	})
+	if err == nil {
+		t.Fatal("expected duplicate username Register() to fail")
+	}
+}
+
+func TestRegisterStoresNicknameSeparately(t *testing.T) {
+	service, _, _ := newTestService(t)
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "named@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+	user, err := service.Register(context.Background(), RegisterInput{
+		Username:    "named-user",
+		Nickname:    "张三",
+		Email:       "named@example.com",
+		DisplayName: "张三Display",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	})
+	if err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	if user.Username != "named-user" {
+		t.Fatalf("username = %q, want %q", user.Username, "named-user")
+	}
+	if user.Nickname != "张三" {
+		t.Fatalf("nickname = %q, want %q", user.Nickname, "张三")
+	}
+}
+
+func TestLoginAcceptsUsernameIdentifier(t *testing.T) {
+	service, _, _ := newTestService(t)
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "ident@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+	if _, err := service.Register(context.Background(), RegisterInput{
+		Username:    "identifier-test",
+		Nickname:    "Ident Test",
+		Email:       "ident@example.com",
+		DisplayName: "Ident Test",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	user, err := service.Login(context.Background(), LoginInput{
+		Identifier: "identifier-test",
+		Password:   "p@ssw0rd!",
+	})
+	if err != nil {
+		t.Fatalf("Login() with username identifier error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected user from login")
+	}
+}
+
+func TestLoginAcceptsEmailIdentifier(t *testing.T) {
+	service, _, _ := newTestService(t)
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "ident2@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+	if _, err := service.Register(context.Background(), RegisterInput{
+		Username:    "ident2-user",
+		Nickname:    "Ident2",
+		Email:       "ident2@example.com",
+		DisplayName: "Ident2",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	user, err := service.Login(context.Background(), LoginInput{
+		Identifier: "ident2@example.com",
+		Password:   "p@ssw0rd!",
+	})
+	if err != nil {
+		t.Fatalf("Login() with email identifier error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected user from login")
+	}
+}
+
+func TestLoginAcceptsLegacyEmailField(t *testing.T) {
+	service, _, _ := newTestService(t)
+
+	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "legacy@example.com")
+	if err != nil {
+		t.Fatalf("SendEmailCode() error = %v", err)
+	}
+	if _, err := service.Register(context.Background(), RegisterInput{
+		Username:    "legacy-user",
+		Nickname:    "Legacy",
+		Email:       "legacy@example.com",
+		DisplayName: "Legacy",
+		Password:    "p@ssw0rd!",
+		EmailCode:   code,
+		CodePurpose: EmailCodePurposeRegister,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	user, err := service.Login(context.Background(), LoginInput{
+		Email:    "legacy@example.com",
+		Password: "p@ssw0rd!",
+	})
+	if err != nil {
+		t.Fatalf("Login() with legacy email field error = %v", err)
+	}
+	if user == nil {
+		t.Fatal("expected user from legacy login")
+	}
+}
+
 func TestResetPasswordWritesAuditLog(t *testing.T) {
 	service, _, _ := newTestService(t)
 	service.SetAuditRecorder(audit.NewService(service.db))

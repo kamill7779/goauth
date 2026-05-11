@@ -57,6 +57,8 @@ func (h *Handler) sendCode(c *gin.Context) {
 
 func (h *Handler) register(c *gin.Context) {
 	var request struct {
+		Username    string `json:"username"`
+		Nickname    string `json:"nickname"`
 		Email       string `json:"email"`
 		DisplayName string `json:"display_name"`
 		Password    string `json:"password"`
@@ -68,6 +70,8 @@ func (h *Handler) register(c *gin.Context) {
 	}
 
 	user, err := h.service.Register(c.Request.Context(), RegisterInput{
+		Username:    request.Username,
+		Nickname:    request.Nickname,
 		Email:       request.Email,
 		DisplayName: request.DisplayName,
 		Password:    request.Password,
@@ -87,20 +91,26 @@ func (h *Handler) register(c *gin.Context) {
 
 func (h *Handler) login(c *gin.Context) {
 	var request struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Identifier string `json:"identifier"`
+		Email      string `json:"email"`
+		Password   string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if !h.allowJSONRateLimit(c, loginRateLimitScope, rateLimitKey(c, request.Email), loginRateLimitLimit, loginRateLimitWindow) {
+	rlKey := request.Identifier
+	if rlKey == "" {
+		rlKey = request.Email
+	}
+	if !h.allowJSONRateLimit(c, loginRateLimitScope, rateLimitKey(c, rlKey), loginRateLimitLimit, loginRateLimitWindow) {
 		return
 	}
 
 	result, err := h.completeLogin(c.Request.Context(), LoginInput{
-		Email:    request.Email,
-		Password: request.Password,
+		Identifier: request.Identifier,
+		Email:      request.Email,
+		Password:   request.Password,
 	})
 	if err != nil {
 		statusCode, message := loginErrorResponse(err)

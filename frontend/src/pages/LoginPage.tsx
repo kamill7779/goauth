@@ -4,15 +4,21 @@ import { login, register, sendEmailCode } from '../api/auth'
 import ThemeToggle from '../components/admin/ThemeToggle'
 
 interface FormData {
+  identifier: string
   email: string
   password: string
+  username: string
+  nickname: string
   displayName: string
   emailCode: string
 }
 
 const initialForm: FormData = {
+  identifier: '',
   email: '',
   password: '',
+  username: '',
+  nickname: '',
   displayName: '',
   emailCode: '',
 }
@@ -106,7 +112,7 @@ export default function LoginPage() {
     setSuccess('')
 
     try {
-      const result = await login({ email: form.email, password: form.password })
+      const result = await login({ identifier: form.identifier || form.email, password: form.password })
       window.localStorage.setItem('access_token', result.access_token)
       window.localStorage.setItem('refresh_token', result.refresh_token)
       if (returnTo) {
@@ -129,8 +135,10 @@ export default function LoginPage() {
 
     try {
       await register({
+        username: form.username,
+        nickname: form.nickname,
         email: form.email,
-        display_name: form.displayName,
+        display_name: form.displayName || form.nickname,
         password: form.password,
         email_code: form.emailCode,
       })
@@ -378,17 +386,17 @@ export default function LoginPage() {
           style={{ display: tab === 'login' ? 'block' : 'none', animation: tab === 'login' ? 'fadeIn 0.35s ease' : 'none' }}
         >
           <div style={{ marginBottom: '18px' }}>
-            <label htmlFor="login-email" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
-              邮箱地址
+            <label htmlFor="login-identifier" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
+              用户名或邮箱
             </label>
             <input
-              id="login-email"
-              name="email"
-              type="email"
-              value={form.email}
-              onChange={e => updateField('email', e.target.value)}
-              placeholder="name@company.com"
-              autoComplete="email"
+              id="login-identifier"
+              name="identifier"
+              type="text"
+              value={form.identifier}
+              onChange={e => updateField('identifier', e.target.value)}
+              placeholder="用户名或 name@company.com"
+              autoComplete="username"
               required
               style={inputStyle}
             />

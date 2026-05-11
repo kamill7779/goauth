@@ -6,7 +6,7 @@ export interface AuthSession {
 }
 
 export interface LoginInput {
-  email: string;
+  identifier: string;
   password: string;
 }
 
@@ -17,6 +17,8 @@ export interface LoginResponse {
 }
 
 export interface RegisterInput {
+  username: string;
+  nickname: string;
   email: string;
   display_name: string;
   password: string;
