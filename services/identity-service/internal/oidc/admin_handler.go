@@ -36,6 +36,7 @@ func (h *AdminHandler) RegisterRoutes(router *gin.Engine) {
 	admin.GET("/oauth-clients", h.listClients)
 	admin.POST("/oauth-clients", h.createClient)
 	admin.PATCH("/oauth-clients/:client_id/status", h.updateClientStatus)
+	admin.POST("/oauth-clients/:client_id/rotate-secret", h.rotateClientSecret)
 }
 
 func (h *AdminHandler) listClients(c *gin.Context) {
@@ -102,6 +103,26 @@ func (h *AdminHandler) updateClientStatus(c *gin.Context) {
 		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "invalid oauth client data"})
 		return
 	}
+	httpserver.Success(c, stdhttp.StatusOK, payload)
+}
+
+func (h *AdminHandler) rotateClientSecret(c *gin.Context) {
+	client, secret, err := h.service.RotateClientSecret(c.Request.Context(), c.Param("client_id"))
+	if err != nil {
+		status := stdhttp.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = stdhttp.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	payload, err := oauthClientPayload(*client)
+	if err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "invalid oauth client data"})
+		return
+	}
+	payload["client_secret"] = secret
 	httpserver.Success(c, stdhttp.StatusOK, payload)
 }
 

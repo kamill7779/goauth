@@ -12,12 +12,15 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/oidc"
 	"goauth/services/identity-service/internal/rbac"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
 	"goauth/services/identity-service/internal/tenant"
+	"goauth/services/identity-service/internal/user"
 	"gorm.io/gorm"
 )
 
@@ -190,6 +193,86 @@ func TestReadyzChecksDBAndRedisClients(t *testing.T) {
 	}
 }
 
+func TestAdminConsoleSupplementalRoutes(t *testing.T) {
+	router, db, sessionService, adminUser, otherUser := newIntegrationRouter(t)
+	makeSystemUser(t, db, adminUser.ID)
+	pair := issueIntegrationTokens(t, sessionService, *adminUser, 0)
+	otherPair := issueIntegrationTokens(t, sessionService, *otherUser, 0)
+
+	permissionBody := `{"resource":"file","action":"read","code":"file:read","description":"Read files"}`
+	permissionRecorder := performJSON(t, router, http.MethodPost, "/v1/admin/permissions", permissionBody, pair.AccessToken)
+	if permissionRecorder.Code != http.StatusCreated {
+		t.Fatalf("create permission status = %d, want %d body=%s", permissionRecorder.Code, http.StatusCreated, permissionRecorder.Body.String())
+	}
+
+	cases := []struct {
+		name     string
+		method   string
+		target   string
+		body     string
+		wantCode int
+		wantBody string
+	}{
+		{name: "dashboard", method: http.MethodGet, target: "/v1/admin/dashboard", wantCode: http.StatusOK, wantBody: "total_users"},
+		{name: "permissions", method: http.MethodGet, target: "/v1/admin/permissions", wantCode: http.StatusOK, wantBody: "file:read"},
+		{name: "user sessions", method: http.MethodGet, target: "/v1/admin/users/" + userIDString(otherUser.ID) + "/sessions", wantCode: http.StatusOK, wantBody: otherPair.SessionID},
+		{name: "audit logs", method: http.MethodGet, target: "/v1/admin/audit-logs", wantCode: http.StatusOK, wantBody: "audit_logs"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := performJSON(t, router, tc.method, tc.target, tc.body, pair.AccessToken)
+			if recorder.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d body=%s", recorder.Code, tc.wantCode, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), tc.wantBody) {
+				t.Fatalf("body = %s, want %q", recorder.Body.String(), tc.wantBody)
+			}
+		})
+	}
+
+	logoutRecorder := performJSON(t, router, http.MethodPost, "/v1/admin/users/"+userIDString(otherUser.ID)+"/logout-all", `{}`, pair.AccessToken)
+	if logoutRecorder.Code != http.StatusOK {
+		t.Fatalf("logout-all status = %d, want %d body=%s", logoutRecorder.Code, http.StatusOK, logoutRecorder.Body.String())
+	}
+	assertSessionRevoked(t, db, otherPair.SessionID)
+}
+
+func TestAdminOAuthClientSecretRotation(t *testing.T) {
+	router, db, sessionService, adminUser, _ := newIntegrationRouter(t)
+	makeSystemUser(t, db, adminUser.ID)
+	pair := issueIntegrationTokens(t, sessionService, *adminUser, 0)
+
+	tenantRecord := store.Tenant{Name: "App Tenant", Slug: "app-tenant", Status: store.TenantStatusActive}
+	if err := db.Create(&tenantRecord).Error; err != nil {
+		t.Fatalf("db.Create(tenant) error = %v", err)
+	}
+	oidcService := oidc.NewService(db, config.Config{RefreshTokenTTL: 30 * 24 * time.Hour}, mustRSAKey(t))
+	client, err := oidcService.CreateClient(t.Context(), oidc.CreateClientInput{
+		TenantID:                tenantRecord.ID,
+		ClientID:                "admin-rotate-client",
+		ClientSecret:            "old-secret",
+		Name:                    "Admin Rotate Client",
+		RedirectURIs:            []string{"https://app.example.com/callback"},
+		AllowedScopes:           []string{"openid"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_post",
+	})
+	if err != nil {
+		t.Fatalf("CreateClient() error = %v", err)
+	}
+
+	recorder := performJSON(t, router, http.MethodPost, "/v1/admin/oauth-clients/"+client.ClientID+"/rotate-secret", `{}`, pair.AccessToken)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("rotate status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "client_secret") {
+		t.Fatalf("body = %s, want client_secret", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "client_secret_hash") {
+		t.Fatalf("body leaked client_secret_hash: %s", recorder.Body.String())
+	}
+}
+
 func newIntegrationRouter(t *testing.T) (*gin.Engine, *gorm.DB, *session.Service, *store.User, *store.User) {
 	t.Helper()
 
@@ -306,6 +389,53 @@ func assertSessionStillActive(t *testing.T, db *gorm.DB, sessionID string) {
 	if count == 0 {
 		t.Fatalf("session %s was unexpectedly revoked", sessionID)
 	}
+}
+
+func assertSessionRevoked(t *testing.T, db *gorm.DB, sessionID string) {
+	t.Helper()
+
+	var count int64
+	if err := db.Model(&store.RefreshToken{}).
+		Where("session_id = ? AND revoked_at IS NULL", sessionID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("count active session tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("session %s still has %d active tokens", sessionID, count)
+	}
+}
+
+func makeSystemUser(t *testing.T, db *gorm.DB, userID int64) {
+	t.Helper()
+
+	if err := user.NewService(db, audit.NoopRecorder{}).MarkSystemUser(t.Context(), userID, "root"); err != nil {
+		t.Fatalf("MarkSystemUser() error = %v", err)
+	}
+}
+
+func performJSON(t *testing.T, router http.Handler, method, target, body, accessToken string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	if body != "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if accessToken != "" {
+		request.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func mustRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+	return privateKey
 }
 
 func tenantIDString(id int64) string {

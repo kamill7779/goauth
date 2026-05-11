@@ -144,6 +144,44 @@ func (s *Service) UpdateClientStatus(ctx context.Context, clientID, status strin
 	return client, nil
 }
 
+func (s *Service) RotateClientSecret(ctx context.Context, clientID string) (*store.OAuthClient, string, error) {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return nil, "", errors.New("client id is required")
+	}
+
+	secret, err := s.randomID(32)
+	if err != nil {
+		return nil, "", err
+	}
+	secretHash, err := auth.HashPassword(secret)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.db.WithContext(ctx).
+		Model(&store.OAuthClient{}).
+		Where("client_id = ?", clientID).
+		Update("client_secret_hash", secretHash).Error; err != nil {
+		return nil, "", err
+	}
+
+	client, err := s.loadClient(ctx, clientID)
+	if err != nil {
+		return nil, "", err
+	}
+	_ = s.audit.Record(ctx, audit.Entry{
+		Action:     audit.ActionOAuthClientChanged,
+		TenantID:   client.TenantID,
+		TargetType: audit.TargetTypeOAuthClient,
+		TargetID:   client.ClientID,
+		Metadata: map[string]any{
+			"change": "secret_rotated",
+			"name":   client.Name,
+		},
+	})
+	return client, secret, nil
+}
+
 func (s *Service) loadClient(ctx context.Context, clientID string) (*store.OAuthClient, error) {
 	var client store.OAuthClient
 	if err := s.db.WithContext(ctx).Where("client_id = ?", strings.TrimSpace(clientID)).First(&client).Error; err != nil {
