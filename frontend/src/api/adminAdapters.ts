@@ -93,9 +93,13 @@ export function normalizeUser(raw: unknown): User {
   const record = isRecord(raw) ? raw : {};
   const email = stringField(record, ['email', 'Email']);
   const displayName = stringField(record, ['display_name', 'DisplayName'], email);
+  const username = stringField(record, ['username', 'Username']);
+  const nickname = stringField(record, ['nickname', 'Nickname'], displayName);
 
   return {
     id: numberField(record, ['id', 'ID']),
+    username,
+    nickname,
     display_name: displayName,
     email,
     role: stringField(record, ['role'], '-'),

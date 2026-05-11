@@ -24,6 +24,8 @@ type Service struct {
 }
 
 type CreateUserInput struct {
+	Username    string `json:"username"`
+	Nickname    string `json:"nickname"`
 	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
 	Password    string `json:"password"`
@@ -33,6 +35,7 @@ type CreateUserInput struct {
 
 type UpdateUserInput struct {
 	Email       *string `json:"email"`
+	Nickname    *string `json:"nickname"`
 	DisplayName *string `json:"display_name"`
 	AvatarURL   *string `json:"avatar_url"`
 }
@@ -93,7 +96,7 @@ func (s *Service) ListUsersPage(ctx context.Context, input ListUsersInput) (*Lis
 	query := s.db.WithContext(ctx).Model(&store.User{})
 	if search := strings.ToLower(strings.TrimSpace(input.Search)); search != "" {
 		like := "%" + search + "%"
-		query = query.Where("LOWER(email) LIKE ? OR LOWER(display_name) LIKE ?", like, like)
+		query = query.Where("LOWER(username) LIKE ? OR LOWER(nickname) LIKE ? OR LOWER(email) LIKE ? OR LOWER(display_name) LIKE ?", like, like, like, like)
 	}
 	if status := strings.TrimSpace(input.Status); status != "" {
 		query = query.Where("status = ?", status)
@@ -157,18 +160,34 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*store
 		status = store.UserStatusActive
 	}
 
-	displayName := strings.TrimSpace(input.DisplayName)
 	email := normalizeEmail(input.Email)
+
+	username := strings.TrimSpace(input.Username)
+	if username == "" {
+		username = identity.UsernameFromEmail(email)
+		if username == "" {
+			return nil, errors.New("cannot derive username from email")
+		}
+	}
+	normalizedUser, err := identity.NormalizeUsername(username)
+	if err != nil {
+		return nil, err
+	}
+
+	nickname := identity.NormalizeNickname(input.Nickname, normalizedUser)
+	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" {
-		displayName = email
+		displayName = nickname
 	}
 
 	record := &store.User{
-		Email:        email,
-		DisplayName:  displayName,
-		PasswordHash: hash,
-		AvatarURL:    strings.TrimSpace(input.AvatarURL),
-		Status:       status,
+		Username:      normalizedUser,
+		Nickname:      nickname,
+		Email:         email,
+		DisplayName:   displayName,
+		PasswordHash:  hash,
+		AvatarURL:     strings.TrimSpace(input.AvatarURL),
+		Status:        status,
 	}
 	if err := s.db.WithContext(ctx).Create(record).Error; err != nil {
 		return nil, err
@@ -190,6 +209,12 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInpu
 	updates := map[string]any{}
 	if input.Email != nil {
 		updates["email"] = normalizeEmail(*input.Email)
+	}
+	if input.Nickname != nil {
+		nickname := identity.NormalizeNickname(*input.Nickname, "")
+		if nickname != "" {
+			updates["nickname"] = nickname
+		}
 	}
 	if input.DisplayName != nil {
 		updates["display_name"] = strings.TrimSpace(*input.DisplayName)
@@ -452,6 +477,10 @@ func normalizeEmail(email string) string {
 
 func userListOrder(sort string) string {
 	switch strings.TrimSpace(sort) {
+	case "username_asc":
+		return "username ASC, id ASC"
+	case "username_desc":
+		return "username DESC, id DESC"
 	case "email_asc":
 		return "email ASC, id ASC"
 	case "email_desc":

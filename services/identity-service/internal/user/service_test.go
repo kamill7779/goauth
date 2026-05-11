@@ -28,18 +28,18 @@ func TestListUsersReturnsUsers(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := service.CreateUser(ctx, CreateUserInput{
-		Email:       "a@example.com",
-		DisplayName: "A",
+		Email:       "alpha@example.com",
+		DisplayName: "Alpha User",
 		Password:    "password-1",
 	}); err != nil {
-		t.Fatalf("CreateUser(a) error = %v", err)
+		t.Fatalf("CreateUser(alpha) error = %v", err)
 	}
 	if _, err := service.CreateUser(ctx, CreateUserInput{
-		Email:       "b@example.com",
-		DisplayName: "B",
+		Email:       "beta@example.com",
+		DisplayName: "Beta User",
 		Password:    "password-2",
 	}); err != nil {
-		t.Fatalf("CreateUser(b) error = %v", err)
+		t.Fatalf("CreateUser(beta) error = %v", err)
 	}
 
 	users, err := service.ListUsers(ctx)

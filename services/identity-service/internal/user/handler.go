@@ -298,6 +298,8 @@ func parseUserID(c *gin.Context) (int64, error) {
 func userPayload(user store.User) gin.H {
 	return gin.H{
 		"id":             user.ID,
+		"username":       user.Username,
+		"nickname":       user.Nickname,
 		"email":          user.Email,
 		"display_name":   user.DisplayName,
 		"avatar_url":     user.AvatarURL,

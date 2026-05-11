@@ -104,7 +104,7 @@ export default function UsersPage() {
             type="text"
             value={searchQuery}
             onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
-            placeholder="搜索用户姓名或邮箱..."
+            placeholder="搜索 username、昵称或邮箱..."
             className="w-full pl-10 pr-4 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand transition-all text-ink placeholder:text-ink-muted"
           />
         </div>
@@ -128,6 +128,8 @@ export default function UsersPage() {
         >
           <option value="created_at_desc">最新创建</option>
           <option value="created_at_asc">最早创建</option>
+          <option value="username_asc">用户名 A-Z</option>
+          <option value="username_desc">用户名 Z-A</option>
           <option value="email_asc">邮箱 A-Z</option>
           <option value="email_desc">邮箱 Z-A</option>
           <option value="updated_at_desc">最近更新</option>
@@ -174,10 +176,11 @@ export default function UsersPage() {
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-surface-hover flex items-center justify-center">
-                            <span className="text-xs font-medium text-ink-secondary">{(user.display_name || user.email).charAt(0)}</span>
+                            <span className="text-xs font-medium text-ink-secondary">{(user.nickname || user.username || user.email).charAt(0)}</span>
                           </div>
                           <div>
-                            <p className="text-sm font-medium text-ink">{user.display_name || user.email}</p>
+                            <p className="text-sm font-medium text-ink">{user.username}</p>
+                            <p className="text-xs text-ink-secondary">{user.nickname}</p>
                             <p className="text-xs text-ink-tertiary">{user.email}</p>
                           </div>
                         </div>
@@ -219,10 +222,11 @@ export default function UsersPage() {
           <div className="space-y-6">
             <div className="flex items-center gap-4">
               <div className="w-14 h-14 rounded-full bg-surface-hover flex items-center justify-center">
-                <span className="text-lg font-medium text-ink-secondary">{(selectedUser.display_name || selectedUser.email).charAt(0)}</span>
+                <span className="text-lg font-medium text-ink-secondary">{(selectedUser.nickname || selectedUser.username || selectedUser.email).charAt(0)}</span>
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-ink">{selectedUser.display_name || selectedUser.email}</h3>
+                <h3 className="text-lg font-semibold text-ink">{selectedUser.username}</h3>
+                <p className="text-sm text-ink-secondary">{selectedUser.nickname}</p>
                 <p className="text-sm text-ink-tertiary">{selectedUser.email}</p>
               </div>
             </div>
