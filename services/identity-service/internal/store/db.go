@@ -87,7 +87,11 @@ func ensureUsernameUniqueIndex(db *gorm.DB) error {
 	if !db.Migrator().HasColumn(&User{}, "username") {
 		return nil
 	}
-	return db.Exec(fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %s ON users(username)`, indexName)).Error
+	query := fmt.Sprintf(`CREATE UNIQUE INDEX %s ON users(username)`, indexName)
+	if db.Dialector.Name() == "sqlite" {
+		query = fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS %s ON users(username)`, indexName)
+	}
+	return db.Exec(query).Error
 }
 
 func hasIndex(migrator gorm.Migrator, table, indexName string) bool {

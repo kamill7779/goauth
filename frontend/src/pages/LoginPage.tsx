@@ -125,7 +125,7 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }, [form.email, form.password, returnTo])
+  }, [form.identifier, form.email, form.password, returnTo])
 
   const handleRegisterSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -436,6 +436,38 @@ export default function LoginPage() {
 
         <form onSubmit={handleRegisterSubmit} style={{ display: tab === 'register' ? 'block' : 'none', animation: tab === 'register' ? 'fadeIn 0.35s ease' : 'none' }}>
           <div style={{ marginBottom: '18px' }}>
+            <label htmlFor="register-username" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
+              用户名
+            </label>
+            <input
+              id="register-username"
+              name="username"
+              type="text"
+              value={form.username}
+              onChange={e => updateField('username', e.target.value)}
+              placeholder="3-32 位字母、数字、下划线或连字符"
+              autoComplete="username"
+              required
+              style={inputStyle}
+            />
+          </div>
+
+          <div style={{ marginBottom: '18px' }}>
+            <label htmlFor="register-nickname" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
+              昵称
+            </label>
+            <input
+              id="register-nickname"
+              name="nickname"
+              type="text"
+              value={form.nickname}
+              onChange={e => updateField('nickname', e.target.value)}
+              placeholder="选填，用于展示"
+              style={inputStyle}
+            />
+          </div>
+
+          <div style={{ marginBottom: '18px' }}>
             <label htmlFor="register-display-name" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
               显示名称
             </label>
@@ -445,8 +477,7 @@ export default function LoginPage() {
               type="text"
               value={form.displayName}
               onChange={e => updateField('displayName', e.target.value)}
-              placeholder="张三"
-              required
+              placeholder="选填，默认为昵称"
               style={inputStyle}
             />
           </div>

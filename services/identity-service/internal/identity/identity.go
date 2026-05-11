@@ -38,7 +38,7 @@ func NormalizeUsername(username string) (string, error) {
 		return "", ErrUsernameTooShort
 	}
 	if len(s) > usernameMaxLength {
-		s = s[:usernameMaxLength]
+		return "", fmt.Errorf("%w: public username must be at most %d characters", ErrUsernameInvalid, usernameMaxLength)
 	}
 	return s, nil
 }
