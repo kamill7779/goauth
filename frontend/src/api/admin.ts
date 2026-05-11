@@ -79,7 +79,7 @@ export const logoutAll = () =>
 export const getDashboard = () =>
   getRaw('/admin/dashboard').then(asSingle<DashboardPayload>);
 
-export const getUsers = (params?: { search?: string; status?: string; page?: number; page_size?: number }) =>
+export const getUsers = (params?: { search?: string; status?: string; sort?: string; tenant_id?: number; role_id?: number; page?: number; page_size?: number }) =>
   getRaw('/admin/users', params).then((body) => {
     const page = asPaginated<unknown>(body, 'users', params?.page, params?.page_size);
     return {
@@ -103,9 +103,24 @@ export const enableUser = (id: number) =>
 export const resetPassword = (id: number, newPassword: string) =>
   postRaw(`/admin/users/${id}/reset-password`, { new_password: newPassword }).then(() => undefined);
 
-export const getTenants = (params?: { search?: string }) =>
+export const bulkDisableUsers = (userIds: number[]) =>
+  postRaw('/admin/users/bulk-disable', { user_ids: userIds }).then(() => undefined);
+
+export const bulkEnableUsers = (userIds: number[]) =>
+  postRaw('/admin/users/bulk-enable', { user_ids: userIds }).then(() => undefined);
+
+export const bulkLogoutUsers = (userIds: number[]) =>
+  postRaw('/admin/users/bulk-logout', { user_ids: userIds }).then(() => undefined);
+
+export const bulkAddUsersToTenant = (userIds: number[], tenantId: number, status = 'active') =>
+  postRaw('/admin/users/bulk-add-to-tenant', { user_ids: userIds, tenant_id: tenantId, status }).then(() => undefined);
+
+export const bulkRemoveUsersFromTenant = (userIds: number[], tenantId: number) =>
+  postRaw('/admin/users/bulk-remove-from-tenant', { user_ids: userIds, tenant_id: tenantId }).then(() => undefined);
+
+export const getTenants = (params?: { search?: string; status?: string; sort?: string; page?: number; page_size?: number }) =>
   getRaw('/admin/tenants', params).then((body) => {
-    const page = asPaginated<unknown>(body, 'tenants', 1);
+    const page = asPaginated<unknown>(body, 'tenants', params?.page, params?.page_size);
     return {
       ...page,
       data: page.data.map(normalizeTenant),
@@ -124,8 +139,8 @@ export const addTenantMember = (tenantId: number, userId: number) =>
 export const removeTenantMember = (tenantId: number, userId: number) =>
   deleteRaw(`/admin/tenants/${tenantId}/members/${userId}`).then(() => undefined);
 
-export const getRoles = () =>
-  getRaw('/admin/roles').then((body) => asCollection<unknown>(body, 'roles').map(normalizeRole));
+export const getRoles = (params?: { tenant_id?: number; search?: string; sort?: string; page?: number; page_size?: number }) =>
+  getRaw('/admin/roles', params).then((body) => asCollection<unknown>(body, 'roles').map(normalizeRole));
 
 export const createRole = (input: CreateRoleInput) =>
   postRaw('/admin/roles', input).then((body) => normalizeRole(asSingle(body)));

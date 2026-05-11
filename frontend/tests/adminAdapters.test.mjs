@@ -72,3 +72,56 @@ test('role and member mutation payloads match GoAuth backend contracts', () => {
   assert.deepEqual(adapters.rolePermissionRequest(7), { permission_ids: [7] });
   assert.deepEqual(adapters.memberRoleRequest(9), { role_ids: [9] });
 });
+
+test('normalizers accept legacy Go struct field casing and enriched admin fields', () => {
+  assert.deepEqual(
+    adapters.normalizeTenant({
+      ID: 3,
+      Name: 'Community Forum',
+      Slug: 'community-forum',
+      Status: 'active',
+      members_count: 12,
+      roles_count: 4,
+      oauth_clients_count: 2,
+      CreatedAt: '2026-05-11T10:00:00Z',
+    }),
+    {
+      id: 3,
+      name: 'Community Forum',
+      slug: 'community-forum',
+      members_count: 12,
+      roles_count: 4,
+      oauth_clients_count: 2,
+      status: 'active',
+      plan: '-',
+      created_at: '2026-05-11T10:00:00Z',
+      default_policy: '-',
+    },
+  );
+
+  assert.deepEqual(
+    adapters.normalizeRole({
+      ID: 8,
+      TenantID: 3,
+      Name: 'Moderator',
+      Code: 'moderator',
+      Description: 'Moderates content',
+      IsSystem: false,
+      permission_ids: [5, 6],
+      permissions_count: 2,
+      users_count: 9,
+    }),
+    {
+      id: 8,
+      tenant_id: 3,
+      code: 'moderator',
+      name: 'Moderator',
+      description: 'Moderates content',
+      users_count: 9,
+      permissions_count: 2,
+      permission_ids: [5, 6],
+      tenant_scope: 'tenant:3',
+      is_system: false,
+    },
+  );
+});

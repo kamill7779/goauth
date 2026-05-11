@@ -11,6 +11,7 @@ export default function UsersPage() {
   const [total, setTotal] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [sort, setSort] = useState('created_at_desc');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -24,6 +25,7 @@ export default function UsersPage() {
       const res = await getUsers({
         search: searchQuery || undefined,
         status: statusFilter === 'all' ? undefined : statusFilter,
+        sort,
         page,
         page_size: 20,
       });
@@ -34,7 +36,7 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, statusFilter, page]);
+  }, [searchQuery, statusFilter, sort, page]);
 
   useEffect(() => {
     fetchUsers();
@@ -119,6 +121,17 @@ export default function UsersPage() {
             </button>
           ))}
         </div>
+        <select
+          value={sort}
+          onChange={e => { setSort(e.target.value); setPage(1); }}
+          className="px-3 py-2 text-xs font-medium text-gray-500 bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
+        >
+          <option value="created_at_desc">最新创建</option>
+          <option value="created_at_asc">最早创建</option>
+          <option value="email_asc">邮箱 A-Z</option>
+          <option value="email_desc">邮箱 Z-A</option>
+          <option value="updated_at_desc">最近更新</option>
+        </select>
         <button className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-500 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
           <IconFilter size={14} /> 筛选
         </button>

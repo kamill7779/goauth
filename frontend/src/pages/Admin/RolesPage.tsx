@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getRoles, getPermissions } from '../../api/admin';
+import { addRolePermission, getRoles, getPermissions, removeRolePermission } from '../../api/admin';
 import { IconShield, IconUsers, IconLock, IconPlus } from '../../components/admin/Icons';
 import type { Role, Permission } from '../../types/admin';
 
@@ -11,6 +11,11 @@ export default function RolesPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    loadRolesAndPermissions();
+  }, []);
+
+  const loadRolesAndPermissions = () => {
+    setLoading(true);
     Promise.allSettled([getRoles(), getPermissions()])
       .then(([rolesResult, permissionsResult]) => {
         if (rolesResult.status === 'fulfilled') {
@@ -26,7 +31,35 @@ export default function RolesPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  const syncRole = (roleId: number, updater: (role: Role) => Role) => {
+    setRoles(current => current.map(role => role.id === roleId ? updater(role) : role));
+    setMatrixRole(current => current?.id === roleId ? updater(current) : current);
+  };
+
+  const togglePermission = async (role: Role, permissionId: number, checked: boolean) => {
+    try {
+      if (checked) {
+        await removeRolePermission(role.id, permissionId);
+      } else {
+        await addRolePermission(role.id, permissionId);
+      }
+      syncRole(role.id, current => {
+        const nextIds = checked
+          ? current.permission_ids.filter(id => id !== permissionId)
+          : [...new Set([...current.permission_ids, permissionId])];
+        return {
+          ...current,
+          permission_ids: nextIds,
+          permissions_count: nextIds.length,
+        };
+      });
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '权限更新失败');
+    }
+  };
 
   const resources = [...new Set(permissions.map(p => p.resource))];
   const actions = [...new Set(permissions.map(p => p.action))];
@@ -121,11 +154,12 @@ export default function RolesPage() {
                         <td className="px-5 py-3 text-sm font-mono text-gray-700">{resource}</td>
                         {actions.map((action) => {
                           const permId = getPermId(resource, action);
-                          const isChecked = false;
+                          const isChecked = Boolean(permId && matrixRole.permission_ids.includes(permId));
                           return (
                             <td key={action} className="px-3 py-3 text-center">
                               <button
                                 disabled={!permId}
+                                onClick={() => permId && togglePermission(matrixRole, permId, isChecked)}
                                 className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
                                   isChecked ? 'bg-blue-600 border-blue-600' : 'border-gray-300 hover:border-gray-400 disabled:border-gray-200 disabled:bg-gray-50'
                                 }`}

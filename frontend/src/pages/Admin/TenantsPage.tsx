@@ -90,7 +90,8 @@ export default function TenantsPage() {
               <p className="text-xs text-gray-400 font-mono mb-4">{tenant.slug}</p>
               <div className="flex items-center gap-4 text-xs text-gray-500">
                 <span className="flex items-center gap-1"><IconUsers size={12} /> {tenant.members_count} 成员</span>
-                <span className="flex items-center gap-1"><IconShield size={12} /> {tenant.plan}</span>
+                <span className="flex items-center gap-1"><IconShield size={12} /> {tenant.roles_count} 角色</span>
+                <span>{tenant.oauth_clients_count} 应用</span>
               </div>
               <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
                 <span className="text-[10px] text-gray-400">默认策略: {tenant.default_policy === 'auto_approve' ? '自动批准' : '人工审核'}</span>
@@ -119,12 +120,16 @@ export default function TenantsPage() {
                 <StatusBadge status={selectedTenant.status} />
               </div>
               <div className="bg-gray-50 rounded-lg p-3">
-                <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">订阅计划</p>
-                <p className="text-sm font-medium text-gray-800">{selectedTenant.plan}</p>
+                <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">角色数</p>
+                <p className="text-sm font-medium text-gray-800">{selectedTenant.roles_count} 个</p>
               </div>
               <div className="bg-gray-50 rounded-lg p-3">
                 <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">成员数</p>
                 <p className="text-sm font-medium text-gray-800">{selectedTenant.members_count} 人</p>
+              </div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">应用数</p>
+                <p className="text-sm font-medium text-gray-800">{selectedTenant.oauth_clients_count} 个</p>
               </div>
               <div className="bg-gray-50 rounded-lg p-3">
                 <p className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">默认策略</p>

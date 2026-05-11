@@ -59,21 +59,51 @@ function numberValue(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function field(record: UnknownRecord, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in record) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
+function stringField(record: UnknownRecord, keys: string[], fallback = ''): string {
+  return stringValue(field(record, ...keys), fallback);
+}
+
+function numberField(record: UnknownRecord, keys: string[], fallback = 0): number {
+  return numberValue(field(record, ...keys), fallback);
+}
+
+function booleanField(record: UnknownRecord, keys: string[], fallback = false): boolean {
+  const value = field(record, ...keys);
+  return value === undefined ? fallback : Boolean(value);
+}
+
+function numberArrayField(record: UnknownRecord, keys: string[]): number[] {
+  const value = field(record, ...keys);
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.map(Number).filter(Number.isFinite);
+}
+
 export function normalizeUser(raw: unknown): User {
   const record = isRecord(raw) ? raw : {};
-  const email = stringValue(record.email);
-  const displayName = stringValue(record.display_name, email);
+  const email = stringField(record, ['email', 'Email']);
+  const displayName = stringField(record, ['display_name', 'DisplayName'], email);
 
   return {
-    id: numberValue(record.id),
+    id: numberField(record, ['id', 'ID']),
     display_name: displayName,
     email,
-    role: stringValue(record.role, '-'),
-    tenant: stringValue(record.tenant, '-'),
-    status: stringValue(record.status, 'active') as User['status'],
-    email_verified: Boolean(record.email_verified ?? record.email_verified_at),
-    last_login: stringValue(record.last_login, ''),
-    created_at: stringValue(record.created_at),
+    role: stringField(record, ['role'], '-'),
+    tenant: stringField(record, ['tenant'], '-'),
+    status: stringField(record, ['status', 'Status'], 'active') as User['status'],
+    email_verified: booleanField(record, ['email_verified', 'EmailVerified']) || Boolean(field(record, 'email_verified_at', 'EmailVerifiedAt')),
+    last_login: stringField(record, ['last_login', 'LastLogin'], ''),
+    created_at: stringField(record, ['created_at', 'CreatedAt']),
   };
 }
 
@@ -81,31 +111,35 @@ export function normalizeTenant(raw: unknown): Tenant {
   const record = isRecord(raw) ? raw : {};
 
   return {
-    id: numberValue(record.id),
-    name: stringValue(record.name),
-    slug: stringValue(record.slug),
-    members_count: numberValue(record.members_count),
-    status: stringValue(record.status, 'active') as Tenant['status'],
-    plan: stringValue(record.plan, '-'),
-    created_at: stringValue(record.created_at),
-    default_policy: stringValue(record.default_policy, '-'),
+    id: numberField(record, ['id', 'ID']),
+    name: stringField(record, ['name', 'Name']),
+    slug: stringField(record, ['slug', 'Slug']),
+    members_count: numberField(record, ['members_count', 'MembersCount']),
+    roles_count: numberField(record, ['roles_count', 'RolesCount']),
+    oauth_clients_count: numberField(record, ['oauth_clients_count', 'OAuthClientsCount']),
+    status: stringField(record, ['status', 'Status'], 'active') as Tenant['status'],
+    plan: stringField(record, ['plan', 'Plan'], '-'),
+    created_at: stringField(record, ['created_at', 'CreatedAt']),
+    default_policy: stringField(record, ['default_policy', 'DefaultPolicy'], '-'),
   };
 }
 
 export function normalizeRole(raw: unknown): Role {
   const record = isRecord(raw) ? raw : {};
-  const tenantID = numberValue(record.tenant_id);
+  const tenantID = numberField(record, ['tenant_id', 'TenantID']);
+  const permissionIDs = numberArrayField(record, ['permission_ids', 'PermissionIDs']);
 
   return {
-    id: numberValue(record.id),
+    id: numberField(record, ['id', 'ID']),
     tenant_id: tenantID,
-    code: stringValue(record.code),
-    name: stringValue(record.name),
-    description: stringValue(record.description),
-    users_count: numberValue(record.users_count),
-    permissions_count: numberValue(record.permissions_count),
-    tenant_scope: stringValue(record.tenant_scope, tenantID ? `tenant:${tenantID}` : 'global'),
-    is_system: Boolean(record.is_system),
+    code: stringField(record, ['code', 'Code']),
+    name: stringField(record, ['name', 'Name']),
+    description: stringField(record, ['description', 'Description']),
+    users_count: numberField(record, ['users_count', 'UsersCount']),
+    permissions_count: numberField(record, ['permissions_count', 'PermissionsCount'], permissionIDs.length),
+    permission_ids: permissionIDs,
+    tenant_scope: stringField(record, ['tenant_scope', 'TenantScope'], tenantID ? `tenant:${tenantID}` : 'global'),
+    is_system: booleanField(record, ['is_system', 'IsSystem']),
   };
 }
 

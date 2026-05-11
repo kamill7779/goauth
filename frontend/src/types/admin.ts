@@ -15,6 +15,8 @@ export interface Tenant {
   name: string;
   slug: string;
   members_count: number;
+  roles_count: number;
+  oauth_clients_count: number;
   status: 'active' | 'disabled' | 'trial' | 'suspended';
   plan: string;
   created_at: string;
@@ -29,6 +31,7 @@ export interface Role {
   description: string;
   users_count: number;
   permissions_count: number;
+  permission_ids: number[];
   tenant_scope: string;
   is_system: boolean;
 }
