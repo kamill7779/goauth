@@ -1,9 +1,9 @@
-import axios, { AxiosError, AxiosInstance } from 'axios';
 import type {
   User, Tenant, Permission, OAuthClient, Session, AuditLog,
   DashboardPayload, PaginatedResponse,
   CreateUserInput, CreateTenantInput, CreateRoleInput, CreateOAuthClientInput,
 } from '../types/admin';
+import { createAdminHttpClient } from './adminHttp';
 import {
   asCollection,
   asPaginated,
@@ -21,33 +21,9 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim() ||
   (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080');
 
-const v1: AxiosInstance = axios.create({
+const v1 = createAdminHttpClient({
   baseURL: `${API_BASE_URL}/v1`,
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 15000,
 });
-
-v1.interceptors.request.use((config) => {
-  const token = typeof window !== 'undefined' ? window.localStorage.getItem('access_token') : null;
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-v1.interceptors.response.use(
-  (response) => response,
-  (error: AxiosError<{ error?: string; message?: string }>) => {
-    if (error.response?.status === 401 && typeof window !== 'undefined') {
-      window.localStorage.removeItem('access_token');
-      window.localStorage.removeItem('refresh_token');
-      window.location.href = '/login?expired=1';
-      return Promise.reject(new Error('登录已过期，请重新登录'));
-    }
-    const msg = error.response?.data?.error || error.response?.data?.message || error.message || '请求失败';
-    return Promise.reject(new Error(msg));
-  }
-);
 
 function getRaw(path: string, params?: Record<string, unknown>): Promise<unknown> {
   return v1.get(path, { params }).then(r => r.data);

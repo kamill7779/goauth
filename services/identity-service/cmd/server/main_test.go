@@ -288,6 +288,14 @@ func TestAdminGlobalSessionsListAndSingleRevoke(t *testing.T) {
 	}
 	assertSessionRevoked(t, db, otherPair.SessionID)
 	assertSessionStillActive(t, db, adminPair.SessionID)
+	revokedAccess := performJSON(t, router, http.MethodGet, "/v1/auth/me", "", otherPair.AccessToken)
+	if revokedAccess.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session access status = %d, want %d body=%s", revokedAccess.Code, http.StatusUnauthorized, revokedAccess.Body.String())
+	}
+	revokedRefresh := performJSON(t, router, http.MethodPost, "/v1/auth/refresh", `{"refresh_token":"`+otherPair.RefreshToken+`"}`, "")
+	if revokedRefresh.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session refresh status = %d, want %d body=%s", revokedRefresh.Code, http.StatusUnauthorized, revokedRefresh.Body.String())
+	}
 
 	activeForUser := performJSON(t, router, http.MethodGet, "/v1/admin/sessions?user_id="+userIDString(otherUser.ID)+"&status=active", "", adminPair.AccessToken)
 	if activeForUser.Code != http.StatusOK {
