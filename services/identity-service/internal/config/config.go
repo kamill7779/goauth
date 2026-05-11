@@ -42,6 +42,8 @@ type Config struct {
 	DefaultMemberTenantSlugs  []string
 	BootstrapAdminEmail       string
 	BootstrapAdminPassword    string
+	BootstrapAdminUsername    string
+	BootstrapAdminNickname    string
 	BootstrapAdminDisplayName string
 	BootstrapAdminRoleCode    string
 }
@@ -124,6 +126,8 @@ func Load() (Config, error) {
 		DefaultMemberTenantSlugs:  splitUniqueCSV(os.Getenv("DEFAULT_MEMBER_TENANT_SLUGS")),
 		BootstrapAdminEmail:       os.Getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapAdminPassword:    os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+		BootstrapAdminUsername:    os.Getenv("BOOTSTRAP_ADMIN_USERNAME"),
+		BootstrapAdminNickname:    os.Getenv("BOOTSTRAP_ADMIN_NICKNAME"),
 		BootstrapAdminDisplayName: os.Getenv("BOOTSTRAP_ADMIN_DISPLAY_NAME"),
 		BootstrapAdminRoleCode:    envOrDefault("BOOTSTRAP_ADMIN_ROLE", "root"),
 	}, nil

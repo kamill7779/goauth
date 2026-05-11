@@ -114,6 +114,8 @@ func bootstrapAdminUser(db *gorm.DB, cfg config.Config) error {
 	userService := user.NewService(db, audit.NewService(db))
 	record, err := userService.EnsureBootstrapAdmin(context.Background(), user.BootstrapAdminInput{
 		Email:       email,
+		Username:    strings.TrimSpace(cfg.BootstrapAdminUsername),
+		Nickname:    strings.TrimSpace(cfg.BootstrapAdminNickname),
 		DisplayName: strings.TrimSpace(cfg.BootstrapAdminDisplayName),
 		Password:    password,
 		RoleCode:    roleCode,

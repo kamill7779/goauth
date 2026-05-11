@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -59,6 +60,8 @@ type ListUsersResult struct {
 
 type BootstrapAdminInput struct {
 	Email       string
+	Username    string
+	Nickname    string
 	DisplayName string
 	Password    string
 	RoleCode    string
@@ -316,9 +319,26 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 		displayName = email
 	}
 
+	username := strings.TrimSpace(input.Username)
+	if username == "" {
+		username = identity.UsernameFromEmail(email)
+		if username == "" {
+			return nil, errors.New("bootstrap admin username cannot be derived from email")
+		}
+	}
+	normalizedUsername, err := identity.NormalizeUsername(username)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap admin username: %w", err)
+	}
+
+	nickname := identity.NormalizeNickname(input.Nickname, normalizedUsername)
+	if strings.TrimSpace(input.DisplayName) == "" && nickname != displayName {
+		displayName = nickname
+	}
+
 	var record store.User
 	now := time.Now().UTC()
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		err := tx.Where("email = ?", email).First(&record).Error
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
@@ -327,6 +347,8 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 				return err
 			}
 			record = store.User{
+				Username:        normalizedUsername,
+				Nickname:        nickname,
 				Email:           email,
 				DisplayName:     displayName,
 				PasswordHash:    hash,
@@ -345,6 +367,12 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 			displayNameChanged := record.DisplayName != displayName
 
 			updates := map[string]any{}
+			if record.Username == "" && normalizedUsername != "" {
+				updates["username"] = normalizedUsername
+			}
+			if record.Nickname == "" && nickname != "" {
+				updates["nickname"] = nickname
+			}
 			if displayNameChanged {
 				updates["display_name"] = displayName
 			}
