@@ -1,5 +1,5 @@
 import { useState, useCallback, FormEvent } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { login, register, sendEmailCode } from '../api/auth'
 
 interface FormData {
@@ -57,6 +57,7 @@ function Spinner() {
 
 export default function LoginPage() {
   const location = useLocation()
+  const navigate = useNavigate()
   const returnTo = getAuthorizeReturnTo(location.search)
   const isSSOLogin = returnTo !== ''
 
@@ -111,7 +112,7 @@ export default function LoginPage() {
         window.location.assign(returnTo)
         return
       }
-      setSuccess('登录成功')
+      navigate('/admin')
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
     } finally {

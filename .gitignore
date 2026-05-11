@@ -4,6 +4,7 @@
 .worktrees/
 .idea/
 .playwright-mcp/
+admin-console-prototype/
 node_modules/
 
 bin/
