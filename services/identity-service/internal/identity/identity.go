@@ -15,8 +15,8 @@ var (
 )
 
 const (
-	usernameMinLength        = 3
-	usernameMaxLength        = 32
+	usernameMinLength         = 3
+	usernameMaxLength         = 32
 	backfillUsernameMaxLength = 64
 )
 
@@ -141,4 +141,3 @@ func sanitizeUsernameToken(raw string) (string, error) {
 	}
 	return plain, nil
 }
-
