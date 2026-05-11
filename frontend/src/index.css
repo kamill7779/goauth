@@ -2,22 +2,118 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
+/* ============================================================
+ * GoAuth Theme Tokens
+ *
+ * Strategy:
+ *  - :root holds the light palette (default fallback).
+ *  - [data-theme="light"] re-declares it explicitly for clarity.
+ *  - [data-theme="dark"] swaps the same semantic tokens to dark
+ *    values, so every component that consumes a token via
+ *    var(--token) or via the Tailwind colour aliases follows along
+ *    without any conditional logic.
+ *  - The dark palette aims for a calm production-console look:
+ *    soft greys, low-noise depth, no neon, no glass-stacking.
+ * ============================================================ */
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
   --bg: #F5F5F7;
+  --bg-subtle: #FAFAF8;
+
   --surface: rgba(255, 255, 255, 0.72);
   --surface-solid: #FFFFFF;
+  --surface-hover: #F2F2F4;
+  --surface-muted: #F7F7F5;
+  --surface-sunken: #EEEEF0;
+
   --ink: #1D1D1F;
-  --ink-secondary: #86868B;
-  --ink-tertiary: #D2D2D7;
+  --ink-secondary: #6E6E73;
+  --ink-tertiary: #8E8E93;
+  --ink-muted: #C7C7CC;
+  --ink-inverse: #FFFFFF;
+
   --border: rgba(0, 0, 0, 0.06);
+  --border-strong: rgba(0, 0, 0, 0.12);
   --border-focus: #0071E3;
+
   --accent: #0071E3;
   --accent-hover: #0077ED;
+  --accent-soft: rgba(0, 113, 227, 0.10);
+
   --error: #D93025;
-  --error-bg: #FDECEA;
+  --error-soft: rgba(217, 48, 37, 0.10);
+  --error-strong: #B71C1C;
+
+  --warning: #B5560F;
+  --warning-soft: rgba(245, 158, 11, 0.12);
+  --warning-strong: #92400E;
+
+  --success: #15803D;
+  --success-soft: rgba(16, 185, 129, 0.10);
+  --success-strong: #166534;
+
+  --info: #1D6FDA;
+  --info-soft: rgba(29, 111, 218, 0.10);
+
+  --overlay: rgba(15, 15, 20, 0.18);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.10), 0 4px 16px rgba(0, 0, 0, 0.06);
+
   --radius: 18px;
-  --shadow: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0E0E11;
+  --bg-subtle: #131318;
+
+  --surface: rgba(28, 28, 33, 0.72);
+  --surface-solid: #18181D;
+  --surface-hover: #22222A;
+  --surface-muted: #131318;
+  --surface-sunken: #0B0B0F;
+
+  --ink: #F2F2F5;
+  --ink-secondary: #A8A8AE;
+  --ink-tertiary: #6E6E73;
+  --ink-muted: #48484E;
+  --ink-inverse: #0E0E11;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-focus: #2997FF;
+
+  --accent: #2997FF;
+  --accent-hover: #4DA9FF;
+  --accent-soft: rgba(41, 151, 255, 0.16);
+
+  --error: #FF6961;
+  --error-soft: rgba(255, 105, 97, 0.16);
+  --error-strong: #FF453A;
+
+  --warning: #FFB454;
+  --warning-soft: rgba(255, 180, 84, 0.14);
+  --warning-strong: #F0A040;
+
+  --success: #34C759;
+  --success-soft: rgba(52, 199, 89, 0.14);
+  --success-strong: #30D158;
+
+  --info: #5AC8FA;
+  --info-soft: rgba(90, 200, 250, 0.14);
+
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 30px 70px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
 * {
@@ -29,6 +125,7 @@
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
 }
 
 body {
@@ -36,11 +133,76 @@ body {
   background: var(--bg);
   color: var(--ink);
   min-height: 100vh;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 #root {
   min-height: 100vh;
 }
+
+/* ----------- Form element baseline (theme-aware) ----------- */
+
+input,
+select,
+textarea {
+  color: var(--ink);
+  background: transparent;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ink-muted);
+  opacity: 1;
+}
+
+/* native option list inside <select> should follow the surrounding theme */
+select option {
+  background: var(--surface-solid);
+  color: var(--ink);
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* ----------- Custom scrollbar (kept subtle) ----------- */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--ink-tertiary);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ----------- Focus rings (visible in both themes) ----------- */
+
+:where(button, a, input, select, textarea, [role='button']):focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* ----------- Keyframes ----------- */
 
 @keyframes cardEnter {
   from { opacity: 0; transform: translateY(24px) scale(0.98); }

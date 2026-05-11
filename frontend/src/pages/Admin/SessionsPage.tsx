@@ -92,13 +92,13 @@ export default function SessionsPage() {
     <div className="animate-[fadeInUp_0.4s_ease]">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-1">会话管理</h1>
-          <p className="text-sm text-gray-400">默认展示全局活跃会话，可按用户、邮箱、客户端和状态筛选并精确下线单个会话</p>
+          <h1 className="text-2xl font-semibold text-ink mb-1">会话管理</h1>
+          <p className="text-sm text-ink-tertiary">默认展示全局活跃会话，可按用户、邮箱、客户端和状态筛选并精确下线单个会话</p>
         </div>
         <button
           onClick={loadSessions}
           disabled={loading}
-          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-ink-secondary bg-surface-solid border border-line rounded-lg hover:bg-surface-hover transition-colors disabled:opacity-50"
         >
           <IconRefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           刷新
@@ -107,13 +107,13 @@ export default function SessionsPage() {
 
       <div className="flex flex-wrap items-center gap-3 mb-5">
         <div className="flex-1 relative min-w-[260px] max-w-md">
-          <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <IconSearch size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary" />
           <input
             type="text"
             value={searchQuery}
             onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
             placeholder="搜索邮箱、用户名称、客户端或会话 ID..."
-            className="w-full pl-10 pr-4 py-2 text-sm bg-white border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all placeholder:text-gray-300"
+            className="w-full pl-10 pr-4 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand transition-all text-ink placeholder:text-ink-muted"
           />
         </div>
         <input
@@ -122,15 +122,15 @@ export default function SessionsPage() {
           value={userId}
           onChange={e => { setUserId(e.target.value); setPage(1); }}
           placeholder="用户 ID"
-          className="w-32 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-blue-500 focus:outline-none"
+          className="w-32 rounded-lg border border-line bg-surface-solid px-3 py-2 text-sm text-ink focus:border-brand focus:outline-none placeholder:text-ink-muted"
         />
-        <div className="flex items-center gap-1 bg-white border border-gray-200 rounded-lg p-0.5">
+        <div className="flex items-center gap-1 bg-surface-solid border border-line rounded-lg p-0.5">
           {filters.map(filter => (
             <button
               key={filter.id}
               onClick={() => { setStatusFilter(filter.id); setPage(1); }}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                statusFilter === filter.id ? 'bg-gray-900 text-white' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                statusFilter === filter.id ? 'bg-ink text-ink-inverse' : 'text-ink-secondary hover:text-ink hover:bg-surface-hover'
               }`}
             >
               {filter.label}
@@ -139,66 +139,66 @@ export default function SessionsPage() {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      <div className="bg-surface-solid rounded-xl border border-line overflow-hidden">
         {loading ? (
           <div className="p-6 space-y-4">
             {Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className="h-12 rounded-lg bg-gray-100 animate-pulse" />
+              <div key={index} className="h-12 rounded-lg bg-surface-hover animate-pulse" />
             ))}
           </div>
         ) : sessions.length === 0 ? (
           <div className="px-6 py-14 text-center">
-            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-gray-100">
-              <IconSearch size={18} className="text-gray-400" />
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-surface-hover">
+              <IconSearch size={18} className="text-ink-tertiary" />
             </div>
-            <p className="text-sm font-medium text-gray-700">暂无匹配会话</p>
-            <p className="mt-1 text-xs text-gray-400">可切换到“全部”或清空筛选条件后重新查看。</p>
+            <p className="text-sm font-medium text-ink">暂无匹配会话</p>
+            <p className="mt-1 text-xs text-ink-tertiary">可切换到“全部”或清空筛选条件后重新查看。</p>
           </div>
         ) : (
           <>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
-                  <tr className="border-b border-gray-200">
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">会话 ID</th>
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">用户</th>
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">客户端</th>
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">IP 地址</th>
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">状态</th>
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">创建时间</th>
-                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-gray-400 uppercase tracking-wider">过期时间</th>
+                  <tr className="border-b border-line">
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">会话 ID</th>
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">用户</th>
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">客户端</th>
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">IP 地址</th>
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">状态</th>
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">创建时间</th>
+                    <th className="text-left px-6 py-3.5 text-xs font-semibold text-ink-tertiary uppercase tracking-wider">过期时间</th>
                     <th className="w-10 px-6 py-3.5"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100">
+                <tbody className="divide-y divide-line">
                   {sessions.map((session) => (
-                    <tr key={session.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={session.id} className="hover:bg-surface-hover transition-colors">
                       <td className="px-6 py-4">
                         <div className="flex flex-col gap-1">
-                          <code className="w-fit text-xs font-mono bg-gray-100 px-2 py-1 rounded text-gray-600">{session.id.slice(0, 18)}...</code>
-                          <span className="text-[11px] text-gray-300">tenant:{session.tenant_id || '-'}</span>
+                          <code className="w-fit text-xs font-mono bg-surface-hover px-2 py-1 rounded text-ink-secondary">{session.id.slice(0, 18)}...</code>
+                          <span className="text-[11px] text-ink-muted">tenant:{session.tenant_id || '-'}</span>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        <p className="text-sm font-medium text-gray-800">{session.user || '-'}</p>
-                        <p className="text-xs text-gray-400">user_id:{session.user_id || '-'}</p>
+                        <p className="text-sm font-medium text-ink">{session.user || '-'}</p>
+                        <p className="text-xs text-ink-tertiary">user_id:{session.user_id || '-'}</p>
                       </td>
                       <td className="px-6 py-4">
-                        <p className="max-w-[220px] truncate text-sm text-gray-600" title={session.client}>{session.client || '-'}</p>
-                        {session.user_agent && <p className="max-w-[220px] truncate text-xs text-gray-300" title={session.user_agent}>{session.user_agent}</p>}
+                        <p className="max-w-[220px] truncate text-sm text-ink-secondary" title={session.client}>{session.client || '-'}</p>
+                        {session.user_agent && <p className="max-w-[220px] truncate text-xs text-ink-muted" title={session.user_agent}>{session.user_agent}</p>}
                       </td>
-                      <td className="px-6 py-4 text-sm font-mono text-gray-500">{session.ip || '-'}</td>
+                      <td className="px-6 py-4 text-sm font-mono text-ink-secondary">{session.ip || '-'}</td>
                       <td className="px-6 py-4"><StatusBadge status={session.status} /></td>
-                      <td className="px-6 py-4 text-sm text-gray-500">{formatDate(session.created_at)}</td>
-                      <td className="px-6 py-4 text-sm text-gray-500">{formatDate(session.expires_at)}</td>
+                      <td className="px-6 py-4 text-sm text-ink-secondary">{formatDate(session.created_at)}</td>
+                      <td className="px-6 py-4 text-sm text-ink-secondary">{formatDate(session.expires_at)}</td>
                       <td className="px-6 py-4">
                         <button
                           onClick={() => handleRevoke(session)}
                           disabled={session.status !== 'active' || revokingSessionId === session.id}
-                          className="p-1.5 hover:bg-red-50 rounded-md transition-colors group disabled:cursor-not-allowed disabled:opacity-30"
+                          className="p-1.5 hover:bg-danger-soft rounded-md transition-colors group disabled:cursor-not-allowed disabled:opacity-30"
                           title={session.status === 'active' ? '强制下线该会话' : '非活跃会话无需下线'}
                         >
-                          <IconLogOut size={16} className="text-gray-400 group-hover:text-red-500" />
+                          <IconLogOut size={16} className="text-ink-tertiary group-hover:text-danger" />
                         </button>
                       </td>
                     </tr>
@@ -206,12 +206,12 @@ export default function SessionsPage() {
                 </tbody>
               </table>
             </div>
-            <div className="px-6 py-3 border-t border-gray-200 flex items-center justify-between">
-              <span className="text-xs text-gray-400">显示 {sessions.length} 条，共 {total} 条</span>
+            <div className="px-6 py-3 border-t border-line flex items-center justify-between">
+              <span className="text-xs text-ink-tertiary">显示 {sessions.length} 条，共 {total} 条</span>
               <div className="flex items-center gap-1">
-                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1.5 text-xs text-gray-500 bg-gray-100 rounded-md disabled:opacity-50">上一页</button>
-                <span className="px-3 py-1.5 text-xs font-medium bg-gray-900 text-white rounded-md">{page}</span>
-                <button onClick={() => setPage(p => p + 1)} disabled={page * PAGE_SIZE >= total} className="px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-100 rounded-md disabled:opacity-50">下一页</button>
+                <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1.5 text-xs text-ink-secondary bg-surface-hover rounded-md disabled:opacity-50">上一页</button>
+                <span className="px-3 py-1.5 text-xs font-medium bg-ink text-ink-inverse rounded-md">{page}</span>
+                <button onClick={() => setPage(p => p + 1)} disabled={page * PAGE_SIZE >= total} className="px-3 py-1.5 text-xs text-ink-secondary hover:bg-surface-hover rounded-md disabled:opacity-50">下一页</button>
               </div>
             </div>
           </>

@@ -24,8 +24,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (checking) {
     return (
-      <div className="min-h-screen bg-[#FAFAF8] flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
+      <div className="min-h-screen bg-canvas-subtle flex items-center justify-center">
+        <div className="w-6 h-6 border-2 border-line-strong border-t-ink rounded-full animate-spin" />
       </div>
     );
   }
@@ -36,13 +36,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   if (denied) {
     return (
-      <div className="min-h-screen bg-[#FAFAF8] flex items-center justify-center px-6">
-        <div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-sm">
-          <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-gray-900 text-sm font-semibold text-white">
+      <div className="min-h-screen bg-canvas-subtle flex items-center justify-center px-6">
+        <div className="w-full max-w-md rounded-2xl border border-line bg-surface-solid p-8 text-center shadow-soft-sm">
+          <div className="mx-auto mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-ink text-sm font-semibold text-ink-inverse">
             G
           </div>
-          <h1 className="mb-2 text-xl font-semibold text-gray-900">无权访问 Admin Console</h1>
-          <p className="mb-6 text-sm leading-6 text-gray-500">
+          <h1 className="mb-2 text-xl font-semibold text-ink">无权访问 Admin Console</h1>
+          <p className="mb-6 text-sm leading-6 text-ink-secondary">
             当前账号不是 GoAuth 系统管理员。请使用拥有 root 或 system-admin 角色的账号登录。
           </p>
           <button
@@ -51,7 +51,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               localStorage.removeItem('refresh_token');
               window.location.href = '/login';
             }}
-            className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+            className="rounded-lg bg-ink px-4 py-2 text-sm font-medium text-ink-inverse transition-colors hover:opacity-90"
           >
             重新登录
           </button>
@@ -61,7 +61,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   return (
-    <div className="min-h-screen bg-[#FAFAF8]">
+    <div className="min-h-screen bg-canvas-subtle">
       <Header />
       <Sidebar />
       <main className="ml-[250px] mt-[72px] p-8 min-h-[calc(100vh-72px)]">

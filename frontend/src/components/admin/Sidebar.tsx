@@ -35,11 +35,11 @@ export default function Sidebar() {
   const location = useLocation();
 
   return (
-    <aside className="fixed left-0 top-[72px] w-[250px] h-[calc(100vh-72px)] bg-[#F7F7F5] border-r border-[#E8E8E6] overflow-y-auto z-40">
+    <aside className="fixed left-0 top-[72px] w-[250px] h-[calc(100vh-72px)] bg-surface-muted border-r border-line overflow-y-auto z-40">
       <div className="py-4">
         {sidebarGroups.map((group, gi) => (
           <div key={gi} className="mb-2">
-            <div className="px-4 py-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+            <div className="px-4 py-2 text-[10px] font-semibold text-ink-tertiary uppercase tracking-wider">
               {group.title}
             </div>
             <nav className="px-2">
@@ -52,16 +52,16 @@ export default function Sidebar() {
                     onClick={() => navigate(item.path)}
                     className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 group relative ${
                       isActive
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700 hover:bg-white/60'
+                        ? 'bg-surface-solid text-ink shadow-soft-sm'
+                        : 'text-ink-secondary hover:text-ink hover:bg-surface-solid/60'
                     }`}
                   >
                     {isActive && (
-                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-blue-600 rounded-r-full" />
+                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-brand rounded-r-full" />
                     )}
-                    <Icon size={17} className={isActive ? 'text-gray-800' : 'text-gray-400 group-hover:text-gray-600'} />
+                    <Icon size={17} className={isActive ? 'text-ink' : 'text-ink-tertiary group-hover:text-ink-secondary'} />
                     <span className="font-medium">{item.label}</span>
-                    {isActive && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-blue-600" />}
+                    {isActive && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-brand" />}
                   </button>
                 );
               })}

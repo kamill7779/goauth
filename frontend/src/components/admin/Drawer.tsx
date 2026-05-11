@@ -19,15 +19,19 @@ export default function Drawer({ isOpen, onClose, title, children, width = '480p
 
   return (
     <div className="fixed inset-0 z-[90]">
-      <div className="absolute inset-0 bg-black/15 backdrop-blur-sm animate-[fadeIn_0.2s_ease]" onClick={onClose} />
       <div
-        className="absolute right-0 top-0 h-full bg-white border-l border-gray-200 shadow-2xl overflow-y-auto"
+        className="absolute inset-0 backdrop-blur-sm animate-[fadeIn_0.2s_ease]"
+        style={{ background: 'var(--overlay)' }}
+        onClick={onClose}
+      />
+      <div
+        className="absolute right-0 top-0 h-full bg-surface-solid border-l border-line shadow-soft-lg overflow-y-auto"
         style={{ width, animation: 'slideInDrawer 0.35s cubic-bezier(0.16, 1, 0.3, 1)' }}
       >
-        <div className="sticky top-0 bg-white/95 backdrop-blur-sm border-b border-gray-200 px-6 py-4 flex items-center justify-between z-10">
-          <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-            <IconX size={18} className="text-gray-500" />
+        <div className="sticky top-0 bg-surface backdrop-blur-sm border-b border-line px-6 py-4 flex items-center justify-between z-10">
+          <h2 className="text-base font-semibold text-ink">{title}</h2>
+          <button onClick={onClose} className="p-1.5 hover:bg-surface-hover rounded-lg transition-colors text-ink-secondary">
+            <IconX size={18} />
           </button>
         </div>
         <div className="p-6">{children}</div>

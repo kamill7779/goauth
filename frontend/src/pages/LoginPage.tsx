@@ -1,6 +1,7 @@
 import { useState, useCallback, FormEvent } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { login, register, sendEmailCode } from '../api/auth'
+import ThemeToggle from '../components/admin/ThemeToggle'
 
 interface FormData {
   email: string
@@ -35,7 +36,7 @@ function getAuthorizeReturnTo(search: string): string {
 
 function ShieldIcon() {
   return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="white">
+    <svg viewBox="0 0 24 24" width="28" height="28" fill="var(--ink-inverse)">
       <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 4c1.86 0 3.41 1.28 3.86 3H8.14C8.59 6.28 10.14 5 12 5zm5 9H7v-1c0-1.1.9-2 2-2h6c1.1 0 2 .9 2 2v1zm-1 5.72V16h-2v2.73c-.56-.28-1.09-.65-1.56-1.1l1.42-1.42-1.42-1.42 1.42-1.42-1.42-1.42 1.42-1.42-1.42-1.42 1.42-1.42C13.91 8.95 13 9.92 13 11.15V13h-2v-1.85c0-1.23-.91-2.2-1.99-2.47L12 5.15l2.99 3.53c-1.08.27-1.99 1.24-1.99 2.47V13h2v-1.85c0-.83.36-1.58.93-2.11l1.42 1.42-1.42 1.42 1.42 1.42-1.42 1.42 1.42 1.42-1.42 1.42 1.42 1.42-1.56 1.1z"/>
     </svg>
   )
@@ -153,12 +154,12 @@ export default function LoginPage() {
   const cardStyle: React.CSSProperties = {
     width: '100%',
     maxWidth: '420px',
-    background: 'var(--surface)',
+    background: 'var(--surface-solid)',
     backdropFilter: 'blur(24px) saturate(1.8)',
     WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius)',
-    boxShadow: 'var(--shadow)',
+    boxShadow: 'var(--shadow-md)',
     padding: '48px 40px',
     position: 'relative',
     overflow: 'hidden',
@@ -175,12 +176,12 @@ export default function LoginPage() {
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: '20px',
-    boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+    boxShadow: 'var(--shadow-sm)',
   }
 
   const segmentedStyle: React.CSSProperties = {
     display: 'flex',
-    background: 'rgba(0,0,0,0.04)',
+    background: 'var(--surface-hover)',
     borderRadius: '10px',
     padding: '3px',
     marginBottom: '32px',
@@ -210,7 +211,7 @@ export default function LoginPage() {
     width: 'calc(50% - 3px)',
     background: 'var(--surface-solid)',
     borderRadius: '8px',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
+    boxShadow: 'var(--shadow-sm)',
     transition: 'transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
     zIndex: 0,
     transform: tab === 'register' ? 'translateX(calc(100% + 6px))' : 'translateX(0)',
@@ -223,7 +224,7 @@ export default function LoginPage() {
     fontSize: '15px',
     color: 'var(--ink)',
     background: 'var(--surface-solid)',
-    border: '1px solid var(--border)',
+    border: '1px solid var(--border-strong)',
     borderRadius: '10px',
     outline: 'none',
     transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
@@ -236,12 +237,12 @@ export default function LoginPage() {
     fontSize: '15px',
     fontWeight: 500,
     color: '#fff',
-    background: disabled ? 'var(--ink-secondary)' : 'var(--accent)',
+    background: disabled ? 'var(--ink-tertiary)' : 'var(--accent)',
     border: 'none',
     borderRadius: '10px',
     cursor: disabled ? 'not-allowed' : 'pointer',
     transition: 'background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease',
-    boxShadow: '0 2px 8px rgba(0,113,227,0.25)',
+    boxShadow: '0 2px 8px var(--accent-soft)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -258,6 +259,7 @@ export default function LoginPage() {
       justifyContent: 'center',
       padding: '40px 24px',
       position: 'relative',
+      background: 'var(--bg)',
     }}>
       {/* Background decorations */}
       <div style={{
@@ -267,7 +269,7 @@ export default function LoginPage() {
         width: '800px',
         height: '800px',
         borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(0,113,227,0.04) 0%, transparent 70%)',
+        background: 'radial-gradient(circle, var(--accent-soft) 0%, transparent 70%)',
         pointerEvents: 'none',
         zIndex: -1,
       }}/>
@@ -278,10 +280,15 @@ export default function LoginPage() {
         width: '600px',
         height: '600px',
         borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(0,113,227,0.03) 0%, transparent 70%)',
+        background: 'radial-gradient(circle, var(--accent-soft) 0%, transparent 70%)',
         pointerEvents: 'none',
         zIndex: -1,
       }}/>
+
+      {/* Theme toggle anchored to the top-right of the viewport */}
+      <div style={{ position: 'fixed', top: 24, right: 24, zIndex: 10 }}>
+        <ThemeToggle variant="inline" />
+      </div>
 
       <div style={cardStyle}>
         {/* Top highlight */}
@@ -291,7 +298,7 @@ export default function LoginPage() {
           left: 0,
           right: 0,
           height: '1px',
-          background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent)',
+          background: 'linear-gradient(90deg, transparent, var(--border-strong), transparent)',
         }}/>
 
         {/* Logo */}
@@ -306,7 +313,7 @@ export default function LoginPage() {
 
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '36px' }}>
-          <h1 style={{ fontSize: '24px', fontWeight: 600, marginBottom: '8px', letterSpacing: '-0.3px' }}>
+          <h1 style={{ fontSize: '24px', fontWeight: 600, marginBottom: '8px', letterSpacing: '-0.3px', color: 'var(--ink)' }}>
             {tab === 'login' ? '欢迎回来' : '创建账户'}
           </h1>
           <p style={{ fontSize: '14px', color: 'var(--ink-secondary)', lineHeight: 1.5 }}>
@@ -343,7 +350,7 @@ export default function LoginPage() {
             marginBottom: '20px',
             padding: '12px 14px',
             borderRadius: '10px',
-            background: 'var(--error-bg)',
+            background: 'var(--error-soft)',
             color: 'var(--error)',
             fontSize: '14px',
             lineHeight: 1.5,
@@ -356,8 +363,8 @@ export default function LoginPage() {
             marginBottom: '20px',
             padding: '12px 14px',
             borderRadius: '10px',
-            background: '#E8F5E9',
-            color: '#2E7D32',
+            background: 'var(--success-soft)',
+            color: 'var(--success)',
             fontSize: '14px',
             lineHeight: 1.5,
           }}>
@@ -493,9 +500,9 @@ export default function LoginPage() {
                   padding: '13px 20px',
                   fontSize: '13px',
                   fontWeight: 500,
-                  color: codeCountdown > 0 ? 'var(--ink-secondary)' : '#fff',
-                  background: codeCountdown > 0 ? 'var(--bg)' : 'var(--ink)',
-                  border: 'none',
+                  color: codeCountdown > 0 ? 'var(--ink-secondary)' : 'var(--ink-inverse)',
+                  background: codeCountdown > 0 ? 'var(--surface-hover)' : 'var(--ink)',
+                  border: '1px solid ' + (codeCountdown > 0 ? 'var(--border)' : 'transparent'),
                   borderRadius: '10px',
                   cursor: codeSending || codeCountdown > 0 ? 'not-allowed' : 'pointer',
                   transition: 'background 0.2s ease',
@@ -515,4 +522,3 @@ export default function LoginPage() {
     </div>
   )
 }
-

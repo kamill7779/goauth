@@ -50,30 +50,34 @@ export default function SettingsPage() {
   return (
     <div className="animate-[fadeInUp_0.4s_ease]">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-1">系统设置</h1>
-        <p className="text-sm text-gray-400">配置 GoAuth 全局策略、安全规则和默认行为</p>
+        <h1 className="text-2xl font-semibold text-ink mb-1">系统设置</h1>
+        <p className="text-sm text-ink-tertiary">配置 GoAuth 全局策略、安全规则和默认行为</p>
       </div>
 
       <div className="max-w-2xl space-y-6">
         {settings.map((group, gi) => (
-          <div key={gi} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <div className="px-5 py-3.5 border-b border-gray-200 bg-gray-50">
-              <h2 className="text-sm font-semibold text-gray-800">{group.section}</h2>
+          <div key={gi} className="bg-surface-solid rounded-xl border border-line overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-line bg-surface-muted">
+              <h2 className="text-sm font-semibold text-ink">{group.section}</h2>
             </div>
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-line">
               {group.items.map((item, ii) => (
-                <div key={ii} className="px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors">
+                <div key={ii} className="px-5 py-4 flex items-center justify-between hover:bg-surface-hover transition-colors">
                   <div>
-                    <p className="text-sm font-medium text-gray-800">{item.label}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">{item.description}</p>
+                    <p className="text-sm font-medium text-ink">{item.label}</p>
+                    <p className="text-xs text-ink-tertiary mt-0.5">{item.description}</p>
                   </div>
                   <button
                     onClick={() => toggleSetting(gi, ii)}
-                    className={`relative w-11 h-6 rounded-full transition-colors ${item.enabled ? 'bg-blue-600' : 'bg-gray-300'}`}
+                    className="relative w-11 h-6 rounded-full transition-colors"
+                    style={{ background: item.enabled ? 'var(--accent)' : 'var(--border-strong)' }}
                   >
                     <div
-                      className="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform"
-                      style={{ transform: item.enabled ? 'translateX(20px)' : 'translateX(2px)' }}
+                      className="absolute top-0.5 w-5 h-5 rounded-full shadow-soft-sm transition-transform"
+                      style={{
+                        background: 'var(--surface-solid)',
+                        transform: item.enabled ? 'translateX(20px)' : 'translateX(2px)',
+                      }}
                     />
                   </button>
                 </div>

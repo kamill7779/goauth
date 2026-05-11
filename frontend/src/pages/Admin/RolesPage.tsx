@@ -71,16 +71,16 @@ export default function RolesPage() {
     <div className="animate-[fadeInUp_0.4s_ease]">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900 mb-1">角色与权限</h1>
-          <p className="text-sm text-gray-400">管理角色定义、权限分配和访问控制矩阵</p>
+          <h1 className="text-2xl font-semibold text-ink mb-1">角色与权限</h1>
+          <p className="text-sm text-ink-tertiary">管理角色定义、权限分配和访问控制矩阵</p>
         </div>
-        <button className="inline-flex items-center gap-2 px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors">
+        <button className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity">
           <IconPlus size={16} /> 创建角色
         </button>
       </div>
 
       {error && (
-        <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        <div className="mb-5 rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn">
           {error}。权限矩阵需要后端提供 `/v1/admin/permissions` 后才能完整编辑。
         </div>
       )}
@@ -88,70 +88,75 @@ export default function RolesPage() {
       {loading ? (
         <div className="grid grid-cols-2 gap-5">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="bg-white rounded-xl border border-gray-200 p-5 animate-pulse">
-              <div className="h-10 w-10 bg-gray-200 rounded-lg mb-3" />
-              <div className="h-5 w-32 bg-gray-200 rounded mb-2" />
-              <div className="h-3 w-48 bg-gray-200 rounded" />
+            <div key={i} className="bg-surface-solid rounded-xl border border-line p-5 animate-pulse">
+              <div className="h-10 w-10 bg-surface-hover rounded-lg mb-3" />
+              <div className="h-5 w-32 bg-surface-hover rounded mb-2" />
+              <div className="h-3 w-48 bg-surface-hover rounded" />
             </div>
           ))}
         </div>
       ) : (
         <>
           <div className="grid grid-cols-2 gap-5 mb-8">
-            {roles.map((role) => (
-              <div
-                key={role.id}
-                onClick={() => setMatrixRole(matrixRole?.id === role.id ? null : role)}
-                className={`bg-white rounded-xl border p-5 cursor-pointer transition-all duration-300 ${
-                  matrixRole?.id === role.id ? 'border-blue-500 ring-1 ring-blue-500/20' : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                    <IconShield size={18} className="text-gray-500" />
+            {roles.map((role) => {
+              const isSelected = matrixRole?.id === role.id;
+              return (
+                <div
+                  key={role.id}
+                  onClick={() => setMatrixRole(isSelected ? null : role)}
+                  className="bg-surface-solid rounded-xl border p-5 cursor-pointer transition-all duration-300"
+                  style={{
+                    borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
+                    boxShadow: isSelected ? '0 0 0 3px var(--accent-soft)' : 'none',
+                  }}
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="w-10 h-10 bg-surface-hover rounded-lg flex items-center justify-center">
+                      <IconShield size={18} className="text-ink-secondary" />
+                    </div>
+                    <span className="text-xs text-ink-tertiary">{role.tenant_scope}</span>
                   </div>
-                  <span className="text-xs text-gray-400">{role.tenant_scope}</span>
+                  <h3 className="text-base font-semibold text-ink mb-1">{role.name}</h3>
+                  <p className="text-xs text-ink-tertiary mb-4">{role.description}</p>
+                  <div className="flex items-center gap-4 text-xs text-ink-secondary">
+                    <span className="flex items-center gap-1"><IconUsers size={12} /> {role.users_count} 用户</span>
+                    <span className="flex items-center gap-1"><IconLock size={12} /> {role.permissions_count} 权限</span>
+                  </div>
                 </div>
-                <h3 className="text-base font-semibold text-gray-900 mb-1">{role.name}</h3>
-                <p className="text-xs text-gray-400 mb-4">{role.description}</p>
-                <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span className="flex items-center gap-1"><IconUsers size={12} /> {role.users_count} 用户</span>
-                  <span className="flex items-center gap-1"><IconLock size={12} /> {role.permissions_count} 权限</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {matrixRole && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden animate-[fadeInUp_0.4s_ease]">
-              <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+            <div className="bg-surface-solid rounded-xl border border-line overflow-hidden animate-[fadeInUp_0.4s_ease]">
+              <div className="px-5 py-4 border-b border-line flex items-center justify-between">
                 <div>
-                  <h2 className="text-sm font-semibold text-gray-800">权限矩阵 · {matrixRole.name}</h2>
-                  <p className="text-xs text-gray-400 mt-0.5">勾选以分配或移除权限</p>
+                  <h2 className="text-sm font-semibold text-ink">权限矩阵 · {matrixRole.name}</h2>
+                  <p className="text-xs text-ink-tertiary mt-0.5">勾选以分配或移除权限</p>
                 </div>
-                <button onClick={() => setMatrixRole(null)} className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors">
-                  <span className="text-gray-400 text-lg">×</span>
+                <button onClick={() => setMatrixRole(null)} className="p-1.5 hover:bg-surface-hover rounded-lg transition-colors">
+                  <span className="text-ink-tertiary text-lg">×</span>
                 </button>
               </div>
               {permissions.length === 0 ? (
-                <div className="px-5 py-10 text-center text-sm text-gray-400">
+                <div className="px-5 py-10 text-center text-sm text-ink-tertiary">
                   暂无真实权限字典数据。
                 </div>
               ) : (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b border-gray-200 bg-gray-50">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-gray-500">Resource</th>
+                    <tr className="border-b border-line bg-surface-muted">
+                      <th className="text-left px-5 py-3 text-xs font-semibold text-ink-secondary">Resource</th>
                       {actions.map(a => (
-                        <th key={a} className="text-center px-3 py-3 text-[10px] font-semibold text-gray-400 uppercase">{a}</th>
+                        <th key={a} className="text-center px-3 py-3 text-[10px] font-semibold text-ink-tertiary uppercase">{a}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody className="divide-y divide-line">
                     {resources.map((resource) => (
-                      <tr key={resource} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-5 py-3 text-sm font-mono text-gray-700">{resource}</td>
+                      <tr key={resource} className="hover:bg-surface-hover transition-colors">
+                        <td className="px-5 py-3 text-sm font-mono text-ink-secondary">{resource}</td>
                         {actions.map((action) => {
                           const permId = getPermId(resource, action);
                           const isChecked = Boolean(permId && matrixRole.permission_ids.includes(permId));
@@ -160,9 +165,11 @@ export default function RolesPage() {
                               <button
                                 disabled={!permId}
                                 onClick={() => permId && togglePermission(matrixRole, permId, isChecked)}
-                                className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                                  isChecked ? 'bg-blue-600 border-blue-600' : 'border-gray-300 hover:border-gray-400 disabled:border-gray-200 disabled:bg-gray-50'
-                                }`}
+                                className="w-5 h-5 rounded border-2 flex items-center justify-center transition-colors disabled:opacity-50"
+                                style={{
+                                  backgroundColor: isChecked ? 'var(--accent)' : 'transparent',
+                                  borderColor: isChecked ? 'var(--accent)' : 'var(--border-strong)',
+                                }}
                               >
                                 {isChecked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round"><path d="M20 6 9 17l-5-5"/></svg>}
                               </button>
