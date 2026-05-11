@@ -1,4 +1,4 @@
-import type { OAuthClient, PaginatedResponse, Role, Tenant, User } from '../types/admin';
+import type { OAuthClient, PaginatedResponse, Role, Session, Tenant, User } from '../types/admin';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -156,6 +156,23 @@ export function normalizeOAuthClient(raw: unknown): OAuthClient {
     status: stringValue(record.status, 'active') as OAuthClient['status'],
     auto_provision_members: Boolean(record.auto_provision_members),
     last_rotated: stringValue(record.last_rotated, stringValue(record.updated_at, '-')),
+  };
+}
+
+export function normalizeSession(raw: unknown): Session {
+  const record = isRecord(raw) ? raw : {};
+
+  return {
+    id: stringField(record, ['id', 'ID']),
+    user_id: numberField(record, ['user_id', 'UserID']),
+    tenant_id: numberField(record, ['tenant_id', 'TenantID']),
+    user: stringField(record, ['user', 'email', 'Email']),
+    client: stringField(record, ['client', 'client_id', 'ClientID'], 'GoAuth'),
+    ip: stringField(record, ['ip', 'ip_address', 'IPAddress'], '-'),
+    user_agent: stringField(record, ['user_agent', 'UserAgent']),
+    created_at: stringField(record, ['created_at', 'CreatedAt']),
+    expires_at: stringField(record, ['expires_at', 'ExpiresAt']),
+    status: stringField(record, ['status', 'Status'], 'active'),
   };
 }
 

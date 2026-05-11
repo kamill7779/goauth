@@ -11,6 +11,7 @@ import {
   memberRoleRequest,
   normalizeOAuthClient,
   normalizeRole,
+  normalizeSession,
   normalizeTenant,
   normalizeUser,
   rolePermissionRequest,
@@ -179,8 +180,20 @@ export const updateOAuthClientStatus = (clientId: string, status: OAuthClient['s
 export const rotateClientSecret = (clientId: string) =>
   postRaw(`/admin/oauth-clients/${clientId}/rotate-secret`).then(() => undefined);
 
+export const getSessions = (params?: { search?: string; status?: string; user_id?: number; client_id?: string; page?: number; page_size?: number }) =>
+  getRaw('/admin/sessions', params).then((body) => {
+    const page = asPaginated<unknown>(body, 'sessions', params?.page, params?.page_size);
+    return {
+      ...page,
+      data: page.data.map(normalizeSession),
+    } satisfies PaginatedResponse<Session>;
+  });
+
+export const revokeSession = (sessionId: string) =>
+  postRaw(`/admin/sessions/${encodeURIComponent(sessionId)}/revoke`).then(() => undefined);
+
 export const getUserSessions = (userId: number) =>
-  getRaw(`/admin/users/${userId}/sessions`).then((body) => asCollection<Session>(body, 'sessions'));
+  getRaw(`/admin/users/${userId}/sessions`).then((body) => asCollection<unknown>(body, 'sessions').map(normalizeSession));
 
 export const revokeUserSessions = (userId: number) =>
   postRaw(`/admin/users/${userId}/logout-all`).then(() => undefined);

@@ -4,6 +4,7 @@ export default function StatusBadge({ status, text }: { status: string; text?: s
     disabled: 'bg-gray-100 text-gray-500 border-gray-200',
     inactive: 'bg-gray-100 text-gray-500 border-gray-200',
     pending: 'bg-amber-50 text-amber-700 border-amber-200',
+    expired: 'bg-amber-50 text-amber-700 border-amber-200',
     suspended: 'bg-red-50 text-red-700 border-red-200',
     blocked: 'bg-red-50 text-red-700 border-red-200',
     failed: 'bg-red-50 text-red-700 border-red-200',
@@ -12,11 +13,11 @@ export default function StatusBadge({ status, text }: { status: string; text?: s
   };
   const labelMap: Record<string, string> = {
     active: '活跃', disabled: '停用', inactive: '停用', pending: '待验证', suspended: '已冻结',
-    blocked: '已拦截', failed: '失败', success: '成功', trial: '试用',
+    blocked: '已拦截', failed: '失败', success: '成功', trial: '试用', expired: '已过期',
   };
   const dotMap: Record<string, string> = {
     active: 'bg-emerald-500', success: 'bg-emerald-500',
-    pending: 'bg-amber-500', trial: 'bg-amber-500',
+    pending: 'bg-amber-500', trial: 'bg-amber-500', expired: 'bg-amber-500',
     disabled: 'bg-gray-400', inactive: 'bg-gray-400',
     suspended: 'bg-red-500', blocked: 'bg-red-500', failed: 'bg-red-500',
   };

@@ -68,6 +68,35 @@ test('normalizeOAuthClient maps backend allowed_scopes into frontend scopes', ()
   );
 });
 
+test('normalizeSession maps global admin session payloads', () => {
+  assert.deepEqual(
+    adapters.normalizeSession({
+      id: 'sess_123',
+      user_id: 42,
+      tenant_id: 7,
+      user: 'member@example.com',
+      client: 'bbs-go-web',
+      ip: '203.0.113.9',
+      user_agent: 'Chrome',
+      created_at: '2026-05-11T10:00:00Z',
+      expires_at: '2026-06-10T10:00:00Z',
+      status: 'active',
+    }),
+    {
+      id: 'sess_123',
+      user_id: 42,
+      tenant_id: 7,
+      user: 'member@example.com',
+      client: 'bbs-go-web',
+      ip: '203.0.113.9',
+      user_agent: 'Chrome',
+      created_at: '2026-05-11T10:00:00Z',
+      expires_at: '2026-06-10T10:00:00Z',
+      status: 'active',
+    },
+  );
+});
+
 test('role and member mutation payloads match GoAuth backend contracts', () => {
   assert.deepEqual(adapters.rolePermissionRequest(7), { permission_ids: [7] });
   assert.deepEqual(adapters.memberRoleRequest(9), { role_ids: [9] });

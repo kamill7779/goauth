@@ -55,9 +55,12 @@ export interface OAuthClient {
 
 export interface Session {
   id: string;
+  user_id: number;
+  tenant_id: number;
   user: string;
   client: string;
   ip: string;
+  user_agent: string;
   created_at: string;
   expires_at: string;
   status: string;

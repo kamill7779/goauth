@@ -50,6 +50,8 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.POST("/permissions", h.createPermission)
 	admin.PATCH("/permissions/:id", h.updatePermission)
 	admin.DELETE("/permissions/:id", h.deletePermission)
+	admin.GET("/sessions", h.listSessions)
+	admin.POST("/sessions/:session_id/revoke", h.revokeSession)
 	admin.GET("/users/:id/sessions", h.listUserSessions)
 	admin.POST("/users/:id/logout-all", h.logoutUserSessions)
 	admin.GET("/audit-logs", h.listAuditLogs)
@@ -215,6 +217,101 @@ func (h *Handler) deletePermission(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"deleted": true})
 }
 
+func (h *Handler) listSessions(c *gin.Context) {
+	page, pageSize := pagination(c)
+	now := time.Now()
+
+	countQuery, err := h.sessionListQuery(c, now)
+	if err != nil {
+		return
+	}
+	var total int64
+	if err := countQuery.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	rowsQuery, err := h.sessionListQuery(c, now)
+	if err != nil {
+		return
+	}
+	var rows []adminSessionRow
+	if err := rowsQuery.
+		Select("login_sessions.id, login_sessions.user_id, login_sessions.tenant_id, login_sessions.client_id, login_sessions.revoked_at, login_sessions.created_at, users.email AS user_email, users.display_name AS user_display_name").
+		Order("login_sessions.created_at DESC, login_sessions.id DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	tokens, err := h.latestRefreshTokensBySession(c, rows)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	items := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		token, hasToken := tokens[row.ID]
+		active := hasToken && token.RevokedAt == nil && token.ExpiresAt.After(now) && row.RevokedAt == nil
+		items = append(items, gin.H{
+			"id":         row.ID,
+			"user_id":    row.UserID,
+			"tenant_id":  row.TenantID,
+			"user":       sessionUserLabel(row),
+			"client":     sessionRowClientLabel(row, token),
+			"ip":         token.IPAddress,
+			"user_agent": token.UserAgent,
+			"created_at": row.CreatedAt,
+			"expires_at": token.ExpiresAt,
+			"status":     sessionRowStatus(row, token, hasToken, active, now),
+			"revoked_at": row.RevokedAt,
+		})
+	}
+
+	httpserver.Success(c, http.StatusOK, gin.H{
+		"sessions":  items,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+func (h *Handler) revokeSession(c *gin.Context) {
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		return
+	}
+	if h.sessionService == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "session service not configured"})
+		return
+	}
+
+	var loginSession store.LoginSession
+	if err := h.db.WithContext(c.Request.Context()).Where("id = ?", sessionID).First(&loginSession).Error; err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := h.sessionService.Logout(c.Request.Context(), sessionID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	_ = h.recordAudit(c, "admin_session_revoked", audit.TargetTypeSession, sessionID, map[string]any{
+		"user_id":   loginSession.UserID,
+		"tenant_id": loginSession.TenantID,
+		"client_id": loginSession.ClientID,
+	})
+	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
+}
+
 func (h *Handler) listUserSessions(c *gin.Context) {
 	userID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -334,6 +431,126 @@ type permissionPatchRequest struct {
 	Action      *string `json:"action"`
 	Code        *string `json:"code"`
 	Description *string `json:"description"`
+}
+
+type adminSessionRow struct {
+	ID              string
+	UserID          int64
+	TenantID        int64
+	ClientID        string
+	RevokedAt       *time.Time
+	CreatedAt       time.Time
+	UserEmail       string
+	UserDisplayName string
+}
+
+func (h *Handler) sessionListQuery(c *gin.Context, now time.Time) (*gorm.DB, error) {
+	query := h.db.WithContext(c.Request.Context()).
+		Table("login_sessions").
+		Joins("JOIN users ON users.id = login_sessions.user_id AND users.deleted_at IS NULL")
+
+	if value := strings.TrimSpace(c.Query("user_id")); value != "" {
+		userID, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || userID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+			return nil, errors.New("invalid user_id")
+		}
+		query = query.Where("login_sessions.user_id = ?", userID)
+	}
+	if value := strings.TrimSpace(c.Query("client_id")); value != "" {
+		query = query.Where("login_sessions.client_id = ?", value)
+	}
+	if value := strings.TrimSpace(c.Query("search")); value != "" {
+		like := "%" + value + "%"
+		query = query.Where(
+			"(login_sessions.id LIKE ? OR login_sessions.client_id LIKE ? OR users.email LIKE ? OR users.display_name LIKE ?)",
+			like,
+			like,
+			like,
+			like,
+		)
+	}
+
+	activeRefreshTokenExists := "EXISTS (SELECT 1 FROM refresh_tokens WHERE refresh_tokens.session_id = login_sessions.id AND refresh_tokens.revoked_at IS NULL AND refresh_tokens.expires_at > ?)"
+	switch strings.TrimSpace(c.Query("status")) {
+	case "", "all":
+	case "active":
+		query = query.Where("login_sessions.revoked_at IS NULL AND "+activeRefreshTokenExists, now)
+	case "revoked":
+		query = query.Where("login_sessions.revoked_at IS NOT NULL")
+	case "expired":
+		query = query.Where("login_sessions.revoked_at IS NULL AND NOT "+activeRefreshTokenExists, now)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+		return nil, errors.New("invalid status")
+	}
+
+	return query, nil
+}
+
+func (h *Handler) latestRefreshTokensBySession(c *gin.Context, rows []adminSessionRow) (map[string]store.RefreshToken, error) {
+	result := map[string]store.RefreshToken{}
+	if len(rows) == 0 {
+		return result, nil
+	}
+	sessionIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		sessionIDs = append(sessionIDs, row.ID)
+	}
+
+	var tokens []store.RefreshToken
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("session_id IN ?", sessionIDs).
+		Order("created_at DESC, id DESC").
+		Find(&tokens).Error; err != nil {
+		return nil, err
+	}
+	for _, token := range tokens {
+		if _, ok := result[token.SessionID]; ok {
+			continue
+		}
+		result[token.SessionID] = token
+	}
+	return result, nil
+}
+
+func sessionUserLabel(row adminSessionRow) string {
+	if strings.TrimSpace(row.UserEmail) != "" {
+		return row.UserEmail
+	}
+	if strings.TrimSpace(row.UserDisplayName) != "" {
+		return row.UserDisplayName
+	}
+	return "user:" + strconv.FormatInt(row.UserID, 10)
+}
+
+func sessionRowClientLabel(row adminSessionRow, token store.RefreshToken) string {
+	if strings.TrimSpace(token.UserAgent) != "" {
+		return token.UserAgent
+	}
+	if strings.TrimSpace(token.ClientID) != "" {
+		return token.ClientID
+	}
+	if strings.TrimSpace(row.ClientID) != "" {
+		return row.ClientID
+	}
+	return "GoAuth"
+}
+
+func sessionRowStatus(row adminSessionRow, token store.RefreshToken, hasToken, active bool, now time.Time) string {
+	if row.RevokedAt != nil {
+		return "revoked"
+	}
+	if active {
+		return "active"
+	}
+	if hasToken && token.RevokedAt != nil {
+		return "revoked"
+	}
+	if hasToken && !token.ExpiresAt.IsZero() && !token.ExpiresAt.After(now) {
+		return "expired"
+	}
+	return "inactive"
 }
 
 func parseInt64Param(c *gin.Context, name string) (int64, error) {

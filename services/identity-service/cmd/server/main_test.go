@@ -238,6 +238,76 @@ func TestAdminConsoleSupplementalRoutes(t *testing.T) {
 	assertSessionRevoked(t, db, otherPair.SessionID)
 }
 
+func TestAdminGlobalSessionsListAndSingleRevoke(t *testing.T) {
+	router, db, sessionService, adminUser, otherUser := newIntegrationRouter(t)
+	makeSystemUser(t, db, adminUser.ID)
+	adminPair := issueIntegrationTokens(t, sessionService, *adminUser, 0)
+	otherPair := issueIntegrationTokens(t, sessionService, *otherUser, 0)
+
+	list := performJSON(t, router, http.MethodGet, "/v1/admin/sessions?page=1&page_size=20", "", adminPair.AccessToken)
+	if list.Code != http.StatusOK {
+		t.Fatalf("sessions status = %d, want %d body=%s", list.Code, http.StatusOK, list.Body.String())
+	}
+	listData := decodeData(t, list)
+	sessions := asSlice(t, listData["sessions"], "sessions")
+	if len(sessions) < 2 {
+		t.Fatalf("sessions length = %d, want at least 2 body=%s", len(sessions), list.Body.String())
+	}
+	if total := numberFromAny(listData["total"]); total < 2 {
+		t.Fatalf("sessions total = %d, want at least 2 body=%s", total, list.Body.String())
+	}
+	otherSession := findItemByStringField(t, sessions, "id", otherPair.SessionID)
+	if got := numberFromAny(otherSession["user_id"]); got != int(otherUser.ID) {
+		t.Fatalf("session user_id = %d, want %d", got, otherUser.ID)
+	}
+	if got := stringFromAny(otherSession["user"]); got != otherUser.Email {
+		t.Fatalf("session user = %q, want %q", got, otherUser.Email)
+	}
+	if got := stringFromAny(otherSession["client"]); got != "web-client" {
+		t.Fatalf("session client = %q, want web-client", got)
+	}
+	if got := stringFromAny(otherSession["status"]); got != "active" {
+		t.Fatalf("session status = %q, want active", got)
+	}
+
+	search := performJSON(t, router, http.MethodGet, "/v1/admin/sessions?search=other&page=1&page_size=20", "", adminPair.AccessToken)
+	if search.Code != http.StatusOK {
+		t.Fatalf("search sessions status = %d, want %d body=%s", search.Code, http.StatusOK, search.Body.String())
+	}
+	searchItems := asSlice(t, decodeData(t, search)["sessions"], "sessions")
+	if len(searchItems) != 1 {
+		t.Fatalf("search sessions length = %d, want 1 body=%s", len(searchItems), search.Body.String())
+	}
+	if got := stringFromAny(asMap(t, searchItems[0], "sessions[0]")["id"]); got != otherPair.SessionID {
+		t.Fatalf("search session id = %q, want %q", got, otherPair.SessionID)
+	}
+
+	revoke := performJSON(t, router, http.MethodPost, "/v1/admin/sessions/"+otherPair.SessionID+"/revoke", `{}`, adminPair.AccessToken)
+	if revoke.Code != http.StatusOK {
+		t.Fatalf("revoke session status = %d, want %d body=%s", revoke.Code, http.StatusOK, revoke.Body.String())
+	}
+	assertSessionRevoked(t, db, otherPair.SessionID)
+	assertSessionStillActive(t, db, adminPair.SessionID)
+
+	activeForUser := performJSON(t, router, http.MethodGet, "/v1/admin/sessions?user_id="+userIDString(otherUser.ID)+"&status=active", "", adminPair.AccessToken)
+	if activeForUser.Code != http.StatusOK {
+		t.Fatalf("active user sessions status = %d, want %d body=%s", activeForUser.Code, http.StatusOK, activeForUser.Body.String())
+	}
+	if total := numberFromAny(decodeData(t, activeForUser)["total"]); total != 0 {
+		t.Fatalf("active sessions total = %d, want 0 body=%s", total, activeForUser.Body.String())
+	}
+
+	revoked := performJSON(t, router, http.MethodGet, "/v1/admin/sessions?status=revoked&search=other", "", adminPair.AccessToken)
+	if revoked.Code != http.StatusOK {
+		t.Fatalf("revoked sessions status = %d, want %d body=%s", revoked.Code, http.StatusOK, revoked.Body.String())
+	}
+	revokedItems := asSlice(t, decodeData(t, revoked)["sessions"], "sessions")
+	revokedSession := findItemByStringField(t, revokedItems, "id", otherPair.SessionID)
+	if got := stringFromAny(revokedSession["status"]); got != "revoked" {
+		t.Fatalf("revoked session status = %q, want revoked", got)
+	}
+}
+
 func TestAdminOAuthClientSecretRotation(t *testing.T) {
 	router, db, sessionService, adminUser, _ := newIntegrationRouter(t)
 	makeSystemUser(t, db, adminUser.ID)
@@ -647,6 +717,19 @@ func asMap(t *testing.T, value any, name string) map[string]any {
 		t.Fatalf("%s = %#v, want object", name, value)
 	}
 	return item
+}
+
+func findItemByStringField(t *testing.T, items []any, fieldName, want string) map[string]any {
+	t.Helper()
+
+	for index, item := range items {
+		record := asMap(t, item, "items["+strconv.Itoa(index)+"]")
+		if stringFromAny(record[fieldName]) == want {
+			return record
+		}
+	}
+	t.Fatalf("no item with %s = %q in %#v", fieldName, want, items)
+	return nil
 }
 
 func stringFromAny(value any) string {
