@@ -39,6 +39,9 @@ func (h *Handler) userInfo(c *gin.Context) {
 	}
 	if hasScope(scopes, "profile") {
 		response["name"] = claims.Name
+		response["preferred_username"] = claims.PreferredUsername
+		response["username"] = claims.Username
+		response["nickname"] = claims.Nickname
 	}
 	c.JSON(http.StatusOK, response)
 }

@@ -651,7 +651,10 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 		claims.EmailVerified = user.EmailVerifiedAt != nil
 	}
 	if hasScope(scopes, "profile") {
-		claims.Name = user.DisplayName
+		claims.Name = user.Nickname
+		claims.PreferredUsername = user.Username
+		claims.Username = user.Username
+		claims.Nickname = user.Nickname
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
@@ -680,7 +683,10 @@ func (s *Service) signIDToken(user *store.User, clientID, nonce, scope string) (
 		claims.EmailVerified = user.EmailVerifiedAt != nil
 	}
 	if hasScope(scopes, "profile") {
-		claims.Name = user.DisplayName
+		claims.Name = user.Nickname
+		claims.PreferredUsername = user.Username
+		claims.Username = user.Username
+		claims.Nickname = user.Nickname
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)

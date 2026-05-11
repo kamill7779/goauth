@@ -53,23 +53,29 @@ type Handler struct {
 }
 
 type accessClaims struct {
-	Email         string `json:"email,omitempty"`
-	EmailVerified bool   `json:"email_verified,omitempty"`
-	Name          string `json:"name,omitempty"`
-	Scope         string `json:"scope,omitempty"`
-	TokenUse      string `json:"token_use,omitempty"`
-	ClientID      string `json:"client_id,omitempty"`
-	TenantID      int64  `json:"tid,omitempty"`
-	SessionID     string `json:"sid,omitempty"`
-	TokenVersion  int    `json:"ver,omitempty"`
+	Email             string `json:"email,omitempty"`
+	EmailVerified     bool   `json:"email_verified,omitempty"`
+	Name              string `json:"name,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	Username          string `json:"username,omitempty"`
+	Nickname          string `json:"nickname,omitempty"`
+	Scope             string `json:"scope,omitempty"`
+	TokenUse          string `json:"token_use,omitempty"`
+	ClientID          string `json:"client_id,omitempty"`
+	TenantID          int64  `json:"tid,omitempty"`
+	SessionID         string `json:"sid,omitempty"`
+	TokenVersion      int    `json:"ver,omitempty"`
 	jwt.RegisteredClaims
 }
 
 type idTokenClaims struct {
-	Email         string `json:"email,omitempty"`
-	EmailVerified bool   `json:"email_verified,omitempty"`
-	Name          string `json:"name,omitempty"`
-	Nonce         string `json:"nonce,omitempty"`
+	Email             string `json:"email,omitempty"`
+	EmailVerified     bool   `json:"email_verified,omitempty"`
+	Name              string `json:"name,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	Username          string `json:"username,omitempty"`
+	Nickname          string `json:"nickname,omitempty"`
+	Nonce             string `json:"nonce,omitempty"`
 	jwt.RegisteredClaims
 }
 
