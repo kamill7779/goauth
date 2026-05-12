@@ -165,3 +165,50 @@ test('admin client coalesces concurrent 401 refresh attempts', async () => {
   assert.equal(refreshCount, 1);
   assert.deepEqual(responses.map(response => response.data.data), [{ ok: true }, { ok: true }]);
 });
+
+test('admin client preserves 403 status for permission errors', async () => {
+  const client = createAdminHttpClient({
+    baseURL: 'http://goauth.test/v1',
+    storage: memoryStorage({ access_token: 'ok', refresh_token: 'ok' }),
+    adapter: async (config) => Promise.reject({
+      config,
+      response: {
+        status: 403,
+        data: { error: 'forbidden' },
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () => client.get('/admin/users'),
+    (error) => {
+      assert.equal(error instanceof Error, true);
+      assert.equal(error.message, 'forbidden');
+      assert.equal(error.status, 403);
+      return true;
+    },
+  );
+});
+
+test('admin client preserves server status for non-auth backend failures', async () => {
+  const client = createAdminHttpClient({
+    baseURL: 'http://goauth.test/v1',
+    adapter: async (config) => Promise.reject({
+      config,
+      response: {
+        status: 503,
+        data: { message: 'service unavailable' },
+      },
+    }),
+  });
+
+  await assert.rejects(
+    () => client.get('/admin/oauth-clients'),
+    (error) => {
+      assert.equal(error instanceof Error, true);
+      assert.equal(error.message, 'service unavailable');
+      assert.equal(error.status, 503);
+      return true;
+    },
+  );
+});

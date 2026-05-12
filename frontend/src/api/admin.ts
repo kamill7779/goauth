@@ -4,6 +4,7 @@ import type {
   CreateUserInput, CreateTenantInput, CreateRoleInput, CreateOAuthClientInput,
 } from '../types/admin';
 import { createAdminHttpClient } from './adminHttp';
+import type { AdminHttpError } from './adminHttp';
 import {
   asCollection,
   asPaginated,
@@ -39,6 +40,34 @@ function patchRaw(path: string, data?: unknown): Promise<unknown> {
 
 function deleteRaw(path: string): Promise<unknown> {
   return v1.delete(path).then(r => r.data);
+}
+
+export type AdminAccessFailure = 'unauthenticated' | 'forbidden' | 'unavailable';
+
+export interface OAuthClientSecretResponse {
+  client: OAuthClient;
+  client_secret?: string;
+}
+
+export function classifyAdminAccessError(error: unknown): AdminAccessFailure {
+  const status = (error as Partial<AdminHttpError> | undefined)?.status;
+  if (status === 401) {
+    return 'unauthenticated';
+  }
+  if (status === 403) {
+    return 'forbidden';
+  }
+  return 'unavailable';
+}
+
+export function normalizeOAuthClientSecretResponse(body: unknown): OAuthClientSecretResponse {
+  const payload = asSingle<Record<string, unknown>>(body);
+  return {
+    client: normalizeOAuthClient(payload),
+    client_secret: typeof payload.client_secret === 'string' && payload.client_secret.trim()
+      ? payload.client_secret
+      : undefined,
+  };
 }
 
 export const checkAdminAccess = () =>
@@ -147,14 +176,14 @@ export const createOAuthClient = (input: CreateOAuthClientInput) => {
     grant_types: input.grant_types ?? ['authorization_code', 'refresh_token'],
     token_endpoint_auth_method: input.token_endpoint_auth_method ?? 'client_secret_post',
   };
-  return postRaw('/admin/oauth-clients', payload).then((body) => normalizeOAuthClient(asSingle(body)));
+  return postRaw('/admin/oauth-clients', payload).then(normalizeOAuthClientSecretResponse);
 };
 
 export const updateOAuthClientStatus = (clientId: string, status: OAuthClient['status']) =>
   patchRaw(`/admin/oauth-clients/${clientId}/status`, { status }).then((body) => normalizeOAuthClient(asSingle(body)));
 
 export const rotateClientSecret = (clientId: string) =>
-  postRaw(`/admin/oauth-clients/${clientId}/rotate-secret`).then(() => undefined);
+  postRaw(`/admin/oauth-clients/${clientId}/rotate-secret`).then(normalizeOAuthClientSecretResponse);
 
 export const getSessions = (params?: { search?: string; status?: string; user_id?: number; client_id?: string; page?: number; page_size?: number }) =>
   getRaw('/admin/sessions', params).then((body) => {

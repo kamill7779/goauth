@@ -26,6 +26,10 @@ interface TokenPair {
   refresh_token: string;
 }
 
+export interface AdminHttpError extends Error {
+  status?: number;
+}
+
 function browserStorage(): TokenStorage | null {
   if (typeof window === 'undefined') {
     return null;
@@ -63,6 +67,14 @@ function unwrapTokenPair(body: unknown): TokenPair {
 function clearStoredTokens(storage: TokenStorage | null) {
   storage?.removeItem('access_token');
   storage?.removeItem('refresh_token');
+}
+
+function createAdminHttpError(message: string, status?: number): AdminHttpError {
+  const error = new Error(message) as AdminHttpError;
+  if (status !== undefined) {
+    error.status = status;
+  }
+  return error;
 }
 
 export function createAdminHttpClient(options: AdminHttpClientOptions): AxiosInstance {
@@ -108,10 +120,10 @@ export function createAdminHttpClient(options: AdminHttpClientOptions): AxiosIns
     return refreshPromise;
   }
 
-  function expireSession(): Error {
+  function expireSession(): AdminHttpError {
     clearStoredTokens(storage);
     onExpired();
-    return new Error('登录已过期，请重新登录');
+    return createAdminHttpError('登录已过期，请重新登录', 401);
   }
 
   client.interceptors.response.use(
@@ -138,7 +150,7 @@ export function createAdminHttpClient(options: AdminHttpClientOptions): AxiosIns
       }
 
       const msg = error.response?.data?.error || error.response?.data?.message || error.message || '请求失败';
-      return Promise.reject(new Error(msg));
+      return Promise.reject(createAdminHttpError(msg, error.response?.status));
     }
   );
 
