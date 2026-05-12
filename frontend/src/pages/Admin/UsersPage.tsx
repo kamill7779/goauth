@@ -15,6 +15,14 @@ const initialCreateForm = {
   status: 'active',
 };
 
+export function planUserListRefreshAfterCreate(currentPage: number) {
+  const nextPage = 1;
+  return {
+    nextPage,
+    shouldFetchImmediately: currentPage === nextPage,
+  };
+}
+
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
@@ -31,14 +39,14 @@ export default function UsersPage() {
   const [showConfirm, setShowConfirm] = useState<{ userId: number; action: string } | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
-  const fetchUsers = useCallback(async () => {
+  const fetchUsers = useCallback(async (pageOverride = page) => {
     setLoading(true);
     try {
       const res = await getUsers({
         search: searchQuery || undefined,
         status: statusFilter === 'all' ? undefined : statusFilter,
         sort,
-        page,
+        page: pageOverride,
         page_size: 20,
       });
       setUsers(res.data);
@@ -109,8 +117,11 @@ export default function UsersPage() {
       setCreateDrawerOpen(false);
       setCreateForm(initialCreateForm);
       setToast({ message: '用户已创建', type: 'success' });
-      setPage(1);
-      fetchUsers();
+      const refreshPlan = planUserListRefreshAfterCreate(page);
+      setPage(refreshPlan.nextPage);
+      if (refreshPlan.shouldFetchImmediately) {
+        await fetchUsers(refreshPlan.nextPage);
+      }
     } catch (err) {
       setToast({ message: err instanceof Error ? err.message : '创建失败', type: 'error' });
     } finally {

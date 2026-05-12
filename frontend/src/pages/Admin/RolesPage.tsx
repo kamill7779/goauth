@@ -12,6 +12,39 @@ const initialCreateForm = {
   description: '',
 };
 
+export function summarizeRolesPageLoad({
+  rolesResult,
+  permissionsResult,
+  tenantsResult,
+  currentTenantId,
+}: {
+  rolesResult: PromiseSettledResult<Role[]>;
+  permissionsResult: PromiseSettledResult<Permission[]>;
+  tenantsResult: PromiseSettledResult<{ data: Tenant[] }>;
+  currentTenantId: string;
+}) {
+  const roles = rolesResult.status === 'fulfilled' ? rolesResult.value : [];
+  const permissions = permissionsResult.status === 'fulfilled' ? permissionsResult.value : [];
+  const tenants = tenantsResult.status === 'fulfilled' ? tenantsResult.value.data : [];
+
+  let error = '';
+  if (rolesResult.status === 'rejected') {
+    error = rolesResult.reason instanceof Error ? rolesResult.reason.message : '角色接口暂不可用';
+  } else if (permissionsResult.status === 'rejected') {
+    error = permissionsResult.reason instanceof Error ? permissionsResult.reason.message : '权限字典接口暂不可用';
+  } else if (tenantsResult.status === 'rejected') {
+    error = tenantsResult.reason instanceof Error ? tenantsResult.reason.message : '租户列表加载失败';
+  }
+
+  return {
+    roles,
+    permissions,
+    tenants,
+    error,
+    nextTenantId: currentTenantId || (tenants[0] ? String(tenants[0].id) : ''),
+  };
+}
+
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
@@ -36,27 +69,20 @@ export default function RolesPage() {
       getTenants({ page: 1, page_size: 100, sort: 'created_at_desc' }),
     ])
       .then(([rolesResult, permissionsResult, tenantsResult]) => {
-        if (rolesResult.status === 'fulfilled') {
-          setRoles(rolesResult.value);
-        } else {
-          setError(rolesResult.reason instanceof Error ? rolesResult.reason.message : '角色接口暂不可用');
-        }
-
-        if (permissionsResult.status === 'fulfilled') {
-          setPermissions(permissionsResult.value);
-        } else {
-          setError(prev => prev || (permissionsResult.reason instanceof Error ? permissionsResult.reason.message : '权限字典接口暂不可用'));
-        }
-
-        if (tenantsResult.status === 'fulfilled') {
-          setTenants(tenantsResult.value.data);
-          setCreateForm(current => current.tenantId ? current : {
-            ...current,
-            tenantId: tenantsResult.value.data[0] ? String(tenantsResult.value.data[0].id) : '',
-          });
-        } else {
-          setError(prev => prev || (tenantsResult.reason instanceof Error ? tenantsResult.reason.message : '租户列表加载失败'));
-        }
+        const summary = summarizeRolesPageLoad({
+          rolesResult,
+          permissionsResult,
+          tenantsResult,
+          currentTenantId: createForm.tenantId,
+        });
+        setRoles(summary.roles);
+        setPermissions(summary.permissions);
+        setTenants(summary.tenants);
+        setError(summary.error);
+        setCreateForm(current => current.tenantId ? current : {
+          ...current,
+          tenantId: summary.nextTenantId,
+        });
       })
       .finally(() => setLoading(false));
   };
