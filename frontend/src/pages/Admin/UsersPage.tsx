@@ -1,10 +1,19 @@
-import { useState, useEffect, useCallback } from 'react';
-import { getUsers, disableUser, enableUser, resetPassword } from '../../api/admin';
-import StatusBadge from '../../components/admin/StatusBadge';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { createUser, disableUser, enableUser, getUsers, resetPassword } from '../../api/admin';
 import Drawer from '../../components/admin/Drawer';
+import { IconCheckCircle, IconClock, IconFilter, IconLock, IconPlus, IconRefreshCw, IconSearch } from '../../components/admin/Icons';
+import StatusBadge from '../../components/admin/StatusBadge';
 import Toast from '../../components/admin/Toast';
-import { IconSearch, IconPlus, IconFilter, IconCheckCircle, IconClock, IconRefreshCw, IconLock } from '../../components/admin/Icons';
 import type { User } from '../../types/admin';
+
+const initialCreateForm = {
+  username: '',
+  nickname: '',
+  displayName: '',
+  email: '',
+  password: '',
+  status: 'active',
+};
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
@@ -14,8 +23,11 @@ export default function UsersPage() {
   const [sort, setSort] = useState('created_at_desc');
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [createForm, setCreateForm] = useState(initialCreateForm);
   const [showConfirm, setShowConfirm] = useState<{ userId: number; action: string } | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -36,7 +48,7 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, statusFilter, sort, page]);
+  }, [page, searchQuery, sort, statusFilter]);
 
   useEffect(() => {
     fetchUsers();
@@ -49,8 +61,11 @@ export default function UsersPage() {
 
   const handleStatusChange = async (userId: number, action: string) => {
     try {
-      if (action === 'disable') await disableUser(userId);
-      else await enableUser(userId);
+      if (action === 'disable') {
+        await disableUser(userId);
+      } else {
+        await enableUser(userId);
+      }
       setShowConfirm(null);
       setToast({
         message: `用户已${action === 'disable' ? '禁用' : '启用'}，审计记录已保存`,
@@ -79,6 +94,30 @@ export default function UsersPage() {
     }
   };
 
+  const handleCreateUser = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreateSubmitting(true);
+    try {
+      await createUser({
+        username: createForm.username,
+        nickname: createForm.nickname,
+        email: createForm.email,
+        display_name: createForm.displayName || createForm.nickname || createForm.username,
+        password: createForm.password,
+        status: createForm.status,
+      } as Parameters<typeof createUser>[0]);
+      setCreateDrawerOpen(false);
+      setCreateForm(initialCreateForm);
+      setToast({ message: '用户已创建', type: 'success' });
+      setPage(1);
+      fetchUsers();
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : '创建失败', type: 'error' });
+    } finally {
+      setCreateSubmitting(false);
+    }
+  };
+
   const filters = [
     { id: 'all', label: '全部' },
     { id: 'active', label: '活跃' },
@@ -92,7 +131,13 @@ export default function UsersPage() {
           <h1 className="text-2xl font-semibold text-ink mb-1">用户管理</h1>
           <p className="text-sm text-ink-tertiary">管理系统用户、租户成员和权限分配</p>
         </div>
-        <button className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity">
+        <button
+          onClick={() => {
+            setCreateForm(initialCreateForm);
+            setCreateDrawerOpen(true);
+          }}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+        >
           <IconPlus size={16} /> 创建用户
         </button>
       </div>
@@ -103,7 +148,10 @@ export default function UsersPage() {
           <input
             type="text"
             value={searchQuery}
-            onChange={e => { setSearchQuery(e.target.value); setPage(1); }}
+            onChange={e => {
+              setSearchQuery(e.target.value);
+              setPage(1);
+            }}
             placeholder="搜索 username、昵称或邮箱..."
             className="w-full pl-10 pr-4 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand transition-all text-ink placeholder:text-ink-muted"
           />
@@ -112,7 +160,10 @@ export default function UsersPage() {
           {filters.map(f => (
             <button
               key={f.id}
-              onClick={() => { setStatusFilter(f.id); setPage(1); }}
+              onClick={() => {
+                setStatusFilter(f.id);
+                setPage(1);
+              }}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
                 statusFilter === f.id ? 'bg-ink text-ink-inverse' : 'text-ink-secondary hover:text-ink hover:bg-surface-hover'
               }`}
@@ -123,7 +174,10 @@ export default function UsersPage() {
         </div>
         <select
           value={sort}
-          onChange={e => { setSort(e.target.value); setPage(1); }}
+          onChange={e => {
+            setSort(e.target.value);
+            setPage(1);
+          }}
           className="px-3 py-2 text-xs font-medium text-ink-secondary bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand"
         >
           <option value="created_at_desc">最新创建</option>
@@ -167,7 +221,7 @@ export default function UsersPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
-                  {users.map((user) => (
+                  {users.map(user => (
                     <tr
                       key={user.id}
                       className="hover:bg-surface-hover transition-colors cursor-pointer"
@@ -216,6 +270,80 @@ export default function UsersPage() {
           </>
         )}
       </div>
+
+      <Drawer isOpen={createDrawerOpen} onClose={() => setCreateDrawerOpen(false)} title="创建用户" width="420px">
+        <form className="space-y-4" onSubmit={handleCreateUser}>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">用户名</label>
+            <input
+              value={createForm.username}
+              onChange={e => setCreateForm(prev => ({ ...prev, username: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="member-01"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">昵称</label>
+            <input
+              value={createForm.nickname}
+              onChange={e => setCreateForm(prev => ({ ...prev, nickname: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="展示昵称"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">显示名称</label>
+            <input
+              value={createForm.displayName}
+              onChange={e => setCreateForm(prev => ({ ...prev, displayName: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="默认使用昵称或用户名"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">邮箱</label>
+            <input
+              type="email"
+              value={createForm.email}
+              onChange={e => setCreateForm(prev => ({ ...prev, email: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="member@example.com"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">初始密码</label>
+            <input
+              type="password"
+              value={createForm.password}
+              onChange={e => setCreateForm(prev => ({ ...prev, password: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="至少 8 位"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">状态</label>
+            <select
+              value={createForm.status}
+              onChange={e => setCreateForm(prev => ({ ...prev, status: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+            >
+              <option value="active">active</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </div>
+          <div className="pt-2 flex justify-end gap-3">
+            <button type="button" onClick={() => setCreateDrawerOpen(false)} className="px-4 py-2 text-sm text-ink-secondary hover:bg-surface-hover rounded-lg transition-colors">
+              取消
+            </button>
+            <button type="submit" disabled={createSubmitting} className="px-4 py-2 text-sm text-ink-inverse bg-ink rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50">
+              {createSubmitting ? '创建中...' : '创建用户'}
+            </button>
+          </div>
+        </form>
+      </Drawer>
 
       <Drawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} title="用户详情" width="420px">
         {selectedUser && (

@@ -1,14 +1,28 @@
-import { useState, useEffect } from 'react';
-import { addRolePermission, getRoles, getPermissions, removeRolePermission } from '../../api/admin';
-import { IconShield, IconUsers, IconLock, IconPlus } from '../../components/admin/Icons';
-import type { Role, Permission } from '../../types/admin';
+import { FormEvent, useEffect, useState } from 'react';
+import { addRolePermission, createRole, getPermissions, getRoles, getTenants, removeRolePermission } from '../../api/admin';
+import Drawer from '../../components/admin/Drawer';
+import { IconLock, IconPlus, IconShield, IconUsers } from '../../components/admin/Icons';
+import Toast from '../../components/admin/Toast';
+import type { Permission, Role, Tenant } from '../../types/admin';
+
+const initialCreateForm = {
+  tenantId: '',
+  name: '',
+  code: '',
+  description: '',
+};
 
 export default function RolesPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [permissions, setPermissions] = useState<Permission[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [matrixRole, setMatrixRole] = useState<Role | null>(null);
   const [loading, setLoading] = useState(true);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
+  const [createForm, setCreateForm] = useState(initialCreateForm);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
     loadRolesAndPermissions();
@@ -16,8 +30,12 @@ export default function RolesPage() {
 
   const loadRolesAndPermissions = () => {
     setLoading(true);
-    Promise.allSettled([getRoles(), getPermissions()])
-      .then(([rolesResult, permissionsResult]) => {
+    Promise.allSettled([
+      getRoles(),
+      getPermissions(),
+      getTenants({ page: 1, page_size: 100, sort: 'created_at_desc' }),
+    ])
+      .then(([rolesResult, permissionsResult, tenantsResult]) => {
         if (rolesResult.status === 'fulfilled') {
           setRoles(rolesResult.value);
         } else {
@@ -28,6 +46,16 @@ export default function RolesPage() {
           setPermissions(permissionsResult.value);
         } else {
           setError(prev => prev || (permissionsResult.reason instanceof Error ? permissionsResult.reason.message : '权限字典接口暂不可用'));
+        }
+
+        if (tenantsResult.status === 'fulfilled') {
+          setTenants(tenantsResult.value.data);
+          setCreateForm(current => current.tenantId ? current : {
+            ...current,
+            tenantId: tenantsResult.value.data[0] ? String(tenantsResult.value.data[0].id) : '',
+          });
+        } else {
+          setError(prev => prev || (tenantsResult.reason instanceof Error ? tenantsResult.reason.message : '租户列表加载失败'));
         }
       })
       .finally(() => setLoading(false));
@@ -61,6 +89,31 @@ export default function RolesPage() {
     }
   };
 
+  const handleCreateRole = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreateSubmitting(true);
+    try {
+      await createRole({
+        tenant_id: Number(createForm.tenantId),
+        name: createForm.name,
+        code: createForm.code,
+        description: createForm.description,
+        is_system: false,
+      });
+      setCreateDrawerOpen(false);
+      setCreateForm({
+        ...initialCreateForm,
+        tenantId: tenants[0] ? String(tenants[0].id) : '',
+      });
+      setToast({ message: '角色已创建', type: 'success' });
+      loadRolesAndPermissions();
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : '角色创建失败', type: 'error' });
+    } finally {
+      setCreateSubmitting(false);
+    }
+  };
+
   const resources = [...new Set(permissions.map(p => p.resource))];
   const actions = [...new Set(permissions.map(p => p.action))];
 
@@ -74,7 +127,17 @@ export default function RolesPage() {
           <h1 className="text-2xl font-semibold text-ink mb-1">角色与权限</h1>
           <p className="text-sm text-ink-tertiary">管理角色定义、权限分配和访问控制矩阵</p>
         </div>
-        <button className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity">
+        <button
+          onClick={() => {
+            setCreateForm(current => ({
+              ...current,
+              tenantId: current.tenantId || (tenants[0] ? String(tenants[0].id) : ''),
+            }));
+            setCreateDrawerOpen(true);
+          }}
+          disabled={tenants.length === 0}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
           <IconPlus size={16} /> 创建角色
         </button>
       </div>
@@ -98,7 +161,7 @@ export default function RolesPage() {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-5 mb-8">
-            {roles.map((role) => {
+            {roles.map(role => {
               const isSelected = matrixRole?.id === role.id;
               return (
                 <div
@@ -143,49 +206,110 @@ export default function RolesPage() {
                   暂无真实权限字典数据。
                 </div>
               ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-line bg-surface-muted">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-ink-secondary">Resource</th>
-                      {actions.map(a => (
-                        <th key={a} className="text-center px-3 py-3 text-[10px] font-semibold text-ink-tertiary uppercase">{a}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-line">
-                    {resources.map((resource) => (
-                      <tr key={resource} className="hover:bg-surface-hover transition-colors">
-                        <td className="px-5 py-3 text-sm font-mono text-ink-secondary">{resource}</td>
-                        {actions.map((action) => {
-                          const permId = getPermId(resource, action);
-                          const isChecked = Boolean(permId && matrixRole.permission_ids.includes(permId));
-                          return (
-                            <td key={action} className="px-3 py-3 text-center">
-                              <button
-                                disabled={!permId}
-                                onClick={() => permId && togglePermission(matrixRole, permId, isChecked)}
-                                className="w-5 h-5 rounded border-2 flex items-center justify-center transition-colors disabled:opacity-50"
-                                style={{
-                                  backgroundColor: isChecked ? 'var(--accent)' : 'transparent',
-                                  borderColor: isChecked ? 'var(--accent)' : 'var(--border-strong)',
-                                }}
-                              >
-                                {isChecked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round"><path d="M20 6 9 17l-5-5"/></svg>}
-                              </button>
-                            </td>
-                          );
-                        })}
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-line bg-surface-muted">
+                        <th className="text-left px-5 py-3 text-xs font-semibold text-ink-secondary">Resource</th>
+                        {actions.map(a => (
+                          <th key={a} className="text-center px-3 py-3 text-[10px] font-semibold text-ink-tertiary uppercase">{a}</th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-line">
+                      {resources.map(resource => (
+                        <tr key={resource} className="hover:bg-surface-hover transition-colors">
+                          <td className="px-5 py-3 text-sm font-mono text-ink-secondary">{resource}</td>
+                          {actions.map(action => {
+                            const permId = getPermId(resource, action);
+                            const isChecked = Boolean(permId && matrixRole.permission_ids.includes(permId));
+                            return (
+                              <td key={action} className="px-3 py-3 text-center">
+                                <button
+                                  disabled={!permId}
+                                  onClick={() => permId && togglePermission(matrixRole, permId, isChecked)}
+                                  className="w-5 h-5 rounded border-2 flex items-center justify-center transition-colors disabled:opacity-50"
+                                  style={{
+                                    backgroundColor: isChecked ? 'var(--accent)' : 'transparent',
+                                    borderColor: isChecked ? 'var(--accent)' : 'var(--border-strong)',
+                                  }}
+                                >
+                                  {isChecked && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round"><path d="M20 6 9 17l-5-5" /></svg>}
+                                </button>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </div>
           )}
         </>
       )}
+
+      <Drawer isOpen={createDrawerOpen} onClose={() => setCreateDrawerOpen(false)} title="创建角色" width="420px">
+        <form className="space-y-4" onSubmit={handleCreateRole}>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">所属租户</label>
+            <select
+              value={createForm.tenantId}
+              onChange={e => setCreateForm(prev => ({ ...prev, tenantId: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              required
+            >
+              <option value="">选择租户</option>
+              {tenants.map(tenant => (
+                <option key={tenant.id} value={tenant.id}>
+                  {tenant.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">角色名称</label>
+            <input
+              value={createForm.name}
+              onChange={e => setCreateForm(prev => ({ ...prev, name: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="Moderator"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">角色编码</label>
+            <input
+              value={createForm.code}
+              onChange={e => setCreateForm(prev => ({ ...prev, code: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink font-mono"
+              placeholder="moderator"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">描述</label>
+            <textarea
+              value={createForm.description}
+              onChange={e => setCreateForm(prev => ({ ...prev, description: e.target.value }))}
+              className="w-full min-h-24 px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink resize-y"
+              placeholder="Moderates content and community workflows"
+              required
+            />
+          </div>
+          <div className="pt-2 flex justify-end gap-3">
+            <button type="button" onClick={() => setCreateDrawerOpen(false)} className="px-4 py-2 text-sm text-ink-secondary hover:bg-surface-hover rounded-lg transition-colors">
+              取消
+            </button>
+            <button type="submit" disabled={createSubmitting} className="px-4 py-2 text-sm text-ink-inverse bg-ink rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50">
+              {createSubmitting ? '创建中...' : '创建角色'}
+            </button>
+          </div>
+        </form>
+      </Drawer>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 }

@@ -16,6 +16,8 @@ function App() {
     <Routes>
       <Route path="/" element={<LoginPage />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/forgot-password" element={<LoginPage />} />
+      <Route path="/reset-password" element={<LoginPage />} />
       <Route path="/admin" element={<AdminLayout><DashboardPage /></AdminLayout>} />
       <Route path="/admin/dashboard" element={<AdminLayout><DashboardPage /></AdminLayout>} />
       <Route path="/admin/users" element={<AdminLayout><UsersPage /></AdminLayout>} />

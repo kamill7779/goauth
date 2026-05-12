@@ -17,6 +17,14 @@ export async function forgotPassword(email: string): Promise<{ sent: boolean }> 
   return apiPost<{ sent: boolean }>('/password/forgot', { email });
 }
 
+export async function resetPassword(input: {
+  email: string;
+  new_password: string;
+  email_code: string;
+}): Promise<{ reset: boolean }> {
+  return apiPost<{ reset: boolean }>('/password/reset', input);
+}
+
 export async function me(): Promise<AuthSession> {
   return apiGet<AuthSession>('/me');
 }

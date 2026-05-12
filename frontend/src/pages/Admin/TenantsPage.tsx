@@ -1,23 +1,39 @@
-import { useState, useEffect, useCallback } from 'react';
-import { getTenants } from '../../api/admin';
-import StatusBadge from '../../components/admin/StatusBadge';
+import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { addTenantMember, createTenant, getTenants, getUsers } from '../../api/admin';
 import Drawer from '../../components/admin/Drawer';
-import { IconSearch, IconPlus, IconBuilding, IconUsers, IconShield, IconChevronRight } from '../../components/admin/Icons';
-import type { Tenant } from '../../types/admin';
+import { IconBuilding, IconChevronRight, IconPlus, IconSearch, IconShield, IconUsers } from '../../components/admin/Icons';
+import StatusBadge from '../../components/admin/StatusBadge';
+import Toast from '../../components/admin/Toast';
+import type { Tenant, User } from '../../types/admin';
+
+const initialCreateForm = {
+  name: '',
+  slug: '',
+  status: 'active',
+};
 
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
+  const [createSubmitting, setCreateSubmitting] = useState(false);
+  const [memberSubmitting, setMemberSubmitting] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [createDrawerOpen, setCreateDrawerOpen] = useState(false);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [createForm, setCreateForm] = useState(initialCreateForm);
   const [error, setError] = useState('');
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   const fetchTenants = useCallback(async () => {
     setLoading(true);
     try {
       const res = await getTenants({ search: searchQuery || undefined });
       setTenants(res.data);
+      setSelectedTenant(current => current ? res.data.find(tenant => tenant.id === current.id) ?? current : null);
+      setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : '租户接口暂不可用');
       setTenants([]);
@@ -26,9 +42,61 @@ export default function TenantsPage() {
     }
   }, [searchQuery]);
 
+  const fetchAssignableUsers = useCallback(async () => {
+    try {
+      const res = await getUsers({ page: 1, page_size: 100, sort: 'username_asc' });
+      setAssignableUsers(res.data);
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : '用户列表加载失败', type: 'error' });
+    }
+  }, []);
+
   useEffect(() => {
     fetchTenants();
   }, [fetchTenants]);
+
+  useEffect(() => {
+    fetchAssignableUsers();
+  }, [fetchAssignableUsers]);
+
+  const handleCreateTenant = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setCreateSubmitting(true);
+    try {
+      const tenant = await createTenant(createForm);
+      setCreateDrawerOpen(false);
+      setCreateForm(initialCreateForm);
+      setToast({ message: '租户已创建', type: 'success' });
+      setSelectedTenant(tenant);
+      setDrawerOpen(true);
+      fetchTenants();
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : '创建失败', type: 'error' });
+    } finally {
+      setCreateSubmitting(false);
+    }
+  };
+
+  const handleAddMember = async () => {
+    if (!selectedTenant) {
+      return;
+    }
+    if (!selectedUserId) {
+      setToast({ message: '请先选择用户', type: 'error' });
+      return;
+    }
+    setMemberSubmitting(true);
+    try {
+      await addTenantMember(selectedTenant.id, Number(selectedUserId));
+      setSelectedUserId('');
+      setToast({ message: '成员已加入租户', type: 'success' });
+      fetchTenants();
+    } catch (err) {
+      setToast({ message: err instanceof Error ? err.message : '成员添加失败', type: 'error' });
+    } finally {
+      setMemberSubmitting(false);
+    }
+  };
 
   return (
     <div className="animate-[fadeInUp_0.4s_ease]">
@@ -37,7 +105,13 @@ export default function TenantsPage() {
           <h1 className="text-2xl font-semibold text-ink mb-1">租户管理</h1>
           <p className="text-sm text-ink-tertiary">管理多租户架构中的租户、成员和接入策略</p>
         </div>
-        <button className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity">
+        <button
+          onClick={() => {
+            setCreateForm(initialCreateForm);
+            setCreateDrawerOpen(true);
+          }}
+          className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-ink-inverse text-sm font-medium rounded-lg hover:opacity-90 transition-opacity"
+        >
           <IconPlus size={16} /> 创建租户
         </button>
       </div>
@@ -74,10 +148,13 @@ export default function TenantsPage() {
         </div>
       ) : (
         <div className="grid grid-cols-3 gap-5">
-          {tenants.map((tenant) => (
+          {tenants.map(tenant => (
             <div
               key={tenant.id}
-              onClick={() => { setSelectedTenant(tenant); setDrawerOpen(true); }}
+              onClick={() => {
+                setSelectedTenant(tenant);
+                setDrawerOpen(true);
+              }}
               className="bg-surface-solid rounded-xl border border-line p-5 hover:shadow-soft-md hover:-translate-y-0.5 cursor-pointer transition-all duration-300"
             >
               <div className="flex items-start justify-between mb-4">
@@ -101,6 +178,51 @@ export default function TenantsPage() {
           ))}
         </div>
       )}
+
+      <Drawer isOpen={createDrawerOpen} onClose={() => setCreateDrawerOpen(false)} title="创建租户" width="420px">
+        <form className="space-y-4" onSubmit={handleCreateTenant}>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">租户名称</label>
+            <input
+              value={createForm.name}
+              onChange={e => setCreateForm(prev => ({ ...prev, name: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+              placeholder="Community Forum"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">Slug</label>
+            <input
+              value={createForm.slug}
+              onChange={e => setCreateForm(prev => ({ ...prev, slug: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink font-mono"
+              placeholder="community-forum"
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink-secondary mb-2">状态</label>
+            <select
+              value={createForm.status}
+              onChange={e => setCreateForm(prev => ({ ...prev, status: e.target.value }))}
+              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+            >
+              <option value="active">active</option>
+              <option value="trial">trial</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </div>
+          <div className="pt-2 flex justify-end gap-3">
+            <button type="button" onClick={() => setCreateDrawerOpen(false)} className="px-4 py-2 text-sm text-ink-secondary hover:bg-surface-hover rounded-lg transition-colors">
+              取消
+            </button>
+            <button type="submit" disabled={createSubmitting} className="px-4 py-2 text-sm text-ink-inverse bg-ink rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50">
+              {createSubmitting ? '创建中...' : '创建租户'}
+            </button>
+          </div>
+        </form>
+      </Drawer>
 
       <Drawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} title="租户详情" width="420px">
         {selectedTenant && (
@@ -138,16 +260,33 @@ export default function TenantsPage() {
             </div>
             <div className="border-t border-line pt-5">
               <p className="text-xs font-medium text-ink-tertiary uppercase tracking-wider mb-3">成员管理</p>
-              <button className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm text-ink-secondary bg-surface-solid border border-line rounded-lg hover:bg-surface-hover transition-colors mb-2">
-                <IconUsers size={16} /> 查看成员列表
-              </button>
-              <button className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm text-ink-secondary bg-surface-solid border border-line rounded-lg hover:bg-surface-hover transition-colors">
-                <IconPlus size={16} /> 邀请成员
-              </button>
+              <div className="space-y-3">
+                <select
+                  value={selectedUserId}
+                  onChange={e => setSelectedUserId(e.target.value)}
+                  className="w-full px-3 py-2.5 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
+                >
+                  <option value="">选择要加入该租户的用户</option>
+                  {assignableUsers.map(user => (
+                    <option key={user.id} value={user.id}>
+                      {user.username} · {user.email}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleAddMember}
+                  disabled={memberSubmitting || assignableUsers.length === 0}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm text-ink-inverse bg-ink rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
+                >
+                  <IconPlus size={16} /> {memberSubmitting ? '加入中...' : '加入成员'}
+                </button>
+              </div>
             </div>
           </div>
         )}
       </Drawer>
+
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
     </div>
   );
 }
