@@ -40,6 +40,25 @@ function getAuthorizeReturnTo(search: string): string {
   return ''
 }
 
+export function buildAuthRoutePath(
+  pathname: string,
+  options?: { email?: string; returnTo?: string },
+): string {
+  const params = new URLSearchParams()
+  const email = options?.email?.trim() ?? ''
+  const returnTo = options?.returnTo?.trim() ?? ''
+
+  if (email) {
+    params.set('email', email)
+  }
+  if (returnTo) {
+    params.set('return_to', returnTo)
+  }
+
+  const query = params.toString()
+  return query ? `${pathname}?${query}` : pathname
+}
+
 function ShieldIcon() {
   return (
     <svg viewBox="0 0 24 24" width="28" height="28" fill="var(--ink-inverse)">
@@ -204,7 +223,7 @@ export default function LoginPage() {
 
     try {
       await forgotPassword(form.email)
-      navigate(`/reset-password?email=${encodeURIComponent(form.email)}`, {
+      navigate(buildAuthRoutePath('/reset-password', { email: form.email, returnTo }), {
         state: { notice: '重置验证码已发送，请输入邮箱验证码并设置新密码' },
       })
     } catch (err) {
@@ -212,7 +231,7 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }, [form.email, navigate])
+  }, [form.email, navigate, returnTo])
 
   const handleResetSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -227,7 +246,7 @@ export default function LoginPage() {
         new_password: form.password,
       })
       setForm({ ...initialForm, email: form.email })
-      navigate('/login', {
+      navigate(buildAuthRoutePath('/login', { returnTo }), {
         replace: true,
         state: { notice: '密码已重置，请使用新密码登录' },
       })
@@ -236,7 +255,7 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }, [form.email, form.emailCode, form.password, navigate])
+  }, [form.email, form.emailCode, form.password, navigate, returnTo])
 
   const switchTab = useCallback((nextTab: 'login' | 'register') => {
     setTab(nextTab)
@@ -532,7 +551,7 @@ export default function LoginPage() {
                   <input id="remember-me" name="remember_me" type="checkbox" style={{ width: '18px', height: '18px', accentColor: 'var(--accent)' }} />
                   <span>记住我</span>
                 </label>
-                <Link to="/forgot-password" style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+                <Link to={buildAuthRoutePath('/forgot-password', { returnTo })} style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
                   忘记密码？
                 </Link>
               </div>
@@ -692,7 +711,7 @@ export default function LoginPage() {
             </button>
 
             <div style={{ marginTop: '18px', textAlign: 'center' }}>
-              <Link to="/login" style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+              <Link to={buildAuthRoutePath('/login', { returnTo })} style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
                 返回登录
               </Link>
             </div>
@@ -777,7 +796,7 @@ export default function LoginPage() {
             </button>
 
             <div style={{ marginTop: '18px', textAlign: 'center' }}>
-              <Link to="/login" style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+              <Link to={buildAuthRoutePath('/login', { returnTo })} style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
                 返回登录
               </Link>
             </div>
