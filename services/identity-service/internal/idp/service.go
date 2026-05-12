@@ -80,7 +80,15 @@ func (s *Service) Start(providerSlug, state string, opts AuthCodeOptions) (strin
 }
 
 func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirectURI string) (*AuthenticateResult, error) {
-	provider, profile, token, err := s.resolveProfile(ctx, providerSlug, code, redirectURI)
+	return s.authenticate(ctx, providerSlug, code, redirectURI, "")
+}
+
+func (s *Service) AuthenticateWithState(ctx context.Context, providerSlug, code, redirectURI, state string) (*AuthenticateResult, error) {
+	return s.authenticate(ctx, providerSlug, code, redirectURI, state)
+}
+
+func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirectURI, state string) (*AuthenticateResult, error) {
+	provider, profile, token, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, state)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +189,7 @@ func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirect
 }
 
 func (s *Service) Bind(ctx context.Context, userID int64, providerSlug, code, redirectURI string) (*store.UserIdentity, error) {
-	provider, profile, _, err := s.resolveProfile(ctx, providerSlug, code, redirectURI)
+	provider, profile, _, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, "")
 	if err != nil {
 		return nil, err
 	}
@@ -277,13 +285,13 @@ func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]store.Use
 	return identities, nil
 }
 
-func (s *Service) resolveProfile(ctx context.Context, providerSlug, code, redirectURI string) (Provider, *ExternalProfile, *TokenSet, error) {
+func (s *Service) resolveProfile(ctx context.Context, providerSlug, code, redirectURI, state string) (Provider, *ExternalProfile, *TokenSet, error) {
 	provider, err := s.provider(providerSlug)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	token, err := provider.ExchangeCode(ctx, code, redirectURI)
+	token, err := provider.ExchangeCode(ctx, code, redirectURI, state)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("exchange code: %w", err)
 	}

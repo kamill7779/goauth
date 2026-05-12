@@ -26,6 +26,6 @@ type Provider interface {
 	Slug() string
 	DisplayName() string
 	AuthCodeURL(state string, opts AuthCodeOptions) (string, error)
-	ExchangeCode(ctx context.Context, code string, redirectURI string) (*TokenSet, error)
+	ExchangeCode(ctx context.Context, code string, redirectURI string, state string) (*TokenSet, error)
 	FetchProfile(ctx context.Context, token *TokenSet) (*ExternalProfile, error)
 }

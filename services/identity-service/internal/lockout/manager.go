@@ -2,6 +2,7 @@ package lockout
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,6 +19,37 @@ type Manager struct {
 	// Defaults to 30 minutes so that old failures don't count forever.
 	failureWindow time.Duration
 }
+
+var recordFailureScript = redis.NewScript(`
+local failKey = KEYS[1]
+local lockKey = KEYS[2]
+local window = tonumber(ARGV[1])
+local threshold = tonumber(ARGV[2])
+local duration = tonumber(ARGV[3])
+
+local lockTTL = redis.call('TTL', lockKey)
+if lockTTL > 0 then
+	return {1, lockTTL}
+end
+
+local count = redis.call('INCR', failKey)
+redis.call('EXPIRE', failKey, window)
+
+if count >= threshold then
+	if redis.call('SETNX', lockKey, '1') == 1 then
+		redis.call('EXPIRE', lockKey, duration)
+		return {1, duration}
+	end
+
+	lockTTL = redis.call('TTL', lockKey)
+	if lockTTL < 0 then
+		lockTTL = duration
+	end
+	return {1, lockTTL}
+end
+
+return {0, 0}
+`)
 
 func NewManager(redisClient *redis.Client, threshold int64, duration time.Duration) *Manager {
 	if threshold <= 0 {
@@ -56,28 +88,27 @@ func (m *Manager) RecordFailure(ctx context.Context, userID int64) (bool, int64,
 		return false, 0, nil
 	}
 
-	failKey := cache.LockoutFailuresKey(userID)
-	pipe := m.redis.TxPipeline()
-	incrCmd := pipe.Incr(ctx, failKey)
-	ttlCmd := pipe.TTL(ctx, failKey)
-	if _, err := pipe.Exec(ctx); err != nil {
+	result, err := recordFailureScript.Run(ctx, m.redis, []string{
+		cache.LockoutFailuresKey(userID),
+		cache.LockoutLockedKey(userID),
+	}, int64(m.failureWindow/time.Second), m.threshold, int64(m.duration/time.Second)).Result()
+	if err != nil {
 		return false, 0, err
 	}
 
-	count := incrCmd.Val()
-	// Set/refresh the failure window TTL on first increment or if key had no TTL.
-	if count == 1 || ttlCmd.Val() <= 0 {
-		_ = m.redis.Expire(ctx, failKey, m.failureWindow)
+	values, ok := result.([]interface{})
+	if !ok || len(values) != 2 {
+		return false, 0, fmt.Errorf("unexpected lockout script result: %#v", result)
 	}
-
-	if count >= m.threshold {
-		lockKey := cache.LockoutLockedKey(userID)
-		if err := m.redis.Set(ctx, lockKey, "1", m.duration).Err(); err != nil {
-			return true, int64(m.duration.Seconds()), err
-		}
-		return true, int64(m.duration.Seconds()), nil
+	locked, ok := values[0].(int64)
+	if !ok {
+		return false, 0, fmt.Errorf("unexpected lockout script locked result: %#v", values[0])
 	}
-	return false, 0, nil
+	remaining, ok := values[1].(int64)
+	if !ok {
+		return false, 0, fmt.Errorf("unexpected lockout script ttl result: %#v", values[1])
+	}
+	return locked == 1, remaining, nil
 }
 
 // Reset clears the failure counter after a successful login.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"io/fs"
 	"strings"
 	"text/template"
 )
@@ -35,23 +36,25 @@ func NewTemplateEngine(defaultLocale string) *TemplateEngine {
 		defaultLocale: defaultLocale,
 		templates:     make(map[string]*template.Template),
 	}
-	e.loadAll()
+	if err := e.loadAllFromFS(templateFS); err != nil {
+		panic(fmt.Errorf("load embedded email templates: %w", err))
+	}
 	return e
 }
 
-func (e *TemplateEngine) loadAll() {
-	entries, err := templateFS.ReadDir("templates")
+func (e *TemplateEngine) loadAllFromFS(fsys fs.FS) error {
+	entries, err := fs.ReadDir(fsys, "templates")
 	if err != nil {
-		return
+		return err
 	}
 	for _, localeEntry := range entries {
 		if !localeEntry.IsDir() {
 			continue
 		}
 		locale := localeEntry.Name()
-		subEntries, err := templateFS.ReadDir("templates/" + locale)
+		subEntries, err := fs.ReadDir(fsys, "templates/"+locale)
 		if err != nil {
-			continue
+			return fmt.Errorf("read locale directory %s: %w", locale, err)
 		}
 		for _, fileEntry := range subEntries {
 			if fileEntry.IsDir() {
@@ -63,17 +66,21 @@ func (e *TemplateEngine) loadAll() {
 			}
 			tmplType := strings.TrimSuffix(name, ".txt")
 			path := fmt.Sprintf("templates/%s/%s", locale, name)
-			content, err := templateFS.ReadFile(path)
+			content, err := fs.ReadFile(fsys, path)
 			if err != nil {
-				continue
+				return fmt.Errorf("read template %s: %w", path, err)
 			}
 			tmpl, err := template.New(path).Parse(string(content))
 			if err != nil {
-				continue
+				return fmt.Errorf("parse template %s: %w", path, err)
 			}
 			e.templates[locale+"/"+tmplType] = tmpl
 		}
 	}
+	if len(e.templates) == 0 {
+		return fmt.Errorf("no templates loaded")
+	}
+	return nil
 }
 
 // Render returns (subject, body, error) for the given template type and locale.

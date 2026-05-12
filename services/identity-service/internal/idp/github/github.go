@@ -108,7 +108,7 @@ func (p *Provider) AuthCodeURL(state string, opts idp.AuthCodeOptions) (string, 
 	return authURL.String(), nil
 }
 
-func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI string) (*idp.TokenSet, error) {
+func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI string, _ string) (*idp.TokenSet, error) {
 	redirectURI = strings.TrimSpace(redirectURI)
 	if redirectURI == "" {
 		redirectURI = p.redirectURI

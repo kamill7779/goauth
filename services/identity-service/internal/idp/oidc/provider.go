@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -55,7 +56,16 @@ type Provider struct {
 	discovery discoveryDoc
 	jwks      *jose.JSONWebKeySet
 	client    *http.Client
+	pkceMu    sync.Mutex
+	pkce      map[string]pkceVerifier
 }
+
+type pkceVerifier struct {
+	value     string
+	expiresAt time.Time
+}
+
+const pkceVerifierTTL = 10 * time.Minute
 
 // New creates a Provider by fetching and caching the discovery document and JWKS.
 func New(cfg Config) (*Provider, error) {
@@ -69,6 +79,7 @@ func New(cfg Config) (*Provider, error) {
 	p := &Provider{
 		cfg:    cfg,
 		client: &http.Client{Timeout: 10 * time.Second},
+		pkce:   make(map[string]pkceVerifier),
 	}
 
 	if err := p.fetchDiscovery(); err != nil {
@@ -125,13 +136,16 @@ func (p *Provider) DisplayName() string { return p.cfg.DisplayName }
 
 // AuthCodeURL generates the authorization URL with state and PKCE.
 func (p *Provider) AuthCodeURL(state string, opts idppkg.AuthCodeOptions) (string, error) {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return "", fmt.Errorf("state is required")
+	}
+
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		return "", fmt.Errorf("generate pkce: %w", err)
 	}
-	// Store verifier in state (simplified: append to state with separator).
-	// In production, store in Redis keyed by state.
-	_ = verifier // TODO: store verifier for ExchangeCode
+	p.storePKCEVerifier(state, verifier)
 
 	redirectURI := opts.RedirectURI
 	if redirectURI == "" {
@@ -151,9 +165,14 @@ func (p *Provider) AuthCodeURL(state string, opts idppkg.AuthCodeOptions) (strin
 }
 
 // ExchangeCode exchanges an authorization code for tokens.
-func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI string) (*idppkg.TokenSet, error) {
+func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI string, state string) (*idppkg.TokenSet, error) {
 	if redirectURI == "" {
 		redirectURI = p.cfg.RedirectURI
+	}
+
+	verifier, err := p.loadPKCEVerifier(state)
+	if err != nil {
+		return nil, err
 	}
 
 	form := url.Values{}
@@ -162,6 +181,7 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI st
 	form.Set("redirect_uri", redirectURI)
 	form.Set("client_id", p.cfg.ClientID)
 	form.Set("client_secret", p.cfg.ClientSecret)
+	form.Set("code_verifier", verifier)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.discovery.TokenEndpoint, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -195,6 +215,8 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI st
 			return nil, fmt.Errorf("id_token validation: %w", err)
 		}
 	}
+
+	p.deletePKCEVerifier(state)
 
 	return &idppkg.TokenSet{
 		AccessToken: tr.AccessToken,
@@ -316,4 +338,54 @@ func generatePKCE() (verifier, challenge string, err error) {
 	h := sha256.Sum256([]byte(verifier))
 	challenge = base64.RawURLEncoding.EncodeToString(h[:])
 	return verifier, challenge, nil
+}
+
+func (p *Provider) storePKCEVerifier(state, verifier string) {
+	now := time.Now()
+
+	p.pkceMu.Lock()
+	defer p.pkceMu.Unlock()
+
+	for key, entry := range p.pkce {
+		if !entry.expiresAt.After(now) {
+			delete(p.pkce, key)
+		}
+	}
+	p.pkce[state] = pkceVerifier{
+		value:     verifier,
+		expiresAt: now.Add(pkceVerifierTTL),
+	}
+}
+
+func (p *Provider) loadPKCEVerifier(state string) (string, error) {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return "", fmt.Errorf("state is required")
+	}
+
+	now := time.Now()
+
+	p.pkceMu.Lock()
+	defer p.pkceMu.Unlock()
+
+	entry, ok := p.pkce[state]
+	if !ok {
+		return "", fmt.Errorf("pkce verifier not found for state")
+	}
+	if !entry.expiresAt.After(now) {
+		delete(p.pkce, state)
+		return "", fmt.Errorf("pkce verifier expired for state")
+	}
+	return entry.value, nil
+}
+
+func (p *Provider) deletePKCEVerifier(state string) {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return
+	}
+
+	p.pkceMu.Lock()
+	defer p.pkceMu.Unlock()
+	delete(p.pkce, state)
 }

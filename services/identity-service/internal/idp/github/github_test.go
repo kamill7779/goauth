@@ -78,7 +78,7 @@ func TestExchangeCodeUsesConfiguredRedirectURI(t *testing.T) {
 		HTTPClient:   server.Client(),
 	})
 
-	token, err := provider.ExchangeCode(context.Background(), "oauth-code", "")
+	token, err := provider.ExchangeCode(context.Background(), "oauth-code", "", "")
 	if err != nil {
 		t.Fatalf("ExchangeCode() error = %v", err)
 	}

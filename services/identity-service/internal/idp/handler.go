@@ -101,7 +101,7 @@ func (h *Handler) callback(c *gin.Context) {
 	}
 	defer clearGitHubOAuthStateCookie(c)
 
-	result, err := h.service.Authenticate(c.Request.Context(), "github", code, c.Query("redirect_uri"))
+	result, err := h.service.AuthenticateWithState(c.Request.Context(), "github", code, c.Query("redirect_uri"), state)
 	if err != nil {
 		status := stdhttp.StatusBadRequest
 		if errors.Is(err, ErrLocalLoginRequired) {

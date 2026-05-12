@@ -20,6 +20,7 @@ type fakeProvider struct {
 
 	exchangedCode        string
 	exchangedRedirectURI string
+	exchangedState       string
 }
 
 func (p *fakeProvider) Slug() string {
@@ -34,9 +35,10 @@ func (p *fakeProvider) AuthCodeURL(state string, _ AuthCodeOptions) (string, err
 	return "https://provider.example.test/auth?state=" + state, nil
 }
 
-func (p *fakeProvider) ExchangeCode(_ context.Context, code string, redirectURI string) (*TokenSet, error) {
+func (p *fakeProvider) ExchangeCode(_ context.Context, code string, redirectURI string, state string) (*TokenSet, error) {
 	p.exchangedCode = code
 	p.exchangedRedirectURI = redirectURI
+	p.exchangedState = state
 	return p.token, nil
 }
 

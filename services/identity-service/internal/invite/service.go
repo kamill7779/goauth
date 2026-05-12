@@ -8,13 +8,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/identity"
 	"goauth/services/identity-service/internal/mailer"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -174,81 +177,151 @@ func (s *Service) Redeem(ctx context.Context, input RedeemInput) error {
 		return ErrInvalidToken
 	}
 
-	// Parse and verify JWT.
 	var claims inviteClaims
 	_, err := jwt.ParseWithClaims(input.Token, &claims, func(t *jwt.Token) (any, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-		}
 		return &s.privateKey.PublicKey, nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
+		jwt.WithIssuer(inviteIssuer),
+		jwt.WithSubject(inviteSubject),
+	)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidToken, err)
 	}
 
-	if claims.Subject != inviteSubject {
-		return ErrInvalidToken
-	}
-
 	tokenHash := hashToken(input.Token)
+	var (
+		invite    store.Invite
+		redeemErr error
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		redeemErr = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
 
-	// Load invite record.
-	var invite store.Invite
-	if err := s.db.WithContext(ctx).Where("token_hash = ?", tokenHash).First(&invite).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return ErrInviteNotFound
+		var user store.User
+		if err := tx.WithContext(ctx).
+			Where("id = ? AND deleted_at IS NULL", input.UserID).
+			First(&user).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrInvalidToken
+			}
+			return err
 		}
-		return err
-	}
 
-	switch invite.Status {
-	case store.InviteStatusRedeemed:
-		return ErrInviteRedeemed
-	case store.InviteStatusRevoked:
-		return ErrInviteRevoked
-	}
-	if time.Now().After(invite.ExpiresAt) {
-		return ErrInviteExpired
-	}
+		if err := tx.WithContext(ctx).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("token_hash = ?", tokenHash).
+			First(&invite).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrInviteNotFound
+			}
+			return err
+		}
 
-	// Add user to tenant with the assigned role in a transaction.
-	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Upsert tenant member.
+		switch invite.Status {
+		case store.InviteStatusRedeemed:
+			return ErrInviteRedeemed
+		case store.InviteStatusRevoked:
+			return ErrInviteRevoked
+		}
+		if now.After(invite.ExpiresAt) {
+			return ErrInviteExpired
+		}
+
+		userEmail := identity.NormalizeEmail(user.Email)
+		inviteEmail := identity.NormalizeEmail(invite.TargetEmail)
+		claimEmail := identity.NormalizeEmail(claims.Email)
+		if userEmail == "" || inviteEmail == "" || claimEmail == "" {
+			return ErrInvalidToken
+		}
+		if userEmail != inviteEmail || claimEmail != inviteEmail {
+			return ErrInvalidToken
+		}
+		if claims.TenantID != invite.TenantID || claims.RoleID != invite.RoleID {
+			return ErrInvalidToken
+		}
+
+		result := tx.Model(&store.Invite{}).
+			Where("id = ? AND status = ?", invite.ID, store.InviteStatusPending).
+			Updates(map[string]any{
+				"status":              store.InviteStatusRedeemed,
+				"redeemed_at":         now,
+				"redeemed_by_user_id": input.UserID,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			var current store.Invite
+			if err := tx.WithContext(ctx).Where("id = ?", invite.ID).First(&current).Error; err != nil {
+				return err
+			}
+			switch current.Status {
+			case store.InviteStatusRedeemed:
+				return ErrInviteRedeemed
+			case store.InviteStatusRevoked:
+				return ErrInviteRevoked
+			default:
+				return ErrInvalidToken
+			}
+		}
+
 		var member store.TenantMember
-		err := tx.Where("tenant_id = ? AND user_id = ?", invite.TenantID, input.UserID).First(&member).Error
+		err := tx.WithContext(ctx).
+			Unscoped().
+			Where("tenant_id = ? AND user_id = ?", invite.TenantID, input.UserID).
+			First(&member).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			member = store.TenantMember{
 				TenantID:  invite.TenantID,
 				UserID:    input.UserID,
 				Status:    store.MemberStatusActive,
-				CreatedAt: time.Now(),
-				UpdatedAt: time.Now(),
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
-			if err := tx.Create(&member).Error; err != nil {
+			if err := tx.WithContext(ctx).Create(&member).Error; err != nil {
 				return fmt.Errorf("create tenant member: %w", err)
 			}
 		} else if err != nil {
 			return err
+		} else {
+			updates := map[string]any{
+				"status":     store.MemberStatusActive,
+				"updated_at": now,
+			}
+			if member.DeletedAt.Valid {
+				updates["deleted_at"] = nil
+			}
+			if err := tx.WithContext(ctx).
+				Unscoped().
+				Model(&store.TenantMember{}).
+				Where("id = ?", member.ID).
+				Updates(updates).Error; err != nil {
+				return fmt.Errorf("restore tenant member: %w", err)
+			}
+			if err := tx.WithContext(ctx).First(&member, member.ID).Error; err != nil {
+				return err
+			}
 		}
 
-		// Assign role.
 		memberRole := store.MemberRole{
 			MemberID: member.ID,
 			RoleID:   invite.RoleID,
 		}
-		if err := tx.Where(memberRole).FirstOrCreate(&memberRole).Error; err != nil {
+		if err := tx.WithContext(ctx).
+			Clauses(clause.OnConflict{DoNothing: true}).
+			Create(&memberRole).Error; err != nil {
 			return fmt.Errorf("assign role: %w", err)
 		}
-
-		// Mark invite as redeemed.
-		now := time.Now()
-		return tx.Model(&invite).Updates(map[string]any{
-			"status":              store.InviteStatusRedeemed,
-			"redeemed_at":         now,
-			"redeemed_by_user_id": input.UserID,
-		}).Error
-	}); err != nil {
-		return err
+		return nil
+		})
+		if !isSQLiteWriteLock(redeemErr) || attempt == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if redeemErr != nil {
+		return redeemErr
 	}
 
 	_ = s.audit.Record(ctx, audit.Entry{
@@ -312,4 +385,12 @@ func randomHex(n int) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+func isSQLiteWriteLock(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
 }

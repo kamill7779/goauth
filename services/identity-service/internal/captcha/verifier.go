@@ -1,7 +1,9 @@
 package captcha
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -80,10 +82,10 @@ type verifyResponse struct {
 	Success bool `json:"success"`
 }
 
-func (v *Verifier) verify(ctx interface{ Done() <-chan struct{} }, token, remoteIP string) error {
+func (v *Verifier) verify(ctx context.Context, token, remoteIP string) error {
 	verifyURL, ok := verifyURLs[v.provider]
 	if !ok {
-		return nil
+		return fmt.Errorf("unsupported captcha provider: %s", v.provider)
 	}
 
 	form := url.Values{}
@@ -93,7 +95,7 @@ func (v *Verifier) verify(ctx interface{ Done() <-chan struct{} }, token, remote
 		form.Set("remoteip", remoteIP)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, verifyURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, verifyURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
 	}
@@ -104,6 +106,9 @@ func (v *Verifier) verify(ctx interface{ Done() <-chan struct{} }, token, remote
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("captcha provider returned %d", resp.StatusCode)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

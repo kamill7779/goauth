@@ -7,6 +7,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/lockout"
 )
 
@@ -73,6 +74,50 @@ func TestIsLocked_TrueAfterThreshold(t *testing.T) {
 	}
 	if !locked {
 		t.Error("expected locked")
+	}
+}
+
+func TestRecordFailure_ExtendsSlidingWindowTTL(t *testing.T) {
+	m, mr := newTestManager(t, 5, 15*time.Minute)
+	ctx := context.Background()
+	userID := int64(77)
+
+	if _, _, err := m.RecordFailure(ctx, userID); err != nil {
+		t.Fatalf("first failure: %v", err)
+	}
+	mr.FastForward(20 * time.Minute)
+
+	if _, _, err := m.RecordFailure(ctx, userID); err != nil {
+		t.Fatalf("second failure: %v", err)
+	}
+
+	ttl := mr.TTL(cache.LockoutFailuresKey(userID))
+	if ttl < 25*time.Minute {
+		t.Fatalf("failure TTL = %v, want sliding window near %v", ttl, 30*time.Minute)
+	}
+}
+
+func TestRecordFailure_DoesNotExtendActiveLockTTL(t *testing.T) {
+	m, mr := newTestManager(t, 2, 15*time.Minute)
+	ctx := context.Background()
+	userID := int64(88)
+
+	for i := 0; i < 2; i++ {
+		if _, _, err := m.RecordFailure(ctx, userID); err != nil {
+			t.Fatalf("lock account: %v", err)
+		}
+	}
+
+	mr.FastForward(5 * time.Minute)
+	before := mr.TTL(cache.LockoutLockedKey(userID))
+
+	if _, _, err := m.RecordFailure(ctx, userID); err != nil {
+		t.Fatalf("record failure while locked: %v", err)
+	}
+
+	after := mr.TTL(cache.LockoutLockedKey(userID))
+	if after > before {
+		t.Fatalf("lock TTL extended from %v to %v", before, after)
 	}
 }
 

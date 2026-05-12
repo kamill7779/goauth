@@ -1,9 +1,11 @@
 package oidc_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -11,7 +13,7 @@ import (
 	oidcprovider "goauth/services/identity-service/internal/idp/oidc"
 )
 
-func mockDiscoveryServer(t *testing.T) *httptest.Server {
+func mockDiscoveryServer(t *testing.T, tokenHandler http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
@@ -32,12 +34,24 @@ func mockDiscoveryServer(t *testing.T) *httptest.Server {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{}})
 	})
 
+	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+		if tokenHandler == nil {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "access-token",
+				"token_type":   "Bearer",
+			})
+			return
+		}
+		tokenHandler(w, r)
+	})
+
 	srv = httptest.NewServer(mux)
 	return srv
 }
 
 func TestNew_FetchesDiscovery(t *testing.T) {
-	srv := mockDiscoveryServer(t)
+	srv := mockDiscoveryServer(t, nil)
 	defer srv.Close()
 
 	cfg := oidcprovider.Config{
@@ -86,7 +100,7 @@ func TestNew_FailsOnEmptyDiscoveryURL(t *testing.T) {
 }
 
 func TestAuthCodeURL_ContainsPKCE(t *testing.T) {
-	srv := mockDiscoveryServer(t)
+	srv := mockDiscoveryServer(t, nil)
 	defer srv.Close()
 
 	cfg := oidcprovider.Config{
@@ -114,5 +128,77 @@ func TestAuthCodeURL_ContainsPKCE(t *testing.T) {
 	}
 	if !strings.Contains(authURL, "state=state123") {
 		t.Errorf("expected state in URL: %s", authURL)
+	}
+}
+
+func TestExchangeCode_SendsStoredPKCEVerifier(t *testing.T) {
+	var capturedVerifier string
+	srv := mockDiscoveryServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatalf("ParseForm() error = %v", err)
+		}
+		capturedVerifier = r.Form.Get("code_verifier")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "access-token",
+			"token_type":   "Bearer",
+		})
+	})
+	defer srv.Close()
+
+	cfg := oidcprovider.Config{
+		Slug:         "pkce-test",
+		DiscoveryURL: srv.URL + "/.well-known/openid-configuration",
+		ClientID:     "client",
+		ClientSecret: "secret",
+		RedirectURI:  "https://app.example.com/callback",
+	}
+	p, err := oidcprovider.New(cfg)
+	if err != nil {
+		t.Fatalf("setup error: %v", err)
+	}
+
+	authURL, err := p.AuthCodeURL("state123", idppkg.AuthCodeOptions{RedirectURI: cfg.RedirectURI})
+	if err != nil {
+		t.Fatalf("AuthCodeURL() error = %v", err)
+	}
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	if parsed.Query().Get("code_challenge") == "" {
+		t.Fatal("expected code_challenge in authorization URL")
+	}
+
+	token, err := p.ExchangeCode(context.Background(), "oauth-code", cfg.RedirectURI, "state123")
+	if err != nil {
+		t.Fatalf("ExchangeCode() error = %v", err)
+	}
+	if token.AccessToken != "access-token" {
+		t.Fatalf("token.AccessToken = %q, want access-token", token.AccessToken)
+	}
+	if capturedVerifier == "" {
+		t.Fatal("expected token exchange to include code_verifier")
+	}
+}
+
+func TestExchangeCode_RequiresStoredPKCEVerifier(t *testing.T) {
+	srv := mockDiscoveryServer(t, nil)
+	defer srv.Close()
+
+	cfg := oidcprovider.Config{
+		Slug:         "pkce-test",
+		DiscoveryURL: srv.URL + "/.well-known/openid-configuration",
+		ClientID:     "client",
+		ClientSecret: "secret",
+		RedirectURI:  "https://app.example.com/callback",
+	}
+	p, err := oidcprovider.New(cfg)
+	if err != nil {
+		t.Fatalf("setup error: %v", err)
+	}
+
+	if _, err := p.ExchangeCode(context.Background(), "oauth-code", cfg.RedirectURI, "missing-state"); err == nil {
+		t.Fatal("expected missing PKCE verifier error")
 	}
 }
