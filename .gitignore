@@ -6,6 +6,7 @@
 .playwright-mcp/
 admin-console-prototype/
 node_modules/
+.kiro/
 
 bin/
 dist/
