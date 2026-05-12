@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/lockout"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
 	"goauth/services/identity-service/internal/tenant"
@@ -17,6 +18,7 @@ type Handler struct {
 	service          *Service
 	tenantService    *tenant.Service
 	sessionService   *session.Service
+	lockoutManager   *lockout.Manager
 	authMiddleware   gin.HandlerFunc
 	systemMiddleware gin.HandlerFunc
 }
@@ -29,6 +31,10 @@ func NewHandler(service *Service, tenantService *tenant.Service, sessionService 
 		authMiddleware:   authMiddleware,
 		systemMiddleware: systemMiddleware,
 	}
+}
+
+func (h *Handler) SetLockoutManager(m *lockout.Manager) {
+	h.lockoutManager = m
 }
 
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
@@ -51,6 +57,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.POST("/users/:id/disable", h.disableUser)
 	admin.POST("/users/:id/enable", h.enableUser)
 	admin.POST("/users/:id/reset-password", h.resetPassword)
+	admin.POST("/users/:id/unlock", h.unlockUser)
 }
 
 func (h *Handler) listUsers(c *gin.Context) {
@@ -179,6 +186,22 @@ func (h *Handler) resetPassword(c *gin.Context) {
 	}
 
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"reset": true})
+}
+
+func (h *Handler) unlockUser(c *gin.Context) {
+	id, err := parseUserID(c)
+	if err != nil {
+		return
+	}
+	if h.lockoutManager == nil {
+		httpserver.Success(c, stdhttp.StatusOK, gin.H{"unlocked": true})
+		return
+	}
+	if err := h.lockoutManager.Unlock(c.Request.Context(), id); err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	httpserver.Success(c, stdhttp.StatusOK, gin.H{"unlocked": true})
 }
 
 func (h *Handler) bulkDisableUsers(c *gin.Context) {

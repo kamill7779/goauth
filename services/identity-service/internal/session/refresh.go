@@ -211,6 +211,10 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 		return nil
 	}
 
+	if s.logoutCoordinator != nil {
+		_ = s.logoutCoordinator.NotifyClients(ctx, loginSession.UserID, sessionID)
+	}
+
 	return s.audit.Record(ctx, audit.Entry{
 		ActorUserID: loginSession.UserID,
 		TenantID:    loginSession.TenantID,

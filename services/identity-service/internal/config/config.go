@@ -46,6 +46,29 @@ type Config struct {
 	BootstrapAdminNickname    string
 	BootstrapAdminDisplayName string
 	BootstrapAdminRoleCode    string
+
+	// Account lockout
+	LockoutThreshold int64
+	LockoutDuration  time.Duration
+
+	// Observability
+	MetricsEnabled bool
+
+	// Password policy
+	PasswordMinLength      int
+	PasswordRequireUpper   bool
+	PasswordRequireLower   bool
+	PasswordRequireDigit   bool
+	PasswordRequireSpecial bool
+	PasswordHistoryCount   int
+
+	// Email i18n
+	DefaultLocale string
+
+	// CAPTCHA
+	CaptchaProvider  string
+	CaptchaSecretKey string
+	CaptchaSiteKey   string
 }
 
 func Load() (Config, error) {
@@ -84,6 +107,43 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	smtpAuthLogin, err := parseBoolEnv("SMTP_AUTH_LOGIN", false)
+	if err != nil {
+		return Config{}, err
+	}
+
+	lockoutThreshold, err := parseInt64Env("LOCKOUT_THRESHOLD", 5)
+	if err != nil {
+		return Config{}, err
+	}
+	lockoutDuration, err := parseDurationEnv("LOCKOUT_DURATION", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	metricsEnabled, err := parseBoolEnv("METRICS_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordMinLength, err := parseIntEnv("PASSWORD_MIN_LENGTH", 8)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordRequireUpper, err := parseBoolEnv("PASSWORD_REQUIRE_UPPERCASE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordRequireLower, err := parseBoolEnv("PASSWORD_REQUIRE_LOWERCASE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordRequireDigit, err := parseBoolEnv("PASSWORD_REQUIRE_DIGIT", true)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordRequireSpecial, err := parseBoolEnv("PASSWORD_REQUIRE_SPECIAL", false)
+	if err != nil {
+		return Config{}, err
+	}
+	passwordHistoryCount, err := parseIntEnv("PASSWORD_HISTORY_COUNT", 3)
 	if err != nil {
 		return Config{}, err
 	}
@@ -130,6 +190,24 @@ func Load() (Config, error) {
 		BootstrapAdminNickname:    os.Getenv("BOOTSTRAP_ADMIN_NICKNAME"),
 		BootstrapAdminDisplayName: os.Getenv("BOOTSTRAP_ADMIN_DISPLAY_NAME"),
 		BootstrapAdminRoleCode:    envOrDefault("BOOTSTRAP_ADMIN_ROLE", "root"),
+
+		LockoutThreshold: lockoutThreshold,
+		LockoutDuration:  lockoutDuration,
+
+		MetricsEnabled: metricsEnabled,
+
+		PasswordMinLength:      passwordMinLength,
+		PasswordRequireUpper:   passwordRequireUpper,
+		PasswordRequireLower:   passwordRequireLower,
+		PasswordRequireDigit:   passwordRequireDigit,
+		PasswordRequireSpecial: passwordRequireSpecial,
+		PasswordHistoryCount:   passwordHistoryCount,
+
+		DefaultLocale: envOrDefault("DEFAULT_LOCALE", "en"),
+
+		CaptchaProvider:  strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER"))),
+		CaptchaSecretKey: os.Getenv("CAPTCHA_SECRET_KEY"),
+		CaptchaSiteKey:   os.Getenv("CAPTCHA_SITE_KEY"),
 	}, nil
 }
 
@@ -161,6 +239,19 @@ func parseIntEnv(key string, fallback int) (int, error) {
 	}
 
 	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func parseInt64Env(key string, fallback int64) (int64, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("parse %s: %w", key, err)
 	}

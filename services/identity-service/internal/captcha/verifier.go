@@ -1,0 +1,130 @@
+package captcha
+
+import (
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+)
+
+// Provider identifies the CAPTCHA backend.
+type Provider string
+
+const (
+	ProviderNone      Provider = ""
+	ProviderTurnstile Provider = "turnstile"
+	ProviderHCaptcha  Provider = "hcaptcha"
+	ProviderReCAPTCHA Provider = "recaptcha"
+)
+
+var verifyURLs = map[Provider]string{
+	ProviderTurnstile: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+	ProviderHCaptcha:  "https://hcaptcha.com/siteverify",
+	ProviderReCAPTCHA: "https://www.google.com/recaptcha/api/siteverify",
+}
+
+// Verifier validates CAPTCHA tokens from configured providers.
+type Verifier struct {
+	provider  Provider
+	secretKey string
+	client    *http.Client
+}
+
+// NewVerifier creates a Verifier. If provider is empty, Middleware() returns a noop.
+func NewVerifier(provider Provider, secretKey string) *Verifier {
+	return &Verifier{
+		provider:  provider,
+		secretKey: secretKey,
+		client:    &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// Middleware returns a Gin middleware that validates CAPTCHA tokens.
+// If provider is empty, returns a noop middleware.
+func (v *Verifier) Middleware() gin.HandlerFunc {
+	if v == nil || v.provider == ProviderNone {
+		return func(c *gin.Context) { c.Next() }
+	}
+
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.GetHeader("X-Captcha-Token"))
+		if token == "" {
+			// Try reading from JSON body without consuming it.
+			// We peek at the raw body via a custom approach.
+			token = strings.TrimSpace(c.Query("captcha_token"))
+		}
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "captcha token required",
+			})
+			return
+		}
+
+		if err := v.verify(c.Request.Context(), token, c.ClientIP()); err != nil {
+			slog.Warn("captcha verification failed", "error", err, "provider", v.provider)
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "captcha verification failed",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
+type verifyResponse struct {
+	Success bool `json:"success"`
+}
+
+func (v *Verifier) verify(ctx interface{ Done() <-chan struct{} }, token, remoteIP string) error {
+	verifyURL, ok := verifyURLs[v.provider]
+	if !ok {
+		return nil
+	}
+
+	form := url.Values{}
+	form.Set("secret", v.secretKey)
+	form.Set("response", token)
+	if remoteIP != "" {
+		form.Set("remoteip", remoteIP)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, verifyURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	var result verifyResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return err
+	}
+	if !result.Success {
+		return &VerificationError{Provider: string(v.provider)}
+	}
+	return nil
+}
+
+// VerificationError is returned when the CAPTCHA provider rejects the token.
+type VerificationError struct {
+	Provider string
+}
+
+func (e *VerificationError) Error() string {
+	return "captcha verification failed for provider: " + e.Provider
+}

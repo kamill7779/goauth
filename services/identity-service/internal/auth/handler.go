@@ -5,15 +5,17 @@ import (
 	stdhttp "net/http"
 
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/captcha"
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/session"
 )
 
 type Handler struct {
-	service     *Service
-	session     *session.Service
-	rateLimiter *ratelimit.Service
+	service         *Service
+	session         *session.Service
+	rateLimiter     *ratelimit.Service
+	captchaVerifier *captcha.Verifier
 }
 
 func NewHandler(service *Service, sessionService *session.Service) *Handler {
@@ -23,11 +25,22 @@ func NewHandler(service *Service, sessionService *session.Service) *Handler {
 	}
 }
 
+func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
+	h.captchaVerifier = v
+}
+
+func (h *Handler) captchaMW() gin.HandlerFunc {
+	if h.captchaVerifier == nil {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return h.captchaVerifier.Middleware()
+}
+
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
-	router.POST("/email/send-code", h.sendCode)
-	router.POST("/register", h.register)
-	router.POST("/login", h.login)
-	router.POST("/password/forgot", h.forgotPassword)
+	router.POST("/email/send-code", h.captchaMW(), h.sendCode)
+	router.POST("/register", h.captchaMW(), h.register)
+	router.POST("/login", h.captchaMW(), h.login)
+	router.POST("/password/forgot", h.captchaMW(), h.forgotPassword)
 	router.POST("/password/reset", h.resetPassword)
 }
 
@@ -131,6 +144,9 @@ func (h *Handler) login(c *gin.Context) {
 }
 
 func loginErrorResponse(err error) (int, string) {
+	if errors.Is(err, ErrAccountLocked) {
+		return stdhttp.StatusLocked, err.Error()
+	}
 	if errors.Is(err, ErrInvalidCredential) || errors.Is(err, ErrUserDisabled) {
 		return stdhttp.StatusUnauthorized, err.Error()
 	}

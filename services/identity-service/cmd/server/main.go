@@ -6,6 +6,8 @@ import (
 	"crypto/rsa"
 	"fmt"
 	"log"
+	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -14,12 +16,19 @@ import (
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/auth"
 	"goauth/services/identity-service/internal/cache"
+	"goauth/services/identity-service/internal/captcha"
 	"goauth/services/identity-service/internal/config"
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/idp"
 	githubidp "goauth/services/identity-service/internal/idp/github"
+	"goauth/services/identity-service/internal/invite"
+	"goauth/services/identity-service/internal/lockout"
+	"goauth/services/identity-service/internal/logout"
 	"goauth/services/identity-service/internal/mailer"
+	"goauth/services/identity-service/internal/metrics"
+	"goauth/services/identity-service/internal/middleware"
 	"goauth/services/identity-service/internal/oidc"
+	"goauth/services/identity-service/internal/password"
 	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/rbac"
@@ -37,6 +46,11 @@ func main() {
 }
 
 func run() error {
+	// Set up structured JSON logging globally.
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -143,6 +157,28 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	oidcService.SetBrowserLoginURL(cfg.BrowserLoginURL)
 	defaultMembershipPolicy := provisioning.NewDefaultMembershipPolicy(cfg.DefaultMemberTenantSlugs)
 
+	// Lockout manager.
+	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration)
+
+	// Password policy.
+	pwPolicy := password.LoadFromConfig(cfg)
+
+	// CAPTCHA verifier.
+	captchaVerifier := captcha.NewVerifier(captcha.Provider(cfg.CaptchaProvider), cfg.CaptchaSecretKey)
+
+	// Back-channel logout coordinator.
+	logoutCoord := logout.NewCoordinator(db, privateKey, cfg.PublicIssuerURL, cfg.JWTKeyID)
+	logoutCoord.SetAuditRecorder(auditService)
+	sessionService.SetLogoutCoordinator(logoutCoord)
+
+	// Email template engine.
+	tmplEngine := mailer.NewTemplateEngine(cfg.DefaultLocale)
+
+	// Metrics.
+	if cfg.MetricsEnabled {
+		metrics.Register()
+	}
+
 	registrars := []httpserver.Registrar{
 		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
 	}
@@ -160,10 +196,21 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 
 	router := httpserver.NewRouter(cfg, registrars...)
 
+	// Replace default Gin logger with structured middleware.
+	router.Use(middleware.RequestID(), middleware.StructuredLogger())
+
+	// Metrics endpoint.
+	if cfg.MetricsEnabled {
+		router.GET("/metrics", gin.WrapH(metrics.Handler()))
+	}
+
 	rbacService := rbac.NewService(db, redisClient)
 	tenantService := tenant.NewService(db, rbacService)
 	tenantService.SetAuditRecorder(auditService)
 	userService := user.NewService(db, auditService)
+
+	userHandler := user.NewHandler(userService, tenantService, sessionService, authMiddleware, systemMiddleware)
+	userHandler.SetLockoutManager(lockoutMgr)
 
 	authGroup := router.Group("/v1/auth")
 	sessionHandler.RegisterRoutes(authGroup)
@@ -172,17 +219,25 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		router,
 		rbac.NewHandler(rbacService, authMiddleware, systemMiddleware),
 		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
-		user.NewHandler(userService, tenantService, sessionService, authMiddleware, systemMiddleware),
+		userHandler,
 		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
 		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware),
 	)
+
+	// Invite handler.
+	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), tmplEngine, "GoAuth", cfg.PublicIssuerURL)
+	inviteService.SetAuditRecorder(auditService)
+	invite.NewHandler(inviteService, authMiddleware, systemMiddleware).RegisterRoutes(router)
 
 	if redisClient != nil {
 		authService := auth.NewService(db, redisClient, buildMailSender(cfg))
 		authService.SetAuditRecorder(auditService)
 		authService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
+		authService.SetLockoutManager(lockoutMgr)
+		authService.SetPasswordPolicy(pwPolicy)
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.SetRateLimiter(rateLimiter)
+		authHandler.SetCaptchaVerifier(captchaVerifier)
 		authHandler.RegisterRoutes(authGroup)
 	}
 

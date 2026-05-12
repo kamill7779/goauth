@@ -17,6 +17,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/logout"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -37,6 +38,7 @@ type Service struct {
 	browserCookieSecure bool
 	refreshTokenTTL     time.Duration
 	audit               audit.Recorder
+	logoutCoordinator   *logout.Coordinator
 	now                 func() time.Time
 }
 
@@ -84,6 +86,10 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 		return
 	}
 	s.audit = recorder
+}
+
+func (s *Service) SetLogoutCoordinator(c *logout.Coordinator) {
+	s.logoutCoordinator = c
 }
 
 func LoadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {

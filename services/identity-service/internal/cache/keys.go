@@ -29,3 +29,11 @@ func OIDCStateKey(state string) string {
 func RateLimitKey(scope, key string) string {
 	return fmt.Sprintf("auth:rate:%s:%s", scope, key)
 }
+
+func LockoutFailuresKey(userID int64) string {
+	return fmt.Sprintf("auth:lockout:failures:%d", userID)
+}
+
+func LockoutLockedKey(userID int64) string {
+	return fmt.Sprintf("auth:lockout:locked:%d", userID)
+}

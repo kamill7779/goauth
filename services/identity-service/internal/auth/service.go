@@ -9,7 +9,9 @@ import (
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/identity"
+	"goauth/services/identity-service/internal/lockout"
 	"goauth/services/identity-service/internal/mailer"
+	"goauth/services/identity-service/internal/password"
 	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
 
@@ -18,12 +20,13 @@ import (
 )
 
 var (
-	ErrInvalidEmailCode   = errors.New("invalid email code")
-	ErrEmailAlreadyUsed   = errors.New("email already exists")
+	ErrInvalidEmailCode    = errors.New("invalid email code")
+	ErrEmailAlreadyUsed    = errors.New("email already exists")
 	ErrUsernameAlreadyUsed = errors.New("username already exists")
 	ErrInvalidUsername     = errors.New("invalid username")
 	ErrInvalidCredential   = errors.New("invalid credentials")
 	ErrUserDisabled        = errors.New("user disabled")
+	ErrAccountLocked       = errors.New("account locked")
 )
 
 type MailMessage = mailer.Message
@@ -52,12 +55,14 @@ type ResetPasswordInput struct {
 }
 
 type Service struct {
-	db     *gorm.DB
-	redis  *redis.Client
-	mailer MailSender
-	audit  audit.Recorder
-	policy *provisioning.DefaultMembershipPolicy
-	now    func() time.Time
+	db       *gorm.DB
+	redis    *redis.Client
+	mailer   MailSender
+	audit    audit.Recorder
+	policy   *provisioning.DefaultMembershipPolicy
+	lockout  *lockout.Manager
+	pwPolicy password.Policy
+	now      func() time.Time
 }
 
 func NewService(db *gorm.DB, redisClient *redis.Client, mailSender MailSender) *Service {
@@ -72,6 +77,14 @@ func NewService(db *gorm.DB, redisClient *redis.Client, mailSender MailSender) *
 		audit:  audit.NoopRecorder{},
 		now:    time.Now,
 	}
+}
+
+func (s *Service) SetLockoutManager(m *lockout.Manager) {
+	s.lockout = m
+}
+
+func (s *Service) SetPasswordPolicy(p password.Policy) {
+	s.pwPolicy = p
 }
 
 func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
@@ -136,6 +149,10 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 	displayName := strings.TrimSpace(input.DisplayName)
 	if displayName == "" {
 		displayName = nickname
+	}
+
+	if err := s.pwPolicy.Validate(input.Password); err != nil {
+		return nil, err
 	}
 
 	hash, err := HashPassword(input.Password)
@@ -218,9 +235,47 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, err
 	if user.Status == store.UserStatusDisabled {
 		return nil, ErrUserDisabled
 	}
+
+	// Check account lockout before verifying password.
+	if s.lockout != nil {
+		locked, remaining, err := s.lockout.IsLocked(ctx, user.ID)
+		if err != nil {
+			return nil, fmt.Errorf("check lockout: %w", err)
+		}
+		if locked {
+			return nil, fmt.Errorf("%w: retry after %d seconds", ErrAccountLocked, remaining)
+		}
+	}
+
 	if err := CheckPassword(user.PasswordHash, input.Password); err != nil {
+		// Record failure and potentially lock the account.
+		if s.lockout != nil {
+			nowLocked, _, _ := s.lockout.RecordFailure(ctx, user.ID)
+			_ = s.audit.Record(ctx, audit.Entry{
+				ActorUserID: user.ID,
+				Action:      "login_failed",
+				TargetType:  audit.TargetTypeUser,
+				TargetID:    audit.UserTargetID(user.ID),
+				Metadata:    map[string]any{"identifier_type": identifierType},
+			})
+			if nowLocked {
+				_ = s.audit.Record(ctx, audit.Entry{
+					ActorUserID: user.ID,
+					Action:      "account_locked",
+					TargetType:  audit.TargetTypeUser,
+					TargetID:    audit.UserTargetID(user.ID),
+					Metadata:    map[string]any{"reason": "consecutive_failures"},
+				})
+			}
+		}
 		return nil, ErrInvalidCredential
 	}
+
+	// Successful login — clear failure counter.
+	if s.lockout != nil {
+		_ = s.lockout.Reset(ctx, user.ID)
+	}
+
 	if err := s.audit.Record(ctx, audit.Entry{
 		ActorUserID: user.ID,
 		Action:      audit.ActionLogin,
@@ -284,6 +339,26 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 		return err
 	}
 
+	if err := s.pwPolicy.Validate(input.NewPassword); err != nil {
+		return err
+	}
+
+	// Check password history.
+	if s.pwPolicy.HistoryCount > 0 {
+		var historyHashes []string
+		s.db.WithContext(ctx).
+			Model(&store.PasswordHistory{}).
+			Where("user_id = ?", user.ID).
+			Order("created_at DESC").
+			Limit(s.pwPolicy.HistoryCount).
+			Pluck("password_hash", &historyHashes)
+		// Also check current password.
+		historyHashes = append([]string{user.PasswordHash}, historyHashes...)
+		if err := s.pwPolicy.CheckHistory(input.NewPassword, historyHashes); err != nil {
+			return err
+		}
+	}
+
 	hash, err := HashPassword(input.NewPassword)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
@@ -299,6 +374,15 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 	}
 	if result.RowsAffected == 0 {
 		return ErrInvalidCredential
+	}
+
+	// Record old password in history.
+	if s.pwPolicy.HistoryCount > 0 {
+		_ = s.db.WithContext(ctx).Create(&store.PasswordHistory{
+			UserID:       user.ID,
+			PasswordHash: user.PasswordHash,
+			CreatedAt:    s.now(),
+		}).Error
 	}
 
 	_ = s.redis.Del(ctx, emailCodeKey(EmailCodePurposePasswordReset, email)).Err()

@@ -21,6 +21,7 @@ type User struct {
 	Email           string `gorm:"size:255;not null;uniqueIndex"`
 	Username        string `gorm:"size:64;not null;default:''"`
 	Nickname        string `gorm:"size:255;not null;default:''"`
+	Locale          string `gorm:"size:10;not null;default:'en'"`
 	EmailVerifiedAt *time.Time
 	PasswordHash    string         `gorm:"size:255;not null"`
 	DisplayName     string         `gorm:"size:255;not null"`
@@ -113,19 +114,21 @@ type MemberRole struct {
 }
 
 type OAuthClient struct {
-	ID                      int64          `gorm:"primaryKey;autoIncrement"`
-	TenantID                int64          `gorm:"not null;index"`
-	ClientID                string         `gorm:"size:255;not null;uniqueIndex"`
-	ClientSecretHash        string         `gorm:"size:255;not null"`
-	Name                    string         `gorm:"size:255;not null"`
-	RedirectURIs            datatypes.JSON `gorm:"not null"`
-	AllowedScopes           datatypes.JSON `gorm:"not null"`
-	GrantTypes              datatypes.JSON `gorm:"not null"`
-	TokenEndpointAuthMethod string         `gorm:"size:64;not null"`
-	AutoProvisionMembers    bool           `gorm:"not null;default:false"`
-	Status                  string         `gorm:"size:32;not null;index"`
-	CreatedAt               time.Time      `gorm:"not null"`
-	UpdatedAt               time.Time      `gorm:"not null"`
+	ID                              int64          `gorm:"primaryKey;autoIncrement"`
+	TenantID                        int64          `gorm:"not null;index"`
+	ClientID                        string         `gorm:"size:255;not null;uniqueIndex"`
+	ClientSecretHash                string         `gorm:"size:255;not null"`
+	Name                            string         `gorm:"size:255;not null"`
+	RedirectURIs                    datatypes.JSON `gorm:"not null"`
+	AllowedScopes                   datatypes.JSON `gorm:"not null"`
+	GrantTypes                      datatypes.JSON `gorm:"not null"`
+	TokenEndpointAuthMethod         string         `gorm:"size:64;not null"`
+	AutoProvisionMembers            bool           `gorm:"not null;default:false"`
+	BackchannelLogoutURI            string         `gorm:"size:1024;not null;default:''"`
+	BackchannelLogoutSessionRequired bool          `gorm:"not null;default:false"`
+	Status                          string         `gorm:"size:32;not null;index"`
+	CreatedAt                       time.Time      `gorm:"not null"`
+	UpdatedAt                       time.Time      `gorm:"not null"`
 }
 
 type OAuthAuthorizationCode struct {
@@ -180,6 +183,8 @@ type ExternalProviderConfig struct {
 	ClientID               string         `gorm:"size:255;not null"`
 	ClientSecretCiphertext string         `gorm:"size:2048;not null"`
 	Scopes                 datatypes.JSON `gorm:"not null"`
+	DiscoveryURL           string         `gorm:"size:1024;not null;default:''"`
+	RedirectURI            string         `gorm:"size:1024;not null;default:''"`
 	Enabled                bool           `gorm:"not null;default:false"`
 	CreatedAt              time.Time      `gorm:"not null"`
 	UpdatedAt              time.Time      `gorm:"not null"`
@@ -196,4 +201,33 @@ type AuditLog struct {
 	UserAgent   string         `gorm:"size:1024"`
 	Metadata    datatypes.JSON `gorm:"not null"`
 	CreatedAt   time.Time      `gorm:"not null"`
+}
+
+// PasswordHistory stores hashed previous passwords for reuse detection.
+type PasswordHistory struct {
+	ID           int64     `gorm:"primaryKey;autoIncrement"`
+	UserID       int64     `gorm:"not null;index"`
+	PasswordHash string    `gorm:"size:255;not null"`
+	CreatedAt    time.Time `gorm:"not null"`
+}
+
+const (
+	InviteStatusPending  = "pending"
+	InviteStatusRedeemed = "redeemed"
+	InviteStatusRevoked  = "revoked"
+)
+
+// Invite represents a tenant membership invitation sent by email.
+type Invite struct {
+	ID               int64      `gorm:"primaryKey;autoIncrement"`
+	TokenHash        string     `gorm:"size:255;not null;uniqueIndex"`
+	TenantID         int64      `gorm:"not null;index"`
+	RoleID           int64      `gorm:"not null"`
+	InviterUserID    int64      `gorm:"not null"`
+	TargetEmail      string     `gorm:"size:255;not null;index"`
+	Status           string     `gorm:"size:32;not null;index"` // pending, redeemed, revoked
+	ExpiresAt        time.Time  `gorm:"not null;index"`
+	RedeemedAt       *time.Time
+	RedeemedByUserID *int64
+	CreatedAt        time.Time `gorm:"not null"`
 }

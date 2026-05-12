@@ -1,0 +1,13 @@
+[{{.AppName}}] You've been invited
+
+Hello {{.UserName}},
+
+You have been invited to join a workspace on {{.AppName}}.
+
+Click the link below to accept the invitation (expires in {{.ExpiryMin}} minutes):
+
+    {{.Link}}
+
+If you did not expect this invitation, you can safely ignore this email.
+
+— {{.AppName}} Team

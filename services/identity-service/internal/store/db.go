@@ -41,6 +41,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&RefreshToken{},
 		&ExternalProviderConfig{},
 		&AuditLog{},
+		&PasswordHistory{},
+		&Invite{},
 	); err != nil {
 		return err
 	}
