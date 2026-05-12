@@ -18,7 +18,7 @@ curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
 ```
 
-如果 `MYSQL_DSN` 留空，服务会使用进程内 SQLite 内存库，适合快速跑单测或验证路由；如果 `REDIS_URL` 留空或不可用，登录/注册等依赖 Redis 的 auth routes 会被禁用，但基础会话/OIDC/RBAC 路由仍会注册。生产或联调建议显式配置 MySQL 和 Redis。
+如果 `MYSQL_DSN` 留空，服务会使用进程内 SQLite 内存库，适合快速跑单测或验证路由；`REDIS_URL` 为空时默认连接 `redis://127.0.0.1:6379/0`。Redis 是运行时必需依赖，如果不可用，服务会直接启动失败，而不是以裁掉浏览器登录链路的半可用状态继续提供流量。
 
 后端服务不托管登录/注册 UI。SSO 浏览器登录入口由 `BROWSER_LOGIN_URL` 指向独立前端页面，默认是同源 Nginx 部署下的 `/login`。
 
@@ -55,6 +55,7 @@ docker compose down -v
 | `HTTP_ADDR` | `:8080` | HTTP 监听地址。Compose 固定容器内为 `:8080`，不要用它调整宿主机端口。 |
 | `PUBLIC_ISSUER_URL` | `http://127.0.0.1:8080` | OIDC issuer，必须是业务系统可访问的外部地址；Compose 默认 `http://localhost:${IDENTITY_HTTP_PORT:-8080}`。 |
 | `BROWSER_LOGIN_URL` | `/login` | 浏览器访问 `/oauth2/authorize` 缺少 SSO 会话时跳转的独立前端登录页。可配置为同源路径或完整 URL。 |
+| `BROWSER_COOKIE_SECURE` | 跟随 `PUBLIC_ISSUER_URL` 协议 | 浏览器 SSO cookie 和 GitHub OAuth state cookie 是否带 `Secure`。`PUBLIC_ISSUER_URL` 为 `http://...` 时默认 `false`，方便本地 HTTP/Compose 联调；生产 HTTPS 场景建议保持 `true`。 |
 | `MYSQL_DSN` | 空 | MySQL DSN。为空时使用内存 SQLite。 |
 | `REDIS_URL` | 空 | Redis URL，例如 `redis://redis:6379/0`。 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 / `587` / 空 / 空 / 空 | 注册、找回密码验证码邮件发送配置；`SMTP_HOST` 与 `SMTP_FROM` 为空时使用 Noop sender。 |

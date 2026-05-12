@@ -8,6 +8,7 @@ import (
 	stdhttp "net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	httpserver "goauth/services/identity-service/internal/http"
@@ -21,21 +22,25 @@ const (
 
 type SessionIssuer interface {
 	IssueTokens(ctx context.Context, input session.IssueTokensInput) (*session.TokenPair, error)
+	IssueOIDCAuthorizeCookieBySessionID(ctx context.Context, sessionID string) (string, error)
+	OIDCAuthorizeCookieTTL() time.Duration
 }
 
 type Handler struct {
-	service        *Service
-	sessions       SessionIssuer
-	authMiddleware gin.HandlerFunc
-	newState       func() (string, error)
+	service             *Service
+	sessions            SessionIssuer
+	authMiddleware      gin.HandlerFunc
+	browserCookieSecure bool
+	newState            func() (string, error)
 }
 
-func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.HandlerFunc) *Handler {
+func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.HandlerFunc, browserCookieSecure bool) *Handler {
 	return &Handler{
-		service:        service,
-		sessions:       sessions,
-		authMiddleware: authMiddleware,
-		newState:       randomState,
+		service:             service,
+		sessions:            sessions,
+		authMiddleware:      authMiddleware,
+		browserCookieSecure: browserCookieSecure,
+		newState:            randomState,
 	}
 }
 
@@ -73,7 +78,7 @@ func (h *Handler) start(c *gin.Context) {
 		return
 	}
 
-	setGitHubOAuthStateCookie(c, state)
+	setGitHubOAuthStateCookie(c, state, h.browserCookieSecure)
 	c.Redirect(stdhttp.StatusFound, authURL)
 }
 
@@ -99,7 +104,7 @@ func (h *Handler) callback(c *gin.Context) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid state"})
 		return
 	}
-	defer clearGitHubOAuthStateCookie(c)
+	defer clearGitHubOAuthStateCookie(c, h.browserCookieSecure)
 
 	result, err := h.service.AuthenticateWithState(c.Request.Context(), "github", code, c.Query("redirect_uri"), state)
 	if err != nil {
@@ -129,6 +134,12 @@ func (h *Handler) callback(c *gin.Context) {
 		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	cookieValue, err := h.sessions.IssueOIDCAuthorizeCookieBySessionID(c.Request.Context(), pair.SessionID)
+	if err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.sessions.OIDCAuthorizeCookieTTL().Seconds()), h.browserCookieSecure)
 
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{
 		"tokens":   pair,
@@ -242,12 +253,12 @@ func randomState() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func setGitHubOAuthStateCookie(c *gin.Context, value string) {
+func setGitHubOAuthStateCookie(c *gin.Context, value string, secure bool) {
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
-	c.SetCookie(githubOAuthStateCookieName, value, githubOAuthStateCookieMaxAgeS, "/", "", true, true)
+	c.SetCookie(githubOAuthStateCookieName, value, githubOAuthStateCookieMaxAgeS, "/", "", secure, true)
 }
 
-func clearGitHubOAuthStateCookie(c *gin.Context) {
+func clearGitHubOAuthStateCookie(c *gin.Context, secure bool) {
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
-	c.SetCookie(githubOAuthStateCookieName, "", -1, "/", "", true, true)
+	c.SetCookie(githubOAuthStateCookieName, "", -1, "/", "", secure, true)
 }

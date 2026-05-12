@@ -228,7 +228,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 }
 
 func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
 		if err := tx.Model(&store.LoginSession{}).
 			Where("user_id = ? AND revoked_at IS NULL", userID).
@@ -244,6 +244,18 @@ func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 		return tx.Model(&store.User{}).
 			Where("id = ?", userID).
 			Update("token_version", gorm.Expr("token_version + 1")).Error
+	}); err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: userID,
+		Action:      audit.ActionLogout,
+		TargetType:  audit.TargetTypeUser,
+		TargetID:    audit.UserTargetID(userID),
+		Metadata: map[string]any{
+			"scope": "all_sessions",
+		},
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -191,6 +192,25 @@ func TestReadyzChecksDBAndRedisClients(t *testing.T) {
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+}
+
+func TestRequireRedisFailsWhenUnavailable(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("listener.Close() error = %v", err)
+	}
+
+	_, err = requireRedis(config.Config{RedisURL: "redis://" + addr + "/0"})
+	if err == nil {
+		t.Fatal("requireRedis() error = nil, want redis startup failure")
+	}
+	if !strings.Contains(err.Error(), "redis is required") {
+		t.Fatalf("error = %v, want redis is required", err)
 	}
 }
 

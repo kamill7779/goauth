@@ -574,7 +574,7 @@ func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientI
 		return err
 	}
 
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := s.revokeLoginSessionWithDB(ctx, tx, token.SessionID, now); err != nil {
 			return err
 		}
@@ -584,6 +584,21 @@ func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientI
 			return err
 		}
 		return nil
+	}); err != nil {
+		return err
+	}
+
+	return s.audit.Record(ctx, audit.Entry{
+		ActorUserID: token.UserID,
+		TenantID:    token.TenantID,
+		Action:      audit.ActionLogout,
+		TargetType:  audit.TargetTypeTokenFamily,
+		TargetID:    token.FamilyID,
+		Metadata: map[string]any{
+			"client_id":  clientID,
+			"session_id": token.SessionID,
+			"reason":     "oidc_revoke",
+		},
 	})
 }
 

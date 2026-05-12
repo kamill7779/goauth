@@ -82,23 +82,29 @@ func run() error {
 		return fmt.Errorf("load signing key: %w", err)
 	}
 
-	redisClient, err := cache.OpenRedis(cfg)
+	redisClient, err := requireRedis(cfg)
 	if err != nil {
-		log.Printf("auth routes disabled until redis is available: %v", err)
-		redisClient = nil
-	} else {
-		defer func() {
-			if err := redisClient.Close(); err != nil {
-				log.Printf("close redis: %v", err)
-			}
-		}()
+		return err
 	}
+	defer func() {
+		if err := redisClient.Close(); err != nil {
+			log.Printf("close redis: %v", err)
+		}
+	}()
 
 	router := buildRouter(cfg, db, redisClient, privateKey)
 	if err := router.Run(cfg.HTTPAddr); err != nil {
 		return fmt.Errorf("run server: %w", err)
 	}
 	return nil
+}
+
+func requireRedis(cfg config.Config) (*redis.Client, error) {
+	client, err := cache.OpenRedis(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("redis is required for identity runtime: %w", err)
+	}
+	return client, nil
 }
 
 func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
@@ -191,7 +197,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		idpService := idp.NewService(db, githubProvider)
 		idpService.SetAuditRecorder(auditService)
 		idpService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
-		registrars = append(registrars, idp.NewHandler(idpService, sessionService, authMiddleware))
+		registrars = append(registrars, idp.NewHandler(idpService, sessionService, authMiddleware, cfg.BrowserCookieSecure))
 	}
 
 	router := httpserver.NewRouter(cfg, registrars...)

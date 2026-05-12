@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
 	"errors"
 	"sync"
 	"testing"
@@ -395,6 +396,41 @@ func TestLogoutWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestLogoutAllWritesAuditLog(t *testing.T) {
+	service, user := newTestService(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+
+	if _, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	}); err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	if err := service.LogoutAll(context.Background(), user.ID); err != nil {
+		t.Fatalf("LogoutAll() error = %v", err)
+	}
+
+	var log store.AuditLog
+	if err := service.db.
+		Where("action = ? AND target_type = ?", audit.ActionLogout, audit.TargetTypeUser).
+		First(&log).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+	if log.TargetID != audit.UserTargetID(user.ID) {
+		t.Fatalf("log.TargetID = %q, want %q", log.TargetID, audit.UserTargetID(user.ID))
+	}
+
+	var metadata map[string]any
+	if err := auditMetadata(log, &metadata); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if metadata["scope"] != "all_sessions" {
+		t.Fatalf("metadata scope = %v, want all_sessions", metadata["scope"])
+	}
+}
+
 func TestRefreshReuseWritesAuditLog(t *testing.T) {
 	service, user := newTestService(t)
 	service.SetAuditRecorder(audit.NewService(service.db))
@@ -525,4 +561,8 @@ func createTenantAndMember(t *testing.T, service *Service, userID int64) store.T
 		t.Fatalf("create member: %v", err)
 	}
 	return tenantRecord
+}
+
+func auditMetadata(log store.AuditLog, target *map[string]any) error {
+	return json.Unmarshal(log.Metadata, target)
 }

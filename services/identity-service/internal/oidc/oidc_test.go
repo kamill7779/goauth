@@ -1183,6 +1183,54 @@ func TestRevokeRevokesRefreshToken(t *testing.T) {
 	assertIntrospectInactive(t, router, client.ClientID, "super-secret", tokenSet.AccessToken)
 }
 
+func TestRevokeWritesAuditLog(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	service.SetAuditRecorder(audit.NewService(service.db))
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("revoke-audit-verifier"), "nonce-revoke-audit")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "revoke-audit-verifier")
+
+	form := url.Values{
+		"token":         {tokenSet.RefreshToken},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/revoke", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var log store.AuditLog
+	if err := db.
+		Where("action = ? AND target_type = ?", audit.ActionLogout, audit.TargetTypeTokenFamily).
+		First(&log).Error; err != nil {
+		t.Fatalf("load audit log: %v", err)
+	}
+
+	var refreshToken store.RefreshToken
+	if err := db.Where("token_hash = ?", service.hashToken(tokenSet.RefreshToken)).First(&refreshToken).Error; err != nil {
+		t.Fatalf("load refresh token: %v", err)
+	}
+	if log.TargetID != refreshToken.FamilyID {
+		t.Fatalf("log.TargetID = %q, want %q", log.TargetID, refreshToken.FamilyID)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(log.Metadata, &metadata); err != nil {
+		t.Fatalf("json.Unmarshal(metadata) error = %v", err)
+	}
+	if metadata["client_id"] != client.ClientID {
+		t.Fatalf("metadata client_id = %v, want %s", metadata["client_id"], client.ClientID)
+	}
+	if metadata["reason"] != "oidc_revoke" {
+		t.Fatalf("metadata reason = %v, want oidc_revoke", metadata["reason"])
+	}
+}
+
 func TestRevokeRotatedRefreshTokenRevokesCurrentFamily(t *testing.T) {
 	_, router, db, privateKey, user, client := newTestProvider(t)
 	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
