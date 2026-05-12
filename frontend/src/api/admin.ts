@@ -49,6 +49,18 @@ export interface OAuthClientSecretResponse {
   client_secret?: string;
 }
 
+export function encodeOAuthClientId(clientId: string): string {
+  return encodeURIComponent(clientId);
+}
+
+export function oauthClientStatusPath(clientId: string): string {
+  return `/admin/oauth-clients/${encodeOAuthClientId(clientId)}/status`;
+}
+
+export function oauthClientRotateSecretPath(clientId: string): string {
+  return `/admin/oauth-clients/${encodeOAuthClientId(clientId)}/rotate-secret`;
+}
+
 export function classifyAdminAccessError(error: unknown): AdminAccessFailure {
   const status = (error as Partial<AdminHttpError> | undefined)?.status;
   if (status === 401) {
@@ -180,10 +192,10 @@ export const createOAuthClient = (input: CreateOAuthClientInput) => {
 };
 
 export const updateOAuthClientStatus = (clientId: string, status: OAuthClient['status']) =>
-  patchRaw(`/admin/oauth-clients/${clientId}/status`, { status }).then((body) => normalizeOAuthClient(asSingle(body)));
+  patchRaw(oauthClientStatusPath(clientId), { status }).then((body) => normalizeOAuthClient(asSingle(body)));
 
 export const rotateClientSecret = (clientId: string) =>
-  postRaw(`/admin/oauth-clients/${clientId}/rotate-secret`).then(normalizeOAuthClientSecretResponse);
+  postRaw(oauthClientRotateSecretPath(clientId)).then(normalizeOAuthClientSecretResponse);
 
 export const getSessions = (params?: { search?: string; status?: string; user_id?: number; client_id?: string; page?: number; page_size?: number }) =>
   getRaw('/admin/sessions', params).then((body) => {

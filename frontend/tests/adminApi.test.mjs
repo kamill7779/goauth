@@ -79,3 +79,16 @@ test('normalizeOAuthClientSecretResponse omits empty secret values', () => {
   assert.equal(result.client_secret, undefined);
   assert.equal(result.client.status, 'disabled');
 });
+
+test('oauth client admin routes encode client ids before building paths', () => {
+  const clientId = 'admin/web?tab=1#frag';
+
+  assert.equal(
+    admin.oauthClientStatusPath(clientId),
+    '/admin/oauth-clients/admin%2Fweb%3Ftab%3D1%23frag/status',
+  );
+  assert.equal(
+    admin.oauthClientRotateSecretPath(clientId),
+    '/admin/oauth-clients/admin%2Fweb%3Ftab%3D1%23frag/rotate-secret',
+  );
+});

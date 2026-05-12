@@ -35,6 +35,11 @@ type SecretNotice = {
   source: 'create' | 'rotate';
 };
 
+export type RotateSecretOutcome = {
+  secretNotice: SecretNotice | null;
+  toast: ToastState;
+};
+
 const INITIAL_FORM: CreateFormState = {
   tenant_id: '',
   client_id: '',
@@ -61,6 +66,36 @@ function upsertClient(list: OAuthClient[], next: OAuthClient) {
     return [next, ...list];
   }
   return list.map(client => client.client_id === next.client_id ? next : client);
+}
+
+export function applyRotateSecretOutcome({
+  currentNotice,
+  result,
+}: {
+  currentNotice: SecretNotice | null;
+  result: { client: OAuthClient; client_secret?: string };
+}): RotateSecretOutcome {
+  if (result.client_secret) {
+    return {
+      secretNotice: {
+        clientId: result.client.client_id,
+        secret: result.client_secret,
+        source: 'rotate',
+      },
+      toast: {
+        message: `${result.client.client_id} 密钥已轮换`,
+        type: 'success',
+      },
+    };
+  }
+
+  return {
+    secretNotice: currentNotice?.source === 'rotate' || currentNotice?.source === 'create' ? null : currentNotice,
+    toast: {
+      message: `${result.client.client_id} 已轮换，但后端未返回新的 client secret，请重新操作。`,
+      type: 'error',
+    },
+  };
 }
 
 export default function OAuthPage() {
@@ -163,15 +198,14 @@ export default function OAuthPage() {
     try {
       const result = await rotateClientSecret(clientId);
       setClients(current => current.map(client => client.client_id === clientId ? result.client : client));
-      if (result.client_secret) {
-        setSecretNotice({
-          clientId: result.client.client_id,
-          secret: result.client_secret,
-          source: 'rotate',
-        });
-      }
-      setToast({ message: `${clientId} 密钥已轮换`, type: 'success' });
+      const outcome = applyRotateSecretOutcome({
+        currentNotice: secretNotice,
+        result,
+      });
+      setSecretNotice(outcome.secretNotice);
+      setToast(outcome.toast);
     } catch (err) {
+      setSecretNotice(null);
       setToast({ message: err instanceof Error ? err.message : '轮换密钥失败', type: 'error' });
     } finally {
       setPendingRotateClientId('');
