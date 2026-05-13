@@ -56,7 +56,8 @@ test('normalizeAuthorizeReturnTo accepts cross-origin authorize return_to from c
     'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
     {
       currentOrigin: 'https://console.example.com',
-      apiBaseURL: 'https://identity.example.com',
+      apiBaseURL: 'https://api.example.com',
+      issuerURL: 'https://identity.example.com',
     },
   );
 
@@ -71,7 +72,8 @@ test('normalizeAuthorizeReturnTo rejects authorize targets from untrusted origin
     'https://evil.example.com/oauth2/authorize?client_id=demo-web',
     {
       currentOrigin: 'https://console.example.com',
-      apiBaseURL: 'https://identity.example.com',
+      apiBaseURL: 'https://api.example.com',
+      issuerURL: 'https://identity.example.com',
     },
   );
 

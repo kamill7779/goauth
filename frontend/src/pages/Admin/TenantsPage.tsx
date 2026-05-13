@@ -80,8 +80,11 @@ export default function TenantsPage() {
   }, [fetchTenants]);
 
   useEffect(() => {
+    if (!drawerOpen || !selectedTenant) {
+      return;
+    }
     fetchAssignableUsers();
-  }, [fetchAssignableUsers]);
+  }, [drawerOpen, fetchAssignableUsers, selectedTenant]);
 
   const handleCreateTenant = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();

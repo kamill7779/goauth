@@ -33,6 +33,7 @@ type CaptchaBridge = {
 type AuthorizeReturnOptions = {
   currentOrigin?: string
   apiBaseURL?: string
+  issuerURL?: string
 }
 
 declare global {
@@ -42,6 +43,7 @@ declare global {
 }
 
 const CAPTCHA_PROVIDER = import.meta.env?.VITE_CAPTCHA_PROVIDER?.trim().toLowerCase() ?? ''
+const OIDC_ISSUER_URL = import.meta.env?.VITE_OIDC_ISSUER_URL?.trim() ?? ''
 
 function originFromURL(raw: string, fallback: string): string | null {
   try {
@@ -59,10 +61,12 @@ export function normalizeAuthorizeReturnTo(raw: string, options?: AuthorizeRetur
 
   const currentOrigin = options?.currentOrigin?.trim() || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080')
   const apiBaseURL = options?.apiBaseURL?.trim() || API_BASE_URL
+  const issuerURL = options?.issuerURL?.trim() || OIDC_ISSUER_URL
   const currentAppOrigin = originFromURL(currentOrigin, 'http://localhost:8080')
   const apiOrigin = originFromURL(apiBaseURL, currentOrigin)
+  const issuerOrigin = originFromURL(issuerURL, currentOrigin)
 
-  if (!currentAppOrigin && !apiOrigin) {
+  if (!currentAppOrigin && !apiOrigin && !issuerOrigin) {
     return ''
   }
 
@@ -71,7 +75,7 @@ export function normalizeAuthorizeReturnTo(raw: string, options?: AuthorizeRetur
     if (parsed.pathname !== '/oauth2/authorize') {
       return ''
     }
-    if (parsed.origin !== currentAppOrigin && parsed.origin !== apiOrigin) {
+    if (parsed.origin !== currentAppOrigin && parsed.origin !== apiOrigin && parsed.origin !== issuerOrigin) {
       return ''
     }
     if (parsed.origin === currentAppOrigin) {
@@ -87,6 +91,7 @@ function getAuthorizeReturnTo(search: string): string {
   return normalizeAuthorizeReturnTo(new URLSearchParams(search).get('return_to')?.trim() ?? '', {
     currentOrigin: window.location.origin,
     apiBaseURL: API_BASE_URL,
+    issuerURL: OIDC_ISSUER_URL,
   })
 }
 
