@@ -1,3 +1,5 @@
+// Package captcha provides server-side verification for CAPTCHA tokens.
+// Supported providers: Cloudflare Turnstile, hCaptcha, Google reCAPTCHA v2/v3.
 package captcha
 
 import (

@@ -1,3 +1,5 @@
+// Package middleware provides HTTP middleware for the Gin router: structured
+// logging, request ID propagation, and other cross-cutting concerns.
 package middleware
 
 import (

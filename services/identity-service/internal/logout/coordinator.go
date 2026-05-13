@@ -1,3 +1,6 @@
+// Package logout implements OIDC Back-Channel Logout 1.0. When a user session
+// ends, the Coordinator sends signed logout_token JWTs to all relying parties
+// that registered a backchannel_logout_uri.
 package logout
 
 import (

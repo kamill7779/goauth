@@ -1,3 +1,6 @@
+// Package provisioning implements automatic tenant membership assignment.
+// The DefaultMembershipPolicy grants membership to configured tenants at
+// user creation time (both email registration and external IdP first login).
 package provisioning
 
 import (

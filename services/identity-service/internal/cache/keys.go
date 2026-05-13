@@ -1,3 +1,5 @@
+// Package cache defines Redis key conventions for the identity service.
+// All keys are namespaced under "auth:" to avoid collisions in shared Redis instances.
 package cache
 
 import "fmt"

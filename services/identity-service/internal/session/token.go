@@ -1,3 +1,5 @@
+// Package session manages JWT access/refresh token issuance, rotation,
+// revocation, and the AuthMiddleware that validates tokens on every request.
 package session
 
 import (
@@ -27,6 +29,8 @@ var (
 	ErrRefreshTokenReuse   = errors.New("refresh token reuse detected")
 )
 
+// accessTokenUseSession marks tokens issued for browser/login sessions, as
+// opposed to OAuth2 client_credentials or other token-use values.
 const accessTokenUseSession = "session"
 
 type Service struct {
@@ -39,7 +43,7 @@ type Service struct {
 	refreshTokenTTL     time.Duration
 	audit               audit.Recorder
 	logoutCoordinator   *logout.Coordinator
-	now                 func() time.Time
+	now                 func() time.Time // overridable for tests
 }
 
 type IssueTokensInput struct {
@@ -54,6 +58,10 @@ type TokenPair struct {
 	SessionID    string `json:"session_id"`
 }
 
+// accessClaims is the JWT body for session access tokens. TokenVersion is
+// stamped from store.User.TokenVersion at issue time; validators reject tokens
+// whose version is below the user's current version, giving us O(1) global
+// session invalidation (logout-all, password change) without a blocklist.
 type accessClaims struct {
 	Email         string   `json:"email"`
 	EmailVerified bool     `json:"email_verified"`
@@ -92,6 +100,9 @@ func (s *Service) SetLogoutCoordinator(c *logout.Coordinator) {
 	s.logoutCoordinator = c
 }
 
+// LoadRSAPrivateKey accepts either PKCS#1 ("RSA PRIVATE KEY") or PKCS#8
+// ("PRIVATE KEY") PEM encodings — operators generate keys with different
+// tools, so we try PKCS#1 first and fall back to PKCS#8.
 func LoadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {
 	bytes, err := os.ReadFile(path)
 	if err != nil {
@@ -119,6 +130,9 @@ func LoadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {
 	return privateKey, nil
 }
 
+// IssueTokens starts a brand-new login: it creates a LoginSession row plus the
+// first refresh token of a new family. Subsequent refreshes reuse the same
+// session/family IDs so that reuse detection can revoke the entire chain.
 func (s *Service) IssueTokens(ctx context.Context, input IssueTokensInput) (*TokenPair, error) {
 	sessionID, err := randomID(16)
 	if err != nil {
@@ -202,6 +216,10 @@ func (s *Service) RefreshTokenTTL() time.Duration {
 	return s.refreshTokenTTL
 }
 
+// OIDCAuthorizeCookieTTL returns the lifetime of the browser SSO cookie. It
+// falls through configured TTLs (browser > access > refresh) so deployments
+// that only set one knob still get a sensible cookie lifetime; the 12h default
+// matches the documented BROWSER_SESSION_TTL fallback in .env.example.
 func (s *Service) OIDCAuthorizeCookieTTL() time.Duration {
 	if s.browserSessionTTL > 0 {
 		return s.browserSessionTTL

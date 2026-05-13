@@ -1,3 +1,6 @@
+// Package invite implements JWT-signed tenant membership invitations with
+// email delivery, expiry, and idempotent redemption (SELECT FOR UPDATE + atomic
+// status transition).
 package invite
 
 import (

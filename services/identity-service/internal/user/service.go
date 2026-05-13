@@ -1,3 +1,5 @@
+// Package user provides admin-level user management: CRUD, pagination with
+// filtering, password reset, enable/disable, and bootstrap admin provisioning.
 package user
 
 import (
@@ -300,6 +302,9 @@ func (s *Service) ResetPassword(ctx context.Context, id int64, password string) 
 	})
 }
 
+// EnsureBootstrapAdmin idempotently creates or updates the initial admin user.
+// On first run it creates the user; on subsequent runs it reconciles password,
+// status, and display name without duplicating the account.
 func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdminInput) (*store.User, error) {
 	email := normalizeEmail(input.Email)
 	if email == "" {
@@ -416,6 +421,9 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 	return &record, nil
 }
 
+// MarkSystemUser ensures the user has membership in the "system" tenant with
+// the given role. Creates the tenant, member, and role if they don't exist
+// (all upserts, safe to call repeatedly).
 func (s *Service) MarkSystemUser(ctx context.Context, userID int64, roleCode string) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		tenantRecord := store.Tenant{

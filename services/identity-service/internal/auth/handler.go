@@ -1,3 +1,5 @@
+// Package auth implements self-service authentication flows: registration,
+// login (with lockout), email verification codes, and password reset.
 package auth
 
 import (

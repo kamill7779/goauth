@@ -1,3 +1,6 @@
+// Package config loads service configuration from environment variables with
+// sensible defaults. All settings are resolved at startup; runtime hot-reload
+// is not supported.
 package config
 
 import (
@@ -71,6 +74,8 @@ type Config struct {
 	CaptchaSiteKey   string
 }
 
+// Load reads all configuration from environment variables. Missing variables
+// fall back to safe defaults suitable for local development.
 func Load() (Config, error) {
 	accessTokenTTL, err := parseDurationEnv("ACCESS_TOKEN_TTL", 15*time.Minute)
 	if err != nil {

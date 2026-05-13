@@ -1,3 +1,5 @@
+// Package http provides the Gin router factory, CORS middleware, health/readiness
+// endpoints, and a unified JSON response envelope ({success, data}).
 package http
 
 import "github.com/gin-gonic/gin"

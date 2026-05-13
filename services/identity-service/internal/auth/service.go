@@ -183,6 +183,9 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		provisionedMembers = members
 		return nil
 	}); err != nil {
+		// GORM doesn't surface driver-specific unique-violation codes uniformly
+		// across MySQL/SQLite, so we string-match instead. The error text from
+		// each driver still mentions "unique"/"duplicate" plus the column name.
 		lower := strings.ToLower(err.Error())
 		if strings.Contains(lower, "unique") || strings.Contains(lower, "duplicate") {
 			if strings.Contains(lower, "username") {
@@ -313,6 +316,9 @@ func loginIdentifierType(identifier string) string {
 	return "email"
 }
 
+// ForgotPassword silently returns nil for unknown emails so attackers cannot
+// enumerate registered accounts via the response shape. A code is only sent
+// when the email actually exists.
 func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	var user store.User
 	if err := s.db.WithContext(ctx).Where("email = ?", normalizeEmail(email)).First(&user).Error; err != nil {
@@ -364,6 +370,9 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 		return fmt.Errorf("hash password: %w", err)
 	}
 
+	// Bump token_version so every existing access token / refresh token for this
+	// user is rejected on next use — password reset must invalidate sessions
+	// system-wide, even ones we don't have direct revoke handles to.
 	result := s.db.WithContext(ctx).Model(&store.User{}).Where("email = ?", email).Updates(map[string]any{
 		"password_hash": hash,
 		"token_version": gorm.Expr("token_version + 1"),

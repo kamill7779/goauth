@@ -1,3 +1,5 @@
+// Package metrics exposes Prometheus counters and histograms for key
+// authentication events (logins, lockouts, token issuance, HTTP latency).
 package metrics
 
 import (

@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// systemRoleCodes is a fallback for legacy role records lacking is_system=true.
+// Both kebab and snake variants are kept because historical seed data used either.
 var systemRoleCodes = []string{"root", "system-admin", "system_admin"}
 
 func (s *Service) loadActiveUser(ctx context.Context, userID int64) (*store.User, error) {

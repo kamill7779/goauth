@@ -1,3 +1,5 @@
+// Package mailer defines the email sending interface and provides SMTP and
+// no-op implementations. The no-op sender is used in development/testing.
 package mailer
 
 import "context"

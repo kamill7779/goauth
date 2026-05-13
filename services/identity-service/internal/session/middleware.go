@@ -13,6 +13,10 @@ import (
 
 const contextClaimsKey = "session_claims"
 
+// AuthMiddleware validates an `Authorization: Bearer <jwt>` header in two
+// stages: cryptographic verification against publicKey, then live state checks
+// (user active, session not revoked, token version current) so that logout and
+// account disable take effect without waiting for token expiry.
 func AuthMiddleware(service *Service, publicKey *rsa.PublicKey) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if service == nil || publicKey == nil {
@@ -28,6 +32,8 @@ func AuthMiddleware(service *Service, publicKey *rsa.PublicKey) gin.HandlerFunc 
 		}
 
 		token, err := jwt.ParseWithClaims(strings.TrimSpace(tokenString), &accessClaims{}, func(token *jwt.Token) (any, error) {
+			// Explicitly pin RS256: rejecting other algorithms blocks the classic
+			// "alg=none" and HS256-with-public-key confusion attacks.
 			if token.Method != jwt.SigningMethodRS256 {
 				return nil, errors.New("unexpected signing method")
 			}

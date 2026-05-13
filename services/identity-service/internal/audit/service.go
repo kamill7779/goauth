@@ -1,3 +1,6 @@
+// Package audit provides structured audit logging for security-relevant events.
+// All mutations (login, logout, password change, role assignment, etc.) are
+// recorded with actor, target, and metadata for compliance and forensics.
 package audit
 
 import (

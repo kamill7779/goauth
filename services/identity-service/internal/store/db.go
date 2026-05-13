@@ -1,3 +1,5 @@
+// Package store provides database models, migrations, and connection setup.
+// It supports both MySQL (production) and in-memory SQLite (testing/development).
 package store
 
 import (
@@ -11,6 +13,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// OpenDB connects to MySQL if MYSQL_DSN is set, otherwise falls back to an
+// in-memory SQLite instance (useful for development and testing).
 func OpenDB(cfg config.Config) (*gorm.DB, error) {
 	if cfg.MySQLDSN != "" {
 		return gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
@@ -20,6 +24,8 @@ func OpenDB(cfg config.Config) (*gorm.DB, error) {
 	return gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 }
 
+// AutoMigrate runs GORM schema migration for all models, then performs
+// backfill operations that must happen after the schema is stable.
 func AutoMigrate(db *gorm.DB) error {
 	// For pre-existing tables, add the new columns with a safe default so
 	// GORM can run its own migration without constraint violations.

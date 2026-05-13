@@ -1,3 +1,6 @@
+// Package github implements the idp.Provider interface for GitHub OAuth,
+// handling authorization code exchange and user profile fetching via the
+// GitHub REST API.
 package github
 
 import (

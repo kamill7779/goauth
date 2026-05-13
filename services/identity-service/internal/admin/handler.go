@@ -1,3 +1,5 @@
+// Package admin exposes administrative HTTP endpoints for user management,
+// lockout control, and session listing — all gated behind RBAC authorization.
 package admin
 
 import (

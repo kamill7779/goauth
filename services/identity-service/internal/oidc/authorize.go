@@ -13,6 +13,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// authorize implements the OAuth2 authorization endpoint (RFC 6749 §3.1) plus
+// PKCE (RFC 7636). Required checks, in order: client exists & enabled, response
+// type is "code", grant type permitted, redirect URI registered, scopes allowed,
+// PKCE challenge present, SSO cookie valid, user session live, tenant membership
+// active. Any miss short-circuits before persisting the authorization code.
 func (h *Handler) authorize(c *gin.Context) {
 	ctx := c.Request.Context()
 	clientID := strings.TrimSpace(c.Query("client_id"))
@@ -48,6 +53,9 @@ func (h *Handler) authorize(c *gin.Context) {
 		return
 	}
 
+	// PKCE is mandatory (not optional as in vanilla RFC 6749): every client must
+	// send a code_challenge, defaulting to "plain" only if the client opts in.
+	// "S256" is the recommended method per RFC 7636 §4.2.
 	codeChallenge := strings.TrimSpace(c.Query("code_challenge"))
 	codeChallengeMethod := strings.ToUpper(strings.TrimSpace(c.DefaultQuery("code_challenge_method", "plain")))
 	if codeChallenge == "" || (codeChallengeMethod != "PLAIN" && codeChallengeMethod != "S256") {

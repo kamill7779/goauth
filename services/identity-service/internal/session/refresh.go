@@ -13,6 +13,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// Refresh rotates a refresh token following RFC 6749 §10.4 with reuse detection.
+// If a revoked token is presented (e.g., an attacker replays a stolen token after
+// the legitimate client already rotated it), the entire token family is revoked.
 func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, error) {
 	var current store.RefreshToken
 	if err := s.db.WithContext(ctx).Where("token_hash = ?", hashToken(rawToken)).First(&current).Error; err != nil {
@@ -22,6 +25,7 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 		return nil, err
 	}
 
+	// Presenting an already-revoked token signals theft/replay: nuke the family.
 	if current.RevokedAt != nil {
 		return nil, s.rejectRefreshTokenReuse(ctx, current)
 	}
@@ -33,6 +37,8 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	if err != nil {
 		return nil, ErrInvalidRefreshToken
 	}
+	// TokenVersion mismatch means the user globally invalidated sessions (logout-all,
+	// password change). Reject without family revocation since the token itself was valid.
 	if user.TokenVersion != current.TokenVersion {
 		return nil, ErrInvalidRefreshToken
 	}
@@ -45,12 +51,16 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	var pair *TokenPair
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
+		// SELECT FOR UPDATE on the login session serializes concurrent refresh attempts
+		// for the same session, so two simultaneous rotations cannot both succeed.
 		if err := s.lockActiveSessionWithDB(ctx, tx, current.UserID, current.SessionID); err != nil {
+			// If another transaction already rotated this token, treat as reuse.
 			if s.wasRefreshTokenReplaced(ctx, tx, current.ID) {
 				return ErrRefreshTokenReuse
 			}
 			return ErrInvalidRefreshToken
 		}
+		// Atomic revoke: RowsAffected != 1 means a racing rotation won — treat as reuse.
 		result := tx.Model(&store.RefreshToken{}).
 			Where("id = ? AND revoked_at IS NULL", current.ID).
 			Update("revoked_at", now)
@@ -92,6 +102,10 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	return pair, nil
 }
 
+// rejectRefreshTokenReuse implements the RFC 6749 §10.4 mitigation: when a
+// previously-rotated (revoked) refresh token is replayed, kill the entire token
+// family AND the login session. This forces a re-login on every device sharing
+// that family, defeating any attacker who captured the token.
 func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.RefreshToken) error {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()

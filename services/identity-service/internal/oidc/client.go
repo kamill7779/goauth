@@ -214,6 +214,10 @@ func (s *Service) authenticateClient(ctx context.Context, clientID, clientSecret
 	return client, nil
 }
 
+// validateRedirectURI uses exact string match per RFC 6749 §3.1.2.2; substring
+// or pattern matching is intentionally avoided because it has historically led
+// to open-redirector vulnerabilities (e.g., suffix-equal but wildly different
+// origins).
 func (s *Service) validateRedirectURI(client *store.OAuthClient, redirectURI string) bool {
 	redirectURIs, err := decodeStringSlice(client.RedirectURIs)
 	if err != nil {
@@ -257,6 +261,10 @@ func (s *Service) validateScope(client *store.OAuthClient, scope string) error {
 	return nil
 }
 
+// authenticateClientFromRequest extracts and verifies the OAuth client's
+// credentials. The configured TokenEndpointAuthMethod is strictly enforced: a
+// "basic" client cannot fall back to posting client_secret in the body and vice
+// versa. Mixing both is explicitly rejected to defeat credential-stuffing tricks.
 func (s *Service) authenticateClientFromRequest(c *gin.Context) (*store.OAuthClient, error) {
 	clientID := strings.TrimSpace(c.PostForm("client_id"))
 	clientSecret := c.PostForm("client_secret")

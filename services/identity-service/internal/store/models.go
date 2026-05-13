@@ -23,14 +23,17 @@ type User struct {
 	Nickname        string `gorm:"size:255;not null;default:''"`
 	Locale          string `gorm:"size:10;not null;default:'en'"`
 	EmailVerifiedAt *time.Time
-	PasswordHash    string         `gorm:"size:255;not null"`
-	DisplayName     string         `gorm:"size:255;not null"`
-	AvatarURL       string         `gorm:"size:1024"`
-	Status          string         `gorm:"size:32;not null;index"`
-	TokenVersion    int            `gorm:"not null;default:0"`
-	CreatedAt       time.Time      `gorm:"not null"`
-	UpdatedAt       time.Time      `gorm:"not null"`
-	DeletedAt       gorm.DeletedAt `gorm:"index"`
+	PasswordHash    string `gorm:"size:255;not null"`
+	DisplayName     string `gorm:"size:255;not null"`
+	AvatarURL       string `gorm:"size:1024"`
+	Status          string `gorm:"size:32;not null;index"`
+	// TokenVersion is bumped on logout-all / password change / forced revocation;
+	// access tokens carry the version at issue time and validators reject any
+	// token below the current value, giving O(1) global session invalidation.
+	TokenVersion int            `gorm:"not null;default:0"`
+	CreatedAt    time.Time      `gorm:"not null"`
+	UpdatedAt    time.Time      `gorm:"not null"`
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
 }
 
 // BeforeCreate fills derived identity fields so callers that have not yet been
@@ -72,10 +75,13 @@ type Tenant struct {
 }
 
 type TenantMember struct {
-	ID                int64          `gorm:"primaryKey;autoIncrement"`
-	TenantID          int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
-	UserID            int64          `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
-	Status            string         `gorm:"size:32;not null;index"`
+	ID       int64 `gorm:"primaryKey;autoIncrement"`
+	TenantID int64 `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
+	UserID   int64 `gorm:"not null;index;uniqueIndex:idx_tenant_member"`
+	Status   string `gorm:"size:32;not null;index"`
+	// PermissionVersion is incremented on any role/permission change in this
+	// scope. The RBAC cache stores the version it computed against; mismatches
+	// trigger a recompute without needing a separate invalidation message.
 	PermissionVersion int            `gorm:"not null;default:0"`
 	CreatedAt         time.Time      `gorm:"not null"`
 	UpdatedAt         time.Time      `gorm:"not null"`
@@ -123,12 +129,16 @@ type OAuthClient struct {
 	AllowedScopes                   datatypes.JSON `gorm:"not null"`
 	GrantTypes                      datatypes.JSON `gorm:"not null"`
 	TokenEndpointAuthMethod         string         `gorm:"size:64;not null"`
-	AutoProvisionMembers            bool           `gorm:"not null;default:false"`
-	BackchannelLogoutURI            string         `gorm:"size:1024;not null;default:''"`
-	BackchannelLogoutSessionRequired bool          `gorm:"not null;default:false"`
-	Status                          string         `gorm:"size:32;not null;index"`
-	CreatedAt                       time.Time      `gorm:"not null"`
-	UpdatedAt                       time.Time      `gorm:"not null"`
+	// AutoProvisionMembers grants tenant membership at first login instead of
+	// requiring a prior invite — used for trusted internal apps only.
+	AutoProvisionMembers bool   `gorm:"not null;default:false"`
+	// BackchannelLogoutURI is the OIDC RP endpoint we POST a logout_token to on
+	// session termination (OIDC Back-Channel Logout 1.0).
+	BackchannelLogoutURI             string    `gorm:"size:1024;not null;default:''"`
+	BackchannelLogoutSessionRequired bool      `gorm:"not null;default:false"`
+	Status                           string    `gorm:"size:32;not null;index"`
+	CreatedAt                        time.Time `gorm:"not null"`
+	UpdatedAt                        time.Time `gorm:"not null"`
 }
 
 type OAuthAuthorizationCode struct {
@@ -159,8 +169,12 @@ type LoginSession struct {
 }
 
 type RefreshToken struct {
-	ID                int64      `gorm:"primaryKey;autoIncrement"`
-	TokenHash         string     `gorm:"size:255;not null;uniqueIndex"`
+	ID int64 `gorm:"primaryKey;autoIncrement"`
+	// TokenHash is the SHA-256 of the opaque token; the raw value is only ever
+	// returned to the client and never stored, so a DB leak cannot replay tokens.
+	TokenHash string `gorm:"size:255;not null;uniqueIndex"`
+	// FamilyID binds all rotations of the same login session together. Detecting
+	// reuse on any member revokes the whole family — see RFC 6749 §10.4.
 	FamilyID          string     `gorm:"size:255;not null;index"`
 	SessionID         string     `gorm:"size:255;not null;index"`
 	UserID            int64      `gorm:"not null;index"`
@@ -172,6 +186,8 @@ type RefreshToken struct {
 	IPAddress         string     `gorm:"size:255"`
 	ExpiresAt         time.Time  `gorm:"not null;index"`
 	RevokedAt         *time.Time `gorm:"index"`
+	// ReplacedByTokenID points to the rotation successor; presence + RevokedAt
+	// distinguishes a legitimate rotation from a manual revoke.
 	ReplacedByTokenID *int64
 	CreatedAt         time.Time `gorm:"not null"`
 }

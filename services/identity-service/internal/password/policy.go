@@ -1,3 +1,5 @@
+// Package password implements configurable password strength validation and
+// history-based reuse prevention (bcrypt comparison against N most recent hashes).
 package password
 
 import (

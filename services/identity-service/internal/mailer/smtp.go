@@ -26,6 +26,9 @@ type SMTPConfig struct {
 	Timeout   time.Duration
 }
 
+// SMTPSender delivers emails via SMTP with support for STARTTLS, implicit TLS,
+// PLAIN auth, and the non-standard LOGIN auth mechanism (required by some
+// providers like Outlook/Exchange).
 type SMTPSender struct {
 	cfg SMTPConfig
 }

@@ -1,3 +1,5 @@
+// Package ratelimit implements a sliding-window rate limiter backed by Redis
+// INCR + EXPIRE. Each (scope, key) pair gets an independent counter.
 package ratelimit
 
 import (
@@ -23,6 +25,9 @@ func NewService(redisClient *redis.Client) *Service {
 	return &Service{redis: redisClient}
 }
 
+// Allow checks whether the (scope, key) pair is within its rate limit.
+// Uses Redis INCR + EXPIRE: the first request in a window sets the TTL,
+// subsequent requests increment the counter until it exceeds limit.
 func (s *Service) Allow(ctx context.Context, scope, key string, limit int64, window time.Duration) (Result, error) {
 	if s == nil || s.redis == nil || limit <= 0 || window <= 0 {
 		return Result{Allowed: true}, nil

@@ -1,3 +1,5 @@
+// Package tenant manages multi-tenant lifecycle: tenant CRUD, membership,
+// role/permission assignment, and permission-version-based cache invalidation.
 package tenant
 
 import (

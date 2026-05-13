@@ -1,3 +1,6 @@
+// Package rbac implements role-based access control with a version-gated Redis
+// cache. Permission lookups are resolved from live DB state; the cache is only
+// trusted when its stored version matches the member's current permission_version.
 package rbac
 
 import (
@@ -12,6 +15,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// permissionCacheTTL bounds staleness when the version-based invalidation path
+// is missed (e.g., Redis flush, deployment race). 2 minutes is short enough for
+// quick recovery yet long enough to absorb burst reads on hot users.
 const permissionCacheTTL = 2 * time.Minute
 const memberScopeBatchSize = 500
 
@@ -51,6 +57,11 @@ func (s *Service) Can(ctx context.Context, userID, tenantID int64, permission st
 	return false, nil
 }
 
+// ListPermissions returns the user's effective permission codes for a tenant.
+// Cache flow: read cached version, re-fetch the live version from the member
+// row, return the cache only when versions match. On miss/mismatch we read DB
+// then re-check the version before writing back, so a concurrent role change
+// can't be overwritten with stale data.
 func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) ([]string, error) {
 	if permissions, cachedVersion, ok, err := s.loadCachedPermissions(ctx, userID, tenantID); err != nil {
 		return nil, err

@@ -31,6 +31,10 @@ type tokenResponse struct {
 
 var errInvalidGrant = errors.New("invalid grant")
 
+// token is the OAuth2 token endpoint (RFC 6749 §3.2). It authenticates the
+// client (basic or post body) and dispatches by grant_type. Per-grant rate
+// limiting only kicks in for refresh — auth code exchange is single-use and
+// already self-limited by the code's short TTL.
 func (h *Handler) token(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		oauthError(c, http.StatusBadRequest, "invalid_request")
@@ -64,6 +68,10 @@ func (h *Handler) token(c *gin.Context) {
 	}
 }
 
+// exchangeAuthorizationCode redeems a one-time code (RFC 6749 §4.1.3) for an
+// access/ID/refresh token bundle. PKCE verification (RFC 7636 §4.6) and the
+// atomic "consumed_at IS NULL → consumed_at = now" update enforce single-use
+// even under concurrent retries.
 func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthClient) {
 	ctx := c.Request.Context()
 	code := strings.TrimSpace(c.PostForm("code"))
@@ -147,6 +155,9 @@ func (h *Handler) exchangeAuthorizationCode(c *gin.Context, client *store.OAuthC
 	c.JSON(http.StatusOK, response)
 }
 
+// introspect implements RFC 7662 token introspection. It accepts either an
+// access token (JWT) or a refresh token (opaque, looked up by hash) and only
+// returns active=true when the token still belongs to the requesting client.
 func (h *Handler) introspect(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		oauthError(c, http.StatusBadRequest, "invalid_request")
@@ -226,6 +237,11 @@ func (h *Handler) revoke(c *gin.Context) {
 	noContentOrJSON(c)
 }
 
+// logout implements OpenID Connect RP-Initiated Logout. When a browser hits
+// this endpoint with an SSO cookie it gets a confirmation page (CSRF-protected
+// POST follows); programmatic clients without the cookie call performLogout
+// directly. Mismatched cookie vs query session_id is rejected to prevent CSRF
+// across sessions.
 func (h *Handler) logout(c *gin.Context) {
 	request := logoutRequest{
 		ClientID:              c.Query("client_id"),
@@ -535,6 +551,9 @@ func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	c.JSON(http.StatusOK, response)
 }
 
+// recordRefreshTokenReuse is the OIDC counterpart to session.rejectRefreshTokenReuse:
+// detecting a replayed/revoked refresh token kills the whole family + session and
+// emits an audit entry so operators can investigate compromise.
 func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.RefreshToken) error {
 	if err := s.revokeRefreshTokenFamily(ctx, token.FamilyID); err != nil {
 		return err
@@ -725,6 +744,9 @@ func (s *Service) signIDToken(user *store.User, clientID, nonce, scope string) (
 	return token.SignedString(s.privateKey)
 }
 
+// verifyPKCE implements the RFC 7636 §4.6 check. "S256" hashes the verifier and
+// base64url-encodes (no padding) to compare against the challenge. "plain"
+// compares raw — accepted for legacy clients but discouraged.
 func verifyPKCE(verifier, challenge, method string) bool {
 	if verifier == "" || challenge == "" {
 		return false

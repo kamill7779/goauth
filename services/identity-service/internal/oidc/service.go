@@ -1,3 +1,6 @@
+// Package oidc implements an OAuth 2.0 / OpenID Connect provider: authorization
+// endpoint, token endpoint (authorization_code + refresh_token grants), PKCE,
+// introspection (RFC 7662), revocation, JWKS, discovery, and RP-initiated logout.
 package oidc
 
 import (
@@ -231,6 +234,11 @@ func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantI
 	return err == nil && count > 0
 }
 
+// ensureClientTenantMembership checks whether the user is already a member of
+// the client's tenant. If not and the client has AutoProvisionMembers enabled,
+// it creates the membership on the fly. This only applies to first-time access
+// via trusted internal apps; previously removed/disabled memberships are not
+// restored to respect explicit access decisions.
 func (s *Service) ensureClientTenantMembership(ctx context.Context, userID int64, client *store.OAuthClient) (bool, error) {
 	if client == nil || userID == 0 || client.TenantID == 0 {
 		return false, nil

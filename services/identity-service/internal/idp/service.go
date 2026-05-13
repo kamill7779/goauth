@@ -79,6 +79,10 @@ func (s *Service) Start(providerSlug, state string, opts AuthCodeOptions) (strin
 	return provider.AuthCodeURL(state, opts)
 }
 
+// Authenticate exchanges an authorization code for a user profile and either
+// finds the existing linked account or creates a new user+identity in a single
+// transaction. If the email already belongs to a local account, it returns
+// ErrLocalLoginRequired to prevent silent account takeover.
 func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirectURI string) (*AuthenticateResult, error) {
 	return s.authenticate(ctx, providerSlug, code, redirectURI, "")
 }
@@ -188,6 +192,9 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 	return result, nil
 }
 
+// Bind links an external identity to an existing authenticated user. Rejects
+// if the external identity is already linked to a different user or if the
+// user already has a binding for this provider.
 func (s *Service) Bind(ctx context.Context, userID int64, providerSlug, code, redirectURI string) (*store.UserIdentity, error) {
 	provider, profile, _, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, "")
 	if err != nil {

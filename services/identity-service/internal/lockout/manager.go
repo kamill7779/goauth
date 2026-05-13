@@ -1,3 +1,5 @@
+// Package lockout implements temporary account lockout after consecutive
+// authentication failures. State is stored in Redis with TTL-based auto-expiry.
 package lockout
 
 import (
@@ -20,6 +22,10 @@ type Manager struct {
 	failureWindow time.Duration
 }
 
+// recordFailureScript atomically: (1) short-circuits if already locked, (2)
+// increments the windowed failure counter, (3) sets the lock with SETNX once
+// the counter reaches threshold. Done in Lua so that concurrent failed logins
+// cannot race past the threshold check.
 var recordFailureScript = redis.NewScript(`
 local failKey = KEYS[1]
 local lockKey = KEYS[2]

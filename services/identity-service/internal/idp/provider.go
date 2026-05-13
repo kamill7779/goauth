@@ -1,3 +1,6 @@
+// Package idp implements external identity provider (social login) integration.
+// It handles the OAuth2 authorization code flow, profile fetching, and
+// account linking/unlinking for external identities.
 package idp
 
 import "context"
