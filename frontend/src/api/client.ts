@@ -1,9 +1,13 @@
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import type { ApiError, ApiSuccessResponse } from '../types/auth';
 
-const API_BASE_URL =
+export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL?.trim() ||
   (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080');
+
+export interface ApiRequestOptions {
+  captchaToken?: string;
+}
 
 const client: AxiosInstance = axios.create({
   baseURL: `${API_BASE_URL}/v1/auth`,
@@ -30,8 +34,14 @@ client.interceptors.response.use(
   }
 );
 
-export async function apiPost<T>(path: string, data?: unknown): Promise<T> {
-  const response = await client.post<ApiSuccessResponse<T>>(path, data);
+export async function apiPost<T>(path: string, data?: unknown, options?: ApiRequestOptions): Promise<T> {
+  const response = await client.post<ApiSuccessResponse<T>>(path, data, {
+    headers: options?.captchaToken
+      ? {
+          'X-Captcha-Token': options.captchaToken,
+        }
+      : undefined,
+  });
   return response.data.data;
 }
 

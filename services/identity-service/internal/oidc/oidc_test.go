@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -25,6 +26,12 @@ import (
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
+
+type failingAuditRecorder struct{}
+
+func (failingAuditRecorder) Record(context.Context, audit.Entry) error {
+	return errors.New("audit sink unavailable")
+}
 
 func TestDiscoveryDocumentIncludesRequiredEndpoints(t *testing.T) {
 	_, router, _, _, _, _ := newTestProvider(t)
@@ -458,8 +465,30 @@ func TestAuthorizeRejectsMissingAuthenticatedSession(t *testing.T) {
 		if location.Path != "/login" {
 			t.Fatalf("path = %q, want /login", location.Path)
 		}
-		if got := location.Query().Get("return_to"); got != "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain&state=browser-state" {
+		if got := location.Query().Get("return_to"); got != "https://identity.example.com/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain&state=browser-state" {
 			t.Fatalf("return_to = %q", got)
+		}
+	})
+
+	t.Run("cross-origin browser login preserves absolute authorize resume url", func(t *testing.T) {
+		service.SetBrowserLoginURL("https://console.example.com/login")
+
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain&state=cross-origin-state", nil)
+		request.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+		router.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusFound {
+			t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusFound, recorder.Body.String())
+		}
+
+		location, err := recorder.Result().Location()
+		if err != nil {
+			t.Fatalf("Location() error = %v", err)
+		}
+		if location.String() != "https://console.example.com/login?return_to="+url.QueryEscape("https://identity.example.com/oauth2/authorize?response_type=code&client_id="+client.ClientID+"&redirect_uri="+url.QueryEscape("https://client.example.com/callback")+"&scope=openid&code_challenge=test&code_challenge_method=plain&state=cross-origin-state") {
+			t.Fatalf("location = %q", location.String())
 		}
 	})
 
@@ -1231,6 +1260,36 @@ func TestRevokeWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestRevokeSucceedsWhenAuditFailsAfterRevocation(t *testing.T) {
+	service, router, db, privateKey, user, client := newTestProvider(t)
+	service.SetAuditRecorder(failingAuditRecorder{})
+	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
+	code := authorizeCode(t, router, authorizeCookie, client.ClientID, "https://client.example.com/callback", "openid profile email offline_access", pkceChallengeS256("revoke-best-effort-verifier"), "nonce-revoke-best-effort")
+	tokenSet := exchangeCode(t, router, client.ClientID, "super-secret", code, "https://client.example.com/callback", "revoke-best-effort-verifier")
+
+	form := url.Values{
+		"token":         {tokenSet.RefreshToken},
+		"client_id":     {client.ClientID},
+		"client_secret": {"super-secret"},
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/oauth2/revoke", strings.NewReader(form.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var refreshToken store.RefreshToken
+	if err := db.Where("token_hash = ?", service.hashToken(tokenSet.RefreshToken)).First(&refreshToken).Error; err != nil {
+		t.Fatalf("load refresh token: %v", err)
+	}
+	if refreshToken.RevokedAt == nil {
+		t.Fatal("expected refresh token to remain revoked")
+	}
+}
+
 func TestRevokeRotatedRefreshTokenRevokesCurrentFamily(t *testing.T) {
 	_, router, db, privateKey, user, client := newTestProvider(t)
 	authorizeCookie, _ := issueOIDCAuthorizeCookie(t, db, privateKey, *user, client.TenantID)
@@ -1465,6 +1524,24 @@ func TestCreateClientRejectsUnsupportedTokenEndpointAuthMethod(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unsupported token endpoint auth method to fail")
+	}
+}
+
+func TestCreateClientRejectsPathUnsafeClientID(t *testing.T) {
+	service, _, _, _, _, existingClient := newTestProvider(t)
+
+	_, err := service.CreateClient(context.Background(), CreateClientInput{
+		TenantID:                existingClient.TenantID,
+		ClientID:                "admin/web?tab=1",
+		ClientSecret:            "super-secret",
+		Name:                    "Bad Client ID",
+		RedirectURIs:            []string{"https://client.example.com/callback"},
+		AllowedScopes:           []string{"openid"},
+		GrantTypes:              []string{"authorization_code"},
+		TokenEndpointAuthMethod: "client_secret_post",
+	})
+	if err == nil {
+		t.Fatal("expected path-unsafe client id to fail")
 	}
 }
 

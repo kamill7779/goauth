@@ -50,3 +50,30 @@ test('buildAuthRoutePath omits empty return_to', () => {
   assert.equal(parsed.pathname, '/login');
   assert.equal(parsed.searchParams.has('return_to'), false);
 });
+
+test('normalizeAuthorizeReturnTo accepts cross-origin authorize return_to from configured api origin', () => {
+  const returnTo = loginPage.normalizeAuthorizeReturnTo(
+    'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
+    {
+      currentOrigin: 'https://console.example.com',
+      apiBaseURL: 'https://identity.example.com',
+    },
+  );
+
+  assert.equal(
+    returnTo,
+    'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
+  );
+});
+
+test('normalizeAuthorizeReturnTo rejects authorize targets from untrusted origins', () => {
+  const returnTo = loginPage.normalizeAuthorizeReturnTo(
+    'https://evil.example.com/oauth2/authorize?client_id=demo-web',
+    {
+      currentOrigin: 'https://console.example.com',
+      apiBaseURL: 'https://identity.example.com',
+    },
+  );
+
+  assert.equal(returnTo, '');
+});

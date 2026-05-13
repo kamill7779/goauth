@@ -63,7 +63,7 @@ test('normalizeOAuthClient maps backend allowed_scopes into frontend scopes', ()
       scopes: ['openid', 'profile', 'email'],
       status: 'disabled',
       auto_provision_members: true,
-      last_rotated: '2026-05-11T10:00:00Z',
+      last_rotated: '-',
     },
   );
 });

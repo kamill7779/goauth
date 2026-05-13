@@ -12,6 +12,31 @@ const initialCreateForm = {
   status: 'active',
 };
 
+const ASSIGNABLE_USERS_PAGE_SIZE = 100;
+const ASSIGNABLE_USERS_SORT = 'username_asc';
+
+type UserPageLoader = (params?: Parameters<typeof getUsers>[0]) => ReturnType<typeof getUsers>;
+
+export async function loadAssignableUsers(fetchUsers: UserPageLoader = getUsers): Promise<User[]> {
+  const users: User[] = [];
+  let page = 1;
+
+  for (;;) {
+    const response = await fetchUsers({
+      page,
+      page_size: ASSIGNABLE_USERS_PAGE_SIZE,
+      sort: ASSIGNABLE_USERS_SORT,
+    });
+    users.push(...response.data);
+
+    const reachedTotal = response.total > 0 && users.length >= response.total;
+    if (response.data.length < ASSIGNABLE_USERS_PAGE_SIZE || reachedTotal) {
+      return users;
+    }
+    page += 1;
+  }
+}
+
 export default function TenantsPage() {
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [assignableUsers, setAssignableUsers] = useState<User[]>([]);
@@ -44,8 +69,7 @@ export default function TenantsPage() {
 
   const fetchAssignableUsers = useCallback(async () => {
     try {
-      const res = await getUsers({ page: 1, page_size: 100, sort: 'username_asc' });
-      setAssignableUsers(res.data);
+      setAssignableUsers(await loadAssignableUsers());
     } catch (err) {
       setToast({ message: err instanceof Error ? err.message : '用户列表加载失败', type: 'error' });
     }

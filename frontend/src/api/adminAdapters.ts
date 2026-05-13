@@ -159,7 +159,7 @@ export function normalizeOAuthClient(raw: unknown): OAuthClient {
     scopes: scopes as string[],
     status: stringValue(record.status, 'active') as OAuthClient['status'],
     auto_provision_members: Boolean(record.auto_provision_members),
-    last_rotated: stringValue(record.last_rotated, stringValue(record.updated_at, '-')),
+    last_rotated: stringValue(record.last_rotated, '-'),
   };
 }
 

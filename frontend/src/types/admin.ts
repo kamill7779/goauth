@@ -50,7 +50,7 @@ export interface OAuthClient {
   name: string;
   redirect_uris: string[];
   scopes: string[];
-  status: 'active' | 'disabled' | 'inactive';
+  status: 'active' | 'disabled';
   auto_provision_members: boolean;
   last_rotated: string;
 }

@@ -31,6 +31,23 @@ func NormalizeAuthorizeReturnTarget(raw string) (string, bool) {
 	return target, true
 }
 
+func buildAuthorizeReturnTarget(issuer, raw string) (string, bool) {
+	target, ok := NormalizeAuthorizeReturnTarget(raw)
+	if !ok {
+		return "", false
+	}
+
+	base, err := url.Parse(strings.TrimSpace(issuer))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return "", false
+	}
+	relative, err := url.Parse(target)
+	if err != nil {
+		return "", false
+	}
+	return base.ResolveReference(relative).String(), true
+}
+
 func browserPrefersHTML(c *gin.Context) bool {
 	accept := strings.ToLower(c.GetHeader("Accept"))
 	return strings.Contains(accept, "text/html") || strings.Contains(accept, "application/xhtml+xml")

@@ -17,6 +17,12 @@ import (
 	"gorm.io/gorm"
 )
 
+type failingAuditRecorder struct{}
+
+func (failingAuditRecorder) Record(context.Context, audit.Entry) error {
+	return errors.New("audit sink unavailable")
+}
+
 func newTestService(t *testing.T) (*Service, *store.User) {
 	t.Helper()
 
@@ -396,6 +402,32 @@ func TestLogoutWritesAuditLog(t *testing.T) {
 	}
 }
 
+func TestLogoutSucceedsWhenAuditFails(t *testing.T) {
+	service, user := newTestService(t)
+	service.SetAuditRecorder(failingAuditRecorder{})
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	if err := service.Logout(context.Background(), pair.SessionID); err != nil {
+		t.Fatalf("Logout() error = %v, want nil after state revocation", err)
+	}
+
+	var sessionRecord store.LoginSession
+	if err := service.db.First(&sessionRecord, "id = ?", pair.SessionID).Error; err != nil {
+		t.Fatalf("load login session: %v", err)
+	}
+	if sessionRecord.RevokedAt == nil {
+		t.Fatal("expected login session to remain revoked")
+	}
+}
+
 func TestLogoutAllWritesAuditLog(t *testing.T) {
 	service, user := newTestService(t)
 	service.SetAuditRecorder(audit.NewService(service.db))
@@ -428,6 +460,40 @@ func TestLogoutAllWritesAuditLog(t *testing.T) {
 	}
 	if metadata["scope"] != "all_sessions" {
 		t.Fatalf("metadata scope = %v, want all_sessions", metadata["scope"])
+	}
+}
+
+func TestLogoutAllSucceedsWhenAuditFails(t *testing.T) {
+	service, user := newTestService(t)
+	service.SetAuditRecorder(failingAuditRecorder{})
+
+	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
+		User:     *user,
+		TenantID: 42,
+		ClientID: "web-client",
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens() error = %v", err)
+	}
+
+	if err := service.LogoutAll(context.Background(), user.ID); err != nil {
+		t.Fatalf("LogoutAll() error = %v, want nil after state revocation", err)
+	}
+
+	var refreshToken store.RefreshToken
+	if err := service.db.Where("session_id = ?", pair.SessionID).First(&refreshToken).Error; err != nil {
+		t.Fatalf("load refresh token: %v", err)
+	}
+	if refreshToken.RevokedAt == nil {
+		t.Fatal("expected refresh token to remain revoked")
+	}
+
+	var updated store.User
+	if err := service.db.First(&updated, user.ID).Error; err != nil {
+		t.Fatalf("reload user: %v", err)
+	}
+	if updated.TokenVersion != user.TokenVersion+1 {
+		t.Fatalf("TokenVersion = %d, want %d", updated.TokenVersion, user.TokenVersion+1)
 	}
 }
 

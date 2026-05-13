@@ -151,7 +151,7 @@ func (h *Handler) redirectBrowserToLogin(c *gin.Context) bool {
 		return false
 	}
 
-	returnTo, ok := NormalizeAuthorizeReturnTarget(c.Request.URL.RequestURI())
+	returnTo, ok := buildAuthorizeReturnTarget(h.service.issuer, c.Request.URL.RequestURI())
 	if !ok {
 		return false
 	}

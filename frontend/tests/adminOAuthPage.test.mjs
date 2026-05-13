@@ -86,3 +86,7 @@ test('applyRotateSecretOutcome clears stale secret and shows error when backend 
     },
   });
 });
+
+test('client status selector only exposes supported backend statuses', () => {
+  assert.deepEqual(oauthPage.CLIENT_STATUS_OPTIONS, ['active', 'disabled']);
+});

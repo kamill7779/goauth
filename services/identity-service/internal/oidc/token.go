@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -541,7 +542,7 @@ func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.Refre
 	if err := s.revokeLoginSession(ctx, token.SessionID); err != nil {
 		return err
 	}
-	return s.audit.Record(ctx, audit.Entry{
+	s.recordAuditBestEffort(ctx, audit.Entry{
 		ActorUserID: token.UserID,
 		TenantID:    token.TenantID,
 		Action:      audit.ActionRefreshTokenReuseDetected,
@@ -552,6 +553,7 @@ func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.Refre
 			"client_id":  token.ClientID,
 		},
 	})
+	return nil
 }
 
 func (s *Service) revokeRefreshTokenFamily(ctx context.Context, familyID string) error {
@@ -588,7 +590,7 @@ func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientI
 		return err
 	}
 
-	return s.audit.Record(ctx, audit.Entry{
+	s.recordAuditBestEffort(ctx, audit.Entry{
 		ActorUserID: token.UserID,
 		TenantID:    token.TenantID,
 		Action:      audit.ActionLogout,
@@ -600,6 +602,7 @@ func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientI
 			"reason":     "oidc_revoke",
 		},
 	})
+	return nil
 }
 
 func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {
@@ -634,6 +637,17 @@ func isSQLiteWriteLock(err error) bool {
 	}
 	message := err.Error()
 	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
+}
+
+func (s *Service) recordAuditBestEffort(ctx context.Context, entry audit.Entry) {
+	if err := s.audit.Record(ctx, entry); err != nil {
+		slog.Warn("oidc audit record failed",
+			"action", entry.Action,
+			"target_type", entry.TargetType,
+			"target_id", entry.TargetID,
+			"error", err,
+		)
+	}
 }
 
 func (s *Service) signAccessToken(user *store.User, clientID string, tenantID int64, sessionID, scope string) (string, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -28,9 +29,15 @@ type CreateClientInput struct {
 	AutoProvisionMembers    bool     `json:"auto_provision_members"`
 }
 
+var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*store.OAuthClient, error) {
-	if strings.TrimSpace(input.ClientID) == "" || strings.TrimSpace(input.ClientSecret) == "" {
+	clientID := strings.TrimSpace(input.ClientID)
+	if clientID == "" || strings.TrimSpace(input.ClientSecret) == "" {
 		return nil, errors.New("client id and secret are required")
+	}
+	if !clientIDPattern.MatchString(clientID) {
+		return nil, errors.New("client id may only contain letters, numbers, dot, underscore, and hyphen")
 	}
 	if input.TenantID == 0 || !s.hasActiveTenant(ctx, input.TenantID) {
 		return nil, errors.New("active tenant is required")
@@ -78,7 +85,7 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 
 	client := &store.OAuthClient{
 		TenantID:                input.TenantID,
-		ClientID:                strings.TrimSpace(input.ClientID),
+		ClientID:                clientID,
 		ClientSecretHash:        secretHash,
 		Name:                    strings.TrimSpace(input.Name),
 		RedirectURIs:            redirectURIs,

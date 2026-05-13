@@ -55,10 +55,29 @@ test('normalizeOAuthClientSecretResponse returns normalized client and one-time 
       scopes: ['openid', 'profile', 'email'],
       status: 'active',
       auto_provision_members: true,
-      last_rotated: '2026-05-12T03:00:00Z',
+      last_rotated: '-',
     },
     client_secret: 'rotated-secret',
   });
+});
+
+test('normalizeOAuthClientSecretResponse prefers explicit last_rotated over updated_at', () => {
+  const result = admin.normalizeOAuthClientSecretResponse({
+    success: true,
+    data: {
+      client_id: 'admin-web',
+      name: 'Admin Web',
+      redirect_uris: ['https://admin.example.com/callback'],
+      allowed_scopes: ['openid'],
+      status: 'active',
+      auto_provision_members: false,
+      updated_at: '2026-05-12T03:00:00Z',
+      last_rotated: '2026-05-11T02:00:00Z',
+      client_secret: 'rotated-secret',
+    },
+  });
+
+  assert.equal(result.client.last_rotated, '2026-05-11T02:00:00Z');
 });
 
 test('normalizeOAuthClientSecretResponse omits empty secret values', () => {

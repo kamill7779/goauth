@@ -28,8 +28,8 @@ async function importAuthModule(relativePath) {
           }));
           buildApi.onLoad({ filter: /.*/, namespace: 'auth-client-stub' }, () => ({
             contents: `
-              export async function apiPost(path, data) {
-                globalThis.__authClientCalls.push({ method: 'post', path, data });
+              export async function apiPost(path, data, options) {
+                globalThis.__authClientCalls.push({ method: 'post', path, data, options });
                 return { ok: true, path, data };
               }
 
@@ -66,6 +66,7 @@ test('forgotPassword posts email to forgot-password endpoint', async () => {
       method: 'post',
       path: '/password/forgot',
       data: { email: 'member@example.com' },
+      options: undefined,
     },
   ]);
 });
@@ -88,6 +89,22 @@ test('resetPassword posts email code and new password to reset endpoint', async 
         email_code: '493021',
         new_password: 'new-password-123',
       },
+      options: undefined,
+    },
+  ]);
+});
+
+test('forgotPassword forwards captcha token when provided', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await forgotPassword('member@example.com', { captchaToken: 'captcha-proof' });
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'post',
+      path: '/password/forgot',
+      data: { email: 'member@example.com' },
+      options: { captchaToken: 'captcha-proof' },
     },
   ]);
 });

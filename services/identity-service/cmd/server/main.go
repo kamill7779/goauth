@@ -87,6 +87,9 @@ func run() error {
 		return err
 	}
 	defer func() {
+		if redisClient == nil {
+			return
+		}
 		if err := redisClient.Close(); err != nil {
 			log.Printf("close redis: %v", err)
 		}
@@ -102,7 +105,8 @@ func run() error {
 func requireRedis(cfg config.Config) (*redis.Client, error) {
 	client, err := cache.OpenRedis(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("redis is required for identity runtime: %w", err)
+		slog.Warn("redis unavailable; continuing with degraded runtime", "error", err)
+		return nil, nil
 	}
 	return client, nil
 }

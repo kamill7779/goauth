@@ -195,7 +195,7 @@ func TestReadyzChecksDBAndRedisClients(t *testing.T) {
 	}
 }
 
-func TestRequireRedisFailsWhenUnavailable(t *testing.T) {
+func TestRequireRedisAllowsUnavailableRedis(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
@@ -205,12 +205,12 @@ func TestRequireRedisFailsWhenUnavailable(t *testing.T) {
 		t.Fatalf("listener.Close() error = %v", err)
 	}
 
-	_, err = requireRedis(config.Config{RedisURL: "redis://" + addr + "/0"})
-	if err == nil {
-		t.Fatal("requireRedis() error = nil, want redis startup failure")
+	client, err := requireRedis(config.Config{RedisURL: "redis://" + addr + "/0"})
+	if err != nil {
+		t.Fatalf("requireRedis() error = %v, want nil for optional startup", err)
 	}
-	if !strings.Contains(err.Error(), "redis is required") {
-		t.Fatalf("error = %v, want redis is required", err)
+	if client != nil {
+		t.Fatalf("requireRedis() client = %#v, want nil when redis is unavailable", client)
 	}
 }
 

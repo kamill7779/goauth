@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -117,7 +118,7 @@ func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.Refre
 	if err != nil {
 		return err
 	}
-	if err := s.audit.Record(ctx, audit.Entry{
+	s.recordAuditBestEffort(ctx, audit.Entry{
 		ActorUserID: token.UserID,
 		TenantID:    token.TenantID,
 		Action:      audit.ActionRefreshTokenReuseDetected,
@@ -127,9 +128,7 @@ func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.Refre
 			"session_id": token.SessionID,
 			"client_id":  token.ClientID,
 		},
-	}); err != nil {
-		return err
-	}
+	})
 	return ErrRefreshTokenReuse
 }
 
@@ -215,7 +214,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 		_ = s.logoutCoordinator.NotifyClients(ctx, loginSession.UserID, sessionID)
 	}
 
-	return s.audit.Record(ctx, audit.Entry{
+	s.recordAuditBestEffort(ctx, audit.Entry{
 		ActorUserID: loginSession.UserID,
 		TenantID:    loginSession.TenantID,
 		Action:      audit.ActionLogout,
@@ -225,6 +224,7 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 			"client_id": loginSession.ClientID,
 		},
 	})
+	return nil
 }
 
 func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
@@ -248,7 +248,7 @@ func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 		return err
 	}
 
-	return s.audit.Record(ctx, audit.Entry{
+	s.recordAuditBestEffort(ctx, audit.Entry{
 		ActorUserID: userID,
 		Action:      audit.ActionLogout,
 		TargetType:  audit.TargetTypeUser,
@@ -257,6 +257,7 @@ func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 			"scope": "all_sessions",
 		},
 	})
+	return nil
 }
 
 func (s *Service) revokeFamily(ctx context.Context, familyID string) error {
@@ -299,4 +300,15 @@ func isSQLiteWriteLock(err error) bool {
 	}
 	message := err.Error()
 	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
+}
+
+func (s *Service) recordAuditBestEffort(ctx context.Context, entry audit.Entry) {
+	if err := s.audit.Record(ctx, entry); err != nil {
+		slog.Warn("session audit record failed",
+			"action", entry.Action,
+			"target_type", entry.TargetType,
+			"target_id", entry.TargetID,
+			"error", err,
+		)
+	}
 }

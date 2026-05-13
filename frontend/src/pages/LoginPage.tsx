@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { forgotPassword, login, register, resetPassword, sendEmailCode } from '../api/auth'
+import { API_BASE_URL } from '../api/client'
 import ThemeToggle from '../components/admin/ThemeToggle'
 
 interface FormData {
@@ -23,21 +24,87 @@ const initialForm: FormData = {
   emailCode: '',
 }
 
-function getAuthorizeReturnTo(search: string): string {
-  const returnTo = new URLSearchParams(search).get('return_to')?.trim() ?? ''
+type CaptchaAction = 'login' | 'register' | 'email/send-code' | 'password/forgot'
+
+type CaptchaBridge = {
+  getToken?: (context: { action: CaptchaAction }) => Promise<string | null | undefined> | string | null | undefined
+}
+
+type AuthorizeReturnOptions = {
+  currentOrigin?: string
+  apiBaseURL?: string
+}
+
+declare global {
+  interface Window {
+    __goauthCaptcha?: CaptchaBridge
+  }
+}
+
+const CAPTCHA_PROVIDER = import.meta.env?.VITE_CAPTCHA_PROVIDER?.trim().toLowerCase() ?? ''
+
+function originFromURL(raw: string, fallback: string): string | null {
+  try {
+    return new URL(raw, fallback).origin
+  } catch {
+    return null
+  }
+}
+
+export function normalizeAuthorizeReturnTo(raw: string, options?: AuthorizeReturnOptions): string {
+  const returnTo = raw.trim()
   if (!returnTo) {
     return ''
   }
 
+  const currentOrigin = options?.currentOrigin?.trim() || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8080')
+  const apiBaseURL = options?.apiBaseURL?.trim() || API_BASE_URL
+  const currentAppOrigin = originFromURL(currentOrigin, 'http://localhost:8080')
+  const apiOrigin = originFromURL(apiBaseURL, currentOrigin)
+
+  if (!currentAppOrigin && !apiOrigin) {
+    return ''
+  }
+
   try {
-    const parsed = new URL(returnTo, window.location.origin)
-    if (parsed.origin === window.location.origin && parsed.pathname === '/oauth2/authorize') {
+    const parsed = new URL(returnTo, currentOrigin)
+    if (parsed.pathname !== '/oauth2/authorize') {
+      return ''
+    }
+    if (parsed.origin !== currentAppOrigin && parsed.origin !== apiOrigin) {
+      return ''
+    }
+    if (parsed.origin === currentAppOrigin) {
       return parsed.pathname + parsed.search
     }
+    return parsed.toString()
   } catch {
     return ''
   }
-  return ''
+}
+
+function getAuthorizeReturnTo(search: string): string {
+  return normalizeAuthorizeReturnTo(new URLSearchParams(search).get('return_to')?.trim() ?? '', {
+    currentOrigin: window.location.origin,
+    apiBaseURL: API_BASE_URL,
+  })
+}
+
+function isCaptchaEnabled(): boolean {
+  return CAPTCHA_PROVIDER !== '' && CAPTCHA_PROVIDER !== 'none'
+}
+
+async function getCaptchaToken(action: CaptchaAction): Promise<string | undefined> {
+  if (!isCaptchaEnabled()) {
+    return undefined
+  }
+
+  const token = await window.__goauthCaptcha?.getToken?.({ action })
+  const normalized = token?.trim() ?? ''
+  if (!normalized) {
+    throw new Error('CAPTCHA 已启用，但当前页面未提供有效的验证码令牌')
+  }
+  return normalized
 }
 
 export function buildAuthRoutePath(
@@ -140,7 +207,8 @@ export default function LoginPage() {
     setCodeSending(true)
     setError('')
     try {
-      await sendEmailCode({ purpose: 'register', email: form.email })
+      const captchaToken = await getCaptchaToken('email/send-code')
+      await sendEmailCode({ purpose: 'register', email: form.email }, { captchaToken })
       setSuccess('验证码已发送')
       setCodeCountdown(60)
     } catch (err) {
@@ -158,7 +226,8 @@ export default function LoginPage() {
     setCodeSending(true)
     setError('')
     try {
-      await forgotPassword(form.email)
+      const captchaToken = await getCaptchaToken('password/forgot')
+      await forgotPassword(form.email, { captchaToken })
       setSuccess('重置验证码已发送，请查收邮箱')
       setCodeCountdown(60)
     } catch (err) {
@@ -175,7 +244,8 @@ export default function LoginPage() {
     setSuccess('')
 
     try {
-      const result = await login({ identifier: form.identifier || form.email, password: form.password })
+      const captchaToken = await getCaptchaToken('login')
+      const result = await login({ identifier: form.identifier || form.email, password: form.password }, { captchaToken })
       window.localStorage.setItem('access_token', result.access_token)
       window.localStorage.setItem('refresh_token', result.refresh_token)
       if (returnTo) {
@@ -197,6 +267,7 @@ export default function LoginPage() {
     setSuccess('')
 
     try {
+      const captchaToken = await getCaptchaToken('register')
       await register({
         username: form.username,
         nickname: form.nickname,
@@ -204,7 +275,7 @@ export default function LoginPage() {
         display_name: form.displayName || form.nickname,
         password: form.password,
         email_code: form.emailCode,
-      })
+      }, { captchaToken })
       setSuccess(isSSOLogin ? '注册成功，请使用新账户登录后继续' : '注册成功，请登录')
       setTab('login')
       setForm(prev => ({ ...initialForm, email: prev.email }))
@@ -222,7 +293,8 @@ export default function LoginPage() {
     setSuccess('')
 
     try {
-      await forgotPassword(form.email)
+      const captchaToken = await getCaptchaToken('password/forgot')
+      await forgotPassword(form.email, { captchaToken })
       navigate(buildAuthRoutePath('/reset-password', { email: form.email, returnTo }), {
         state: { notice: '重置验证码已发送，请输入邮箱验证码并设置新密码' },
       })

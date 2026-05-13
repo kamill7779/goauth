@@ -51,7 +51,7 @@ const INITIAL_FORM: CreateFormState = {
   auto_provision_members: true,
 };
 
-const STATUS_OPTIONS: ClientStatus[] = ['active', 'disabled', 'inactive'];
+export const CLIENT_STATUS_OPTIONS: ClientStatus[] = ['active', 'disabled'];
 
 function parseLines(value: string): string[] {
   return value
@@ -321,7 +321,7 @@ export default function OAuthPage() {
                           }}
                           className="rounded-lg border border-line bg-surface-solid px-3 py-1.5 text-xs text-ink outline-none transition-colors focus:border-line-strong disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                          {STATUS_OPTIONS.map(status => (
+                          {CLIENT_STATUS_OPTIONS.map(status => (
                             <option key={status} value={status}>{status}</option>
                           ))}
                         </select>
