@@ -16,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -25,6 +26,7 @@ import (
 type Coordinator struct {
 	db         *gorm.DB
 	privateKey *rsa.PrivateKey
+	keyring    *jwtkey.Keyring
 	issuer     string
 	keyID      string
 	audit      audit.Recorder
@@ -33,9 +35,24 @@ type Coordinator struct {
 
 // NewCoordinator creates a Coordinator with a 5-second HTTP timeout.
 func NewCoordinator(db *gorm.DB, key *rsa.PrivateKey, issuer, keyID string) *Coordinator {
+	var keyring *jwtkey.Keyring
+	if key != nil {
+		keyring, _ = jwtkey.NewKeyring(keyID, map[string]*rsa.PrivateKey{keyID: key})
+	}
+	return NewCoordinatorWithKeyring(db, keyring, issuer)
+}
+
+func NewCoordinatorWithKeyring(db *gorm.DB, keyring *jwtkey.Keyring, issuer string) *Coordinator {
+	privateKey := (*rsa.PrivateKey)(nil)
+	keyID := ""
+	if keyring != nil {
+		privateKey = keyring.ActivePrivateKey()
+		keyID = keyring.ActiveKeyID()
+	}
 	return &Coordinator{
 		db:         db,
-		privateKey: key,
+		privateKey: privateKey,
+		keyring:    keyring,
 		issuer:     issuer,
 		keyID:      keyID,
 		audit:      audit.NoopRecorder{},
@@ -138,11 +155,11 @@ func (c *Coordinator) buildLogoutToken(client store.OAuthClient, userID int64, s
 
 	claims := logoutTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    c.issuer,
-			Subject:   fmt.Sprintf("%d", userID),
-			Audience:  jwt.ClaimStrings{client.ClientID},
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			ID:        jti,
+			Issuer:   c.issuer,
+			Subject:  fmt.Sprintf("%d", userID),
+			Audience: jwt.ClaimStrings{client.ClientID},
+			IssuedAt: jwt.NewNumericDate(time.Now()),
+			ID:       jti,
 		},
 		Events: map[string]any{
 			"http://schemas.openid.net/event/backchannel-logout": map[string]any{},

@@ -7,12 +7,14 @@ import (
 
 	"github.com/gin-gonic/gin"
 	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/ratelimit"
 )
 
 type Handler struct {
 	service     *Service
 	publicKey   *rsa.PublicKey
+	keyring     *jwtkey.Keyring
 	rateLimiter *ratelimit.Service
 }
 
@@ -23,11 +25,21 @@ func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
 	}
 }
 
+func NewHandlerWithKeyring(service *Service, keyring *jwtkey.Keyring) *Handler {
+	return &Handler{
+		service: service,
+		keyring: keyring,
+	}
+}
+
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/refresh", h.refresh)
 	auth := AuthMiddleware(h.service, h.publicKey)
+	if h.keyring != nil {
+		auth = AuthMiddlewareWithKeyring(h.service, h.keyring)
+	}
 	router.POST("/logout", auth, h.logout)
-	if h.publicKey != nil {
+	if h.publicKey != nil || h.keyring != nil {
 		router.POST("/logout-all", auth, h.logoutAll)
 		router.GET("/me", auth, h.me)
 	} else {

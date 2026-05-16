@@ -116,7 +116,7 @@ code_verifier=<raw-code-verifier>
 - 校验登录回调时保存的 `nonce`。
 - 根据需要读取 `sub`、`email`、`name`、`scope`、`tid`、`sid`。
 
-本地开发如果未配置 `JWT_PRIVATE_KEY_PATH`，服务重启会生成新的临时 RSA key，业务系统需要刷新 JWKS 缓存。
+生产可以使用 `JWT_KEYSET_DIR` + `JWT_ACTIVE_KEY_ID` 做 key rotation：JWKS 会同时包含 active key 和旧的 verify-only key，新 token 只使用 active key 签发。本地开发如果未配置持久 key，服务重启会生成新的临时 RSA key，业务系统需要刷新 JWKS 缓存。
 
 ## 6. 获取用户信息
 

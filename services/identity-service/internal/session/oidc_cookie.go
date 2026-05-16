@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -76,12 +77,23 @@ func ParseOIDCAuthorizeCookie(raw string, publicKey *rsa.PublicKey) (*OIDCAuthor
 		return nil, errors.New("missing public key")
 	}
 
-	token, err := jwt.ParseWithClaims(raw, &OIDCAuthorizeClaims{}, func(token *jwt.Token) (any, error) {
+	return parseOIDCAuthorizeCookie(raw, func(token *jwt.Token) (any, error) {
 		if token.Method != jwt.SigningMethodRS256 {
 			return nil, errors.New("unexpected signing method")
 		}
 		return publicKey, nil
 	})
+}
+
+func ParseOIDCAuthorizeCookieWithKeyring(raw string, keyring *jwtkey.Keyring) (*OIDCAuthorizeClaims, error) {
+	if keyring == nil {
+		return nil, errors.New("missing keyring")
+	}
+	return parseOIDCAuthorizeCookie(raw, keyring.Keyfunc)
+}
+
+func parseOIDCAuthorizeCookie(raw string, keyfunc jwt.Keyfunc) (*OIDCAuthorizeClaims, error) {
+	token, err := jwt.ParseWithClaims(raw, &OIDCAuthorizeClaims{}, keyfunc)
 	if err != nil {
 		return nil, err
 	}

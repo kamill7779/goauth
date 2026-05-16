@@ -23,6 +23,8 @@ type Config struct {
 	RedisURL                  string
 	JWTPrivateKeyPath         string
 	JWTKeyID                  string
+	JWTKeysetDir              string
+	JWTActiveKeyID            string
 	AccessTokenTTL            time.Duration
 	BrowserSessionTTL         time.Duration
 	RefreshTokenTTL           time.Duration
@@ -202,6 +204,8 @@ func Load() (Config, error) {
 		RedisURL:                  os.Getenv("REDIS_URL"),
 		JWTPrivateKeyPath:         os.Getenv("JWT_PRIVATE_KEY_PATH"),
 		JWTKeyID:                  os.Getenv("JWT_KEY_ID"),
+		JWTKeysetDir:              os.Getenv("JWT_KEYSET_DIR"),
+		JWTActiveKeyID:            os.Getenv("JWT_ACTIVE_KEY_ID"),
 		AccessTokenTTL:            accessTokenTTL,
 		BrowserSessionTTL:         browserSessionTTL,
 		RefreshTokenTTL:           refreshTokenTTL,
@@ -254,7 +258,7 @@ func Load() (Config, error) {
 		CaptchaSecretKey: captchaSecretKey,
 		CaptchaSiteKey:   captchaSiteKey,
 		CaptchaActions:   splitUniqueLowerCSV(envOrDefault("CAPTCHA_ACTIONS", "login,register,email_code,password_forgot")),
-		ConfiguredEnv:     configuredEnvKeys(),
+		ConfiguredEnv:    configuredEnvKeys(),
 	}
 	if err := validateProductionConfig(cfg); err != nil {
 		return Config{}, err
@@ -295,11 +299,17 @@ func validateProductionConfig(cfg Config) error {
 	if strings.TrimSpace(cfg.RedisURL) == "" {
 		issues = append(issues, "REDIS_URL is required in production")
 	}
-	if strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" {
-		issues = append(issues, "JWT_PRIVATE_KEY_PATH is required in production")
+	legacyKeyConfigured := strings.TrimSpace(cfg.JWTPrivateKeyPath) != "" && strings.TrimSpace(cfg.JWTKeyID) != ""
+	keysetConfigured := strings.TrimSpace(cfg.JWTKeysetDir) != "" && strings.TrimSpace(cfg.JWTActiveKeyID) != ""
+	if !legacyKeyConfigured && !keysetConfigured {
+		issues = append(issues, "JWT_PRIVATE_KEY_PATH or JWT_KEYSET_DIR is required in production")
+		issues = append(issues, "JWT_KEY_ID or JWT_ACTIVE_KEY_ID is required in production")
 	}
-	if strings.TrimSpace(cfg.JWTKeyID) == "" {
-		issues = append(issues, "JWT_KEY_ID is required in production")
+	if strings.TrimSpace(cfg.JWTKeysetDir) != "" && strings.TrimSpace(cfg.JWTActiveKeyID) == "" {
+		issues = append(issues, "JWT_ACTIVE_KEY_ID is required when JWT_KEYSET_DIR is configured")
+	}
+	if strings.TrimSpace(cfg.JWTPrivateKeyPath) != "" && strings.TrimSpace(cfg.JWTKeyID) == "" && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
+		issues = append(issues, "JWT_KEY_ID is required when JWT_PRIVATE_KEY_PATH is configured")
 	}
 	if cfg.MailerProvider == "smtp" {
 		if strings.TrimSpace(cfg.SMTPHost) == "" {

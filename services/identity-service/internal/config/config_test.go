@@ -245,14 +245,35 @@ func TestLoadRejectsIncompleteProductionConfig(t *testing.T) {
 		"PUBLIC_ISSUER_URL",
 		"MYSQL_DSN",
 		"REDIS_URL",
-		"JWT_PRIVATE_KEY_PATH",
-		"JWT_KEY_ID",
+		"JWT_PRIVATE_KEY_PATH or JWT_KEYSET_DIR",
+		"JWT_KEY_ID or JWT_ACTIVE_KEY_ID",
 		"SMTP_HOST",
 		"SMTP_FROM",
 	} {
 		if !strings.Contains(err.Error(), fragment) {
 			t.Fatalf("Load() error %q missing %s", err.Error(), fragment)
 		}
+	}
+}
+
+func TestLoadAcceptsProductionJWTKeysetDirectory(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("PUBLIC_ISSUER_URL", "https://auth.example.com")
+	t.Setenv("MYSQL_DSN", "user:pass@tcp(mysql:3306)/goauth")
+	t.Setenv("REDIS_URL", "redis://redis:6379/0")
+	t.Setenv("JWT_KEYSET_DIR", "/run/secrets/goauth-jwt")
+	t.Setenv("JWT_ACTIVE_KEY_ID", "2026-06")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.JWTKeysetDir != "/run/secrets/goauth-jwt" {
+		t.Fatalf("JWTKeysetDir = %q", cfg.JWTKeysetDir)
+	}
+	if cfg.JWTActiveKeyID != "2026-06" {
+		t.Fatalf("JWTActiveKeyID = %q", cfg.JWTActiveKeyID)
 	}
 }
 
@@ -269,6 +290,8 @@ func resetConfigEnv(t *testing.T) {
 		"REDIS_URL",
 		"JWT_PRIVATE_KEY_PATH",
 		"JWT_KEY_ID",
+		"JWT_KEYSET_DIR",
+		"JWT_ACTIVE_KEY_ID",
 		"ACCESS_TOKEN_TTL",
 		"BROWSER_SESSION_TTL",
 		"REFRESH_TOKEN_TTL",

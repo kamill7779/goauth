@@ -58,6 +58,7 @@ func TestEnvDefinitionsClassifySecretsAndPublicConfig(t *testing.T) {
 		"MYSQL_DSN",
 		"REDIS_URL",
 		"JWT_PRIVATE_KEY_PATH",
+		"JWT_KEYSET_DIR",
 		"SMTP_PASSWORD",
 		"GITHUB_CLIENT_SECRET",
 		"BOOTSTRAP_ADMIN_PASSWORD",
@@ -111,8 +112,6 @@ func TestEnvDefinitionsRequireProductionStorageAndSigningKeys(t *testing.T) {
 		"PUBLIC_ISSUER_URL",
 		"MYSQL_DSN",
 		"REDIS_URL",
-		"JWT_PRIVATE_KEY_PATH",
-		"JWT_KEY_ID",
 	} {
 		definition, ok := byName[key]
 		if !ok {

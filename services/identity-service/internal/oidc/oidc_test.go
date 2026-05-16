@@ -22,6 +22,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
@@ -74,6 +75,46 @@ func TestDiscoveryDocumentIncludesRequiredEndpoints(t *testing.T) {
 	}
 	if !containsString(payload.GrantTypes, "refresh_token") {
 		t.Fatalf("grant_types_supported = %v, want refresh_token", payload.GrantTypes)
+	}
+}
+
+func TestJWKSIncludesActiveAndVerifyOnlyKeys(t *testing.T) {
+	active, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey(active) error = %v", err)
+	}
+	previous, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey(previous) error = %v", err)
+	}
+	keyring, err := jwtkey.NewKeyring("active-kid", map[string]*rsa.PrivateKey{
+		"active-kid":   active,
+		"previous-kid": previous,
+	})
+	if err != nil {
+		t.Fatalf("NewKeyring() error = %v", err)
+	}
+	service := NewServiceWithKeyring(nil, config.Config{PublicIssuerURL: "https://identity.example.com"}, keyring)
+	router := gin.New()
+	RegisterRoutes(router, service)
+
+	request := httptest.NewRequest(http.MethodGet, "/oauth2/jwks", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload struct {
+		Keys []struct {
+			KID string `json:"kid"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !containsString(jwksKIDs(payload.Keys), "active-kid") || !containsString(jwksKIDs(payload.Keys), "previous-kid") {
+		t.Fatalf("jwks kids = %v, want active and previous", jwksKIDs(payload.Keys))
 	}
 }
 
@@ -2188,6 +2229,16 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func jwksKIDs(keys []struct {
+	KID string `json:"kid"`
+}) []string {
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, key.KID)
+	}
+	return result
 }
 
 func containsOAuthClient(clients []oauthClientListItem, clientID string) bool {

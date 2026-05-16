@@ -18,6 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
@@ -39,6 +40,7 @@ type Service struct {
 	db                   *gorm.DB
 	privateKey           *rsa.PrivateKey
 	publicKey            *rsa.PublicKey
+	keyring              *jwtkey.Keyring
 	issuer               string
 	browserLoginURL      string
 	browserCookieSecure  bool
@@ -83,6 +85,14 @@ type idTokenClaims struct {
 }
 
 func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Service {
+	var keyring *jwtkey.Keyring
+	if privateKey != nil {
+		keyring, _ = jwtkey.NewKeyring(cfg.JWTKeyID, map[string]*rsa.PrivateKey{cfg.JWTKeyID: privateKey})
+	}
+	return NewServiceWithKeyring(db, cfg, keyring)
+}
+
+func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyring) *Service {
 	issuer := strings.TrimRight(strings.TrimSpace(cfg.PublicIssuerURL), "/")
 	if issuer == "" {
 		issuer = "http://127.0.0.1:8080"
@@ -100,18 +110,21 @@ func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Ser
 
 	service := &Service{
 		db:                   db,
-		privateKey:           privateKey,
+		privateKey:           nil,
+		keyring:              keyring,
 		issuer:               issuer,
 		browserCookieSecure:  cfg.BrowserCookieSecure,
-		keyID:                cfg.JWTKeyID,
+		keyID:                "",
 		accessTokenTTL:       accessTokenTTL,
 		refreshTokenTTL:      refreshTokenTTL,
 		authorizationCodeTTL: defaultAuthorizationCodeTTL,
 		audit:                audit.NoopRecorder{},
 		now:                  time.Now,
 	}
-	if privateKey != nil {
-		service.publicKey = &privateKey.PublicKey
+	if keyring != nil {
+		service.privateKey = keyring.ActivePrivateKey()
+		service.publicKey = keyring.ActivePublicKey()
+		service.keyID = keyring.ActiveKeyID()
 	}
 	return service
 }
@@ -142,6 +155,19 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/oauth2/revoke", h.revoke)
 	router.GET("/oauth2/logout", h.logout)
 	router.POST("/oauth2/logout", h.logoutPost)
+}
+
+func (s *Service) jwksPublicKeys() []jwtkey.PublicKey {
+	if s == nil {
+		return nil
+	}
+	if s.keyring != nil {
+		return s.keyring.PublicKeys()
+	}
+	if s.publicKey == nil {
+		return nil
+	}
+	return []jwtkey.PublicKey{{ID: s.keyID, Key: s.publicKey}}
 }
 
 func (s *Service) hashToken(raw string) string {
@@ -386,15 +412,21 @@ func (s *Service) resolvePostLogoutRedirectURI(ctx context.Context, clientID, re
 }
 
 func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
-	if s.publicKey == nil {
+	if s.keyring == nil && s.publicKey == nil {
 		return nil, errors.New("missing public key")
 	}
 
-	token, err := jwt.ParseWithClaims(rawToken, &accessClaims{}, func(token *jwt.Token) (any, error) {
+	keyfunc := func(token *jwt.Token) (any, error) {
+		if s.keyring != nil {
+			return s.keyring.Keyfunc(token)
+		}
 		if token.Method != jwt.SigningMethodRS256 {
 			return nil, errors.New("unexpected signing method")
 		}
 		return s.publicKey, nil
+	}
+	token, err := jwt.ParseWithClaims(rawToken, &accessClaims{}, func(token *jwt.Token) (any, error) {
+		return keyfunc(token)
 	}, jwt.WithIssuer(s.issuer))
 	if err != nil {
 		return nil, err
