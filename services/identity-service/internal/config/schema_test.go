@@ -29,6 +29,28 @@ func TestEnvDefinitionsCoverEnvExample(t *testing.T) {
 	}
 }
 
+func TestEnvDefinitionsAreDocumented(t *testing.T) {
+	keys := mapEnvDefinitionsByName()
+	documented := readBacktickKeys(t, filepath.Join("..", "..", "..", "..", "docs", "configuration.md"))
+
+	for key := range keys {
+		if !documented[key] {
+			t.Fatalf("%s is present in EnvDefinitions() but missing from docs/configuration.md", key)
+		}
+	}
+}
+
+func TestDockerComposePassesAllRuntimeEnvDefinitions(t *testing.T) {
+	keys := mapEnvDefinitionsByName()
+	composeKeys := readComposeEnvKeys(t)
+
+	for key := range keys {
+		if !composeKeys[key] {
+			t.Fatalf("%s is present in EnvDefinitions() but missing from docker-compose.yml", key)
+		}
+	}
+}
+
 func TestEnvDefinitionsClassifySecretsAndPublicConfig(t *testing.T) {
 	byName := mapEnvDefinitionsByName()
 
@@ -132,5 +154,47 @@ func readEnvExampleKeys(t *testing.T) []string {
 		keys = append(keys, strings.TrimSpace(key))
 	}
 	sort.Strings(keys)
+	return keys
+}
+
+func readBacktickKeys(t *testing.T, path string) map[string]bool {
+	t.Helper()
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	result := map[string]bool{}
+	for _, definition := range EnvDefinitions() {
+		if strings.Contains(string(raw), "`"+definition.Name+"`") {
+			result[definition.Name] = true
+		}
+	}
+	return result
+}
+
+func readComposeEnvKeys(t *testing.T) map[string]bool {
+	t.Helper()
+
+	path := filepath.Join("..", "..", "docker-compose.yml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	keys := map[string]bool{}
+	definitions := mapEnvDefinitionsByName()
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		key, _, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if _, exists := definitions[key]; exists {
+			keys[key] = true
+		}
+	}
 	return keys
 }

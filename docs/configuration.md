@@ -76,7 +76,9 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 1. Set `APP_ENV=production`.
 2. Set HTTPS `PUBLIC_ISSUER_URL` and verify `/.well-known/openid-configuration` uses the same issuer.
 3. Provide persistent `MYSQL_DSN`, `REDIS_URL`, `JWT_PRIVATE_KEY_PATH`, and `JWT_KEY_ID`.
-4. Configure `MAILER_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_FROM`, and verify a real email flow.
-5. Configure CAPTCHA only as a complete provider/site-key/secret-key set.
-6. Remove bootstrap admin secrets after the first administrator is created.
-7. Open Admin Console Settings and confirm runtime diagnostics have no `error` items.
+4. Set `REGISTRATION_MODE=invite_only` or `REGISTRATION_MODE=disabled` before public traffic reaches the service. Keeping `open` is allowed for local/open-source trials, but Admin Console Settings reports it as a production warning.
+5. Configure `MAILER_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_FROM`, and verify a real email flow.
+6. Configure CAPTCHA only as a complete provider/site-key/secret-key set.
+7. Remove bootstrap admin secrets after the first administrator is created.
+8. Verify `GET /v1/auth/public-config` returns the intended `registration.mode`, login provider visibility, CAPTCHA site key, and public brand values without secrets.
+9. Open Admin Console Settings and confirm runtime diagnostics have no `error` items and no unexpected `warning` items.

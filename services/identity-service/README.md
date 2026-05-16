@@ -156,6 +156,8 @@ JWT_PRIVATE_KEY_PATH=/run/secrets/goauth-jwt.pem
 JWT_KEY_ID=<stable key id>
 ```
 
+生产发布前必须显式收紧 `REGISTRATION_MODE`。保持 `open` 不会阻止服务启动，因为这是开源本地体验的默认值，但 Admin Console 的运行诊断会把它标为生产警告；公开流量进入前建议切为 `invite_only`，完全关闭自助注册时切为 `disabled`。
+
 生产环境不要依赖空 `JWT_PRIVATE_KEY_PATH` 的临时签名 key；否则服务重启后 JWKS 变化，会导致既有 token 全量失效。
 
 ## 创建第一个管理员

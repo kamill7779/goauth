@@ -33,6 +33,8 @@ docker compose up --build
 
 登录页、Admin Console、浏览器标题和 favicon 可通过 `BRAND_NAME`、`BRAND_TAGLINE`、`BRAND_ICON_TEXT`、`BRAND_ICON_URL` 配置；默认是 `GoAuth` / 空 tagline / `G`。
 
+生产发布前不要沿用本地注册默认值。设置 `APP_ENV=production` 后，建议将 `REGISTRATION_MODE` 改为 `invite_only` 或 `disabled`，再通过 `/v1/auth/public-config` 和 Admin Console 设置页确认运行状态。
+
 查看本地验证码：
 
 ```powershell
