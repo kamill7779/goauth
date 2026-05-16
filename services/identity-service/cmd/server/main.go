@@ -13,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/account"
 	adminconsole "goauth/services/identity-service/internal/admin"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/auth"
@@ -239,6 +240,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
 		userHandler,
 		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
+		account.NewHandler(db, sessionService, authMiddleware),
 		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware, cfg),
 	)
 

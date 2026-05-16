@@ -4,6 +4,7 @@ import { applyBrandHead } from './utils/brandHead'
 import { usePublicBrand } from './hooks/usePublicBrand'
 import LoginPage from './pages/LoginPage'
 import ExternalCallbackPage from './pages/ExternalCallbackPage'
+import AccountPage from './pages/AccountPage'
 import AdminLayout from './pages/Admin/AdminLayout'
 import DashboardPage from './pages/Admin/DashboardPage'
 import UsersPage from './pages/Admin/UsersPage'
@@ -29,6 +30,7 @@ function App() {
       <Route path="/forgot-password" element={<LoginPage />} />
       <Route path="/reset-password" element={<LoginPage />} />
       <Route path="/external/callback" element={<ExternalCallbackPage />} />
+      <Route path="/account" element={<AccountPage />} />
       <Route path="/admin" element={<AdminLayout><DashboardPage /></AdminLayout>} />
       <Route path="/admin/dashboard" element={<AdminLayout><DashboardPage /></AdminLayout>} />
       <Route path="/admin/users" element={<AdminLayout><UsersPage /></AdminLayout>} />

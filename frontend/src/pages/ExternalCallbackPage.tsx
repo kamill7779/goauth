@@ -16,6 +16,7 @@ type RedirectOptions = {
 }
 
 const OIDC_ISSUER_URL = import.meta.env?.VITE_OIDC_ISSUER_URL?.trim() ?? ''
+const DEFAULT_SIGNED_IN_PATH = '/account'
 
 export function externalCallbackStateFromSearch(search: string): { provider: string; code: string } {
   return externalCallbackStateFromLocation(search, '')
@@ -75,7 +76,7 @@ export function externalCallbackURLWithoutExchangeCode(raw: string): string {
 export function resolveExternalRedirect(raw: string | undefined, options?: RedirectOptions): string {
   const value = raw?.trim() ?? ''
   if (!value) {
-    return '/admin'
+    return DEFAULT_SIGNED_IN_PATH
   }
   const redirectOptions: Required<RedirectOptions> = {
     currentOrigin: options?.currentOrigin?.trim() || (typeof window !== 'undefined' ? window.location.origin : 'http://goauth.local'),
@@ -88,17 +89,17 @@ export function resolveExternalRedirect(raw: string | undefined, options?: Redir
   try {
     const parsed = new URL(value, currentOrigin)
     if (!parsed.pathname.startsWith('/') || parsed.pathname.startsWith('//')) {
-      return '/admin'
+      return DEFAULT_SIGNED_IN_PATH
     }
     if (parsed.origin !== currentOrigin) {
       if (parsed.pathname === '/oauth2/authorize' && authorizeOrigins.has(parsed.origin)) {
         return parsed.toString()
       }
-      return '/admin'
+      return DEFAULT_SIGNED_IN_PATH
     }
     return parsed.pathname + parsed.search
   } catch {
-    return '/admin'
+    return DEFAULT_SIGNED_IN_PATH
   }
 }
 

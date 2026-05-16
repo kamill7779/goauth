@@ -87,10 +87,10 @@ test('externalCallbackURLWithoutExchangeCode strips exchange credentials', () =>
   );
 });
 
-test('resolveExternalRedirect defaults to admin and rejects external URLs', () => {
+test('resolveExternalRedirect defaults to account center and rejects external URLs', () => {
   assert.equal(callback.resolveExternalRedirect('/oauth2/authorize?client_id=demo'), '/oauth2/authorize?client_id=demo');
-  assert.equal(callback.resolveExternalRedirect('https://evil.example.com/callback'), '/admin');
-  assert.equal(callback.resolveExternalRedirect(''), '/admin');
+  assert.equal(callback.resolveExternalRedirect('https://evil.example.com/callback'), '/account');
+  assert.equal(callback.resolveExternalRedirect(''), '/account');
 });
 
 test('resolveExternalRedirect allows trusted cross-origin authorize return_to', () => {
@@ -106,7 +106,7 @@ test('resolveExternalRedirect allows trusted cross-origin authorize return_to', 
       currentOrigin: 'https://console.example.com',
       apiBaseURL: 'https://identity.example.com',
     }),
-    '/admin',
+    '/account',
   );
   assert.equal(
     callback.resolveExternalRedirect('https://api.example.com/oauth2/authorize?client_id=demo', {
@@ -114,6 +114,6 @@ test('resolveExternalRedirect allows trusted cross-origin authorize return_to', 
       apiBaseURL: 'https://api.example.com',
       issuerURL: 'https://identity.example.com',
     }),
-    '/admin',
+    '/account',
   );
 });
