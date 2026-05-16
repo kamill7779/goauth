@@ -9,9 +9,9 @@ import ThemeToggle from './ThemeToggle';
 
 const navItems = [
   { id: 'overview', label: '总览', paths: ['/admin', '/admin/dashboard'] },
-  { id: 'identity', label: '身份', paths: ['/admin/users', '/admin/roles'] },
+  { id: 'identity', label: '身份', paths: ['/admin/users', '/admin/roles', '/admin/security'] },
   { id: 'tenants', label: '租户', paths: ['/admin/tenants'] },
-  { id: 'applications', label: '应用', paths: ['/admin/oauth', '/admin/sessions', '/admin/security'] },
+  { id: 'applications', label: '应用', paths: ['/admin/oauth', '/admin/sessions'] },
   { id: 'audit', label: '审计', paths: ['/admin/audit'] },
   { id: 'system', label: '系统', paths: ['/admin/settings'] },
 ];

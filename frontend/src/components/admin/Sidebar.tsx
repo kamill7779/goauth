@@ -1,7 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   IconUsers, IconBuilding, IconShield, IconKey,
-  IconMonitor, IconMail, IconFileText, IconSettings,
+  IconMonitor, IconFileText, IconSettings,
 } from './Icons';
 
 const sidebarGroups = [
@@ -18,7 +18,7 @@ const sidebarGroups = [
     items: [
       { id: 'oauth', label: 'OAuth Clients', icon: IconKey, path: '/admin/oauth' },
       { id: 'sessions', label: '会话管理', icon: IconMonitor, path: '/admin/sessions' },
-      { id: 'security', label: '邮件与安全', icon: IconMail, path: '/admin/security' },
+      { id: 'security', label: '权限中心', icon: IconShield, path: '/admin/security' },
     ],
   },
   {
