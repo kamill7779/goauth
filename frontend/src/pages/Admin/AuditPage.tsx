@@ -116,7 +116,7 @@ export default function AuditPage() {
         </button>
       </div>
 
-      <div className="bg-surface-solid rounded-xl border border-line overflow-hidden">
+      <div className="bg-surface-solid rounded-[20px] border border-line overflow-hidden">
         {loading ? (
           <div className="p-6 space-y-4">
             {Array.from({ length: 6 }).map((_, i) => (

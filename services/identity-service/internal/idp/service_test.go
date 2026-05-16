@@ -202,6 +202,29 @@ func TestAuthenticateRequiresLocalLoginWhenEmailExistsWithoutIdentity(t *testing
 	}
 }
 
+func TestAuthenticateRejectsNewExternalUserWhenRegistrationNotOpen(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	service.SetRegistrationMode("invite_only")
+
+	_, err := service.Authenticate(context.Background(), "github", "oauth-code", "https://app.example.com/callback")
+	if !errors.Is(err, ErrRegistrationDisabled) {
+		t.Fatalf("Authenticate() error = %v, want %v", err, ErrRegistrationDisabled)
+	}
+}
+
 func TestAuthenticateRecordsAuditLogForLinkedUser(t *testing.T) {
 	provider := &fakeProvider{
 		slug:        "github",

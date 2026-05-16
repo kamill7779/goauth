@@ -33,6 +33,11 @@ async function importAuthModule(relativePath) {
                 return { ok: true, path, data };
               }
 
+              export async function apiPostV1(path, data, options) {
+                globalThis.__authClientCalls.push({ method: 'postV1', path, data, options });
+                return { ok: true, path, data };
+              }
+
               export async function apiGet(path) {
                 globalThis.__authClientCalls.push({ method: 'get', path });
                 return { ok: true, path };
@@ -54,7 +59,7 @@ globalThis.window = {
   localStorage: { getItem: () => null },
 };
 
-const { forgotPassword, resetPassword } = await importAuthModule('src/api/auth.ts');
+const { exchangeGitHubLogin, forgotPassword, resetPassword } = await importAuthModule('src/api/auth.ts');
 
 test('forgotPassword posts email to forgot-password endpoint', async () => {
   globalThis.__authClientCalls.length = 0;
@@ -105,6 +110,21 @@ test('forgotPassword forwards captcha token when provided', async () => {
       path: '/password/forgot',
       data: { email: 'member@example.com' },
       options: { captchaToken: 'captcha-proof' },
+    },
+  ]);
+});
+
+test('exchangeGitHubLogin posts code to external GitHub exchange endpoint', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await exchangeGitHubLogin('exchange-code');
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'postV1',
+      path: '/external/github/exchange',
+      data: { code: 'exchange-code' },
+      options: undefined,
     },
   ]);
 });

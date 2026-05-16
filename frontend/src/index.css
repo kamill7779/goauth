@@ -20,100 +20,114 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --bg: #F5F5F7;
-  --bg-subtle: #FAFAF8;
+  --bg: #FAF8F5;
+  --bg-subtle: #F5F2EE;
 
-  --surface: rgba(255, 255, 255, 0.72);
+  --surface: rgba(255, 255, 255, 0.80);
   --surface-solid: #FFFFFF;
-  --surface-hover: #F2F2F4;
-  --surface-muted: #F7F7F5;
-  --surface-sunken: #EEEEF0;
+  --surface-hover: #F8F6F3;
+  --surface-muted: #F5F2EE;
+  --surface-sunken: #EDEAE5;
 
-  --ink: #1D1D1F;
-  --ink-secondary: #6E6E73;
-  --ink-tertiary: #8E8E93;
+  --ink: #1C1C1E;
+  --ink-secondary: #6B6B6E;
+  --ink-tertiary: #9E9EA2;
   --ink-muted: #C7C7CC;
   --ink-inverse: #FFFFFF;
 
-  --border: rgba(0, 0, 0, 0.06);
-  --border-strong: rgba(0, 0, 0, 0.12);
+  --border: rgba(0, 0, 0, 0.05);
+  --border-strong: rgba(0, 0, 0, 0.08);
   --border-focus: #0071E3;
 
   --accent: #0071E3;
   --accent-hover: #0077ED;
-  --accent-soft: rgba(0, 113, 227, 0.10);
+  --accent-soft: rgba(0, 113, 227, 0.08);
+  --accent-glow: rgba(0, 113, 227, 0.15);
+
+  --cream-accent: #F5E6D3;
+  --cream-glow: rgba(245, 230, 211, 0.40);
 
   --error: #D93025;
-  --error-soft: rgba(217, 48, 37, 0.10);
+  --error-soft: rgba(217, 48, 37, 0.08);
   --error-strong: #B71C1C;
 
   --warning: #B5560F;
-  --warning-soft: rgba(245, 158, 11, 0.12);
+  --warning-soft: rgba(181, 86, 15, 0.10);
   --warning-strong: #92400E;
 
   --success: #15803D;
-  --success-soft: rgba(16, 185, 129, 0.10);
+  --success-soft: rgba(21, 128, 61, 0.08);
   --success-strong: #166534;
 
   --info: #1D6FDA;
-  --info-soft: rgba(29, 111, 218, 0.10);
+  --info-soft: rgba(29, 111, 218, 0.08);
 
-  --overlay: rgba(15, 15, 20, 0.18);
+  --overlay: rgba(15, 15, 20, 0.15);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(0, 0, 0, 0.04);
-  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.10), 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.03), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --shadow-md: 0 8px 40px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.07), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 12px 48px rgba(0, 0, 0, 0.08), 0 4px 12px rgba(0, 0, 0, 0.04);
 
-  --radius: 18px;
+  --radius: 20px;
+  --radius-xl: 24px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #0E0E11;
-  --bg-subtle: #131318;
+  --bg: #0D0D0F;
+  --bg-subtle: #131316;
 
-  --surface: rgba(28, 28, 33, 0.72);
-  --surface-solid: #18181D;
-  --surface-hover: #22222A;
-  --surface-muted: #131318;
+  --surface: rgba(28, 28, 33, 0.80);
+  --surface-solid: #1C1C1E;
+  --surface-hover: #242428;
+  --surface-muted: #131316;
   --surface-sunken: #0B0B0F;
 
-  --ink: #F2F2F5;
-  --ink-secondary: #A8A8AE;
+  --ink: #F5F5F7;
+  --ink-secondary: #A1A1A6;
   --ink-tertiary: #6E6E73;
   --ink-muted: #48484E;
-  --ink-inverse: #0E0E11;
+  --ink-inverse: #0D0D0F;
 
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.16);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.10);
   --border-focus: #2997FF;
 
   --accent: #2997FF;
   --accent-hover: #4DA9FF;
-  --accent-soft: rgba(41, 151, 255, 0.16);
+  --accent-soft: rgba(41, 151, 255, 0.12);
+  --accent-glow: rgba(41, 151, 255, 0.20);
+
+  --cream-accent: #2A2520;
+  --cream-glow: rgba(245, 230, 211, 0.06);
 
   --error: #FF6961;
-  --error-soft: rgba(255, 105, 97, 0.16);
+  --error-soft: rgba(255, 105, 97, 0.10);
   --error-strong: #FF453A;
 
   --warning: #FFB454;
-  --warning-soft: rgba(255, 180, 84, 0.14);
+  --warning-soft: rgba(255, 180, 84, 0.12);
   --warning-strong: #F0A040;
 
   --success: #34C759;
-  --success-soft: rgba(52, 199, 89, 0.14);
+  --success-soft: rgba(52, 199, 89, 0.10);
   --success-strong: #30D158;
 
   --info: #5AC8FA;
-  --info-soft: rgba(90, 200, 250, 0.14);
+  --info-soft: rgba(90, 200, 250, 0.10);
 
-  --overlay: rgba(0, 0, 0, 0.55);
+  --overlay: rgba(0, 0, 0, 0.50);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-md: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 30px 70px rgba(0, 0, 0, 0.55), 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 8px 40px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.45), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-card-hover: 0 12px 48px rgba(0, 0, 0, 0.50), 0 4px 12px rgba(0, 0, 0, 0.30);
 }
 
 * {
@@ -200,6 +214,26 @@ select option {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
   border-radius: 8px;
+}
+
+/* Turnstile is rendered on demand; keep its challenge inside the auth card. */
+.goauth-captcha-slot {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin: 16px auto 0;
+  position: relative;
+  z-index: 2;
+  overflow: visible;
+}
+
+.goauth-captcha-slot:empty {
+  display: none;
+  margin: 0;
+}
+
+.goauth-captcha-slot iframe {
+  max-width: 100%;
 }
 
 /* ----------- Keyframes ----------- */

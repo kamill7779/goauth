@@ -5,6 +5,7 @@ package auth
 import (
 	"errors"
 	stdhttp "net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/captcha"
@@ -18,17 +19,42 @@ type Handler struct {
 	session         *session.Service
 	rateLimiter     *ratelimit.Service
 	captchaVerifier *captcha.Verifier
+	captchaActions  map[string]struct{}
+
+	registrationMode          string
+	localPasswordLoginEnabled bool
 }
+
+var defaultCaptchaActions = []string{"login", "register", "email_code", "password_forgot"}
 
 func NewHandler(service *Service, sessionService *session.Service) *Handler {
 	return &Handler{
-		service: service,
-		session: sessionService,
+		service:                   service,
+		session:                   sessionService,
+		captchaActions:            captchaActionSet(defaultCaptchaActions),
+		registrationMode:          "open",
+		localPasswordLoginEnabled: true,
 	}
+}
+
+func (h *Handler) SetRegistrationMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "open"
+	}
+	h.registrationMode = mode
+}
+
+func (h *Handler) SetLocalPasswordLoginEnabled(enabled bool) {
+	h.localPasswordLoginEnabled = enabled
 }
 
 func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
 	h.captchaVerifier = v
+}
+
+func (h *Handler) SetCaptchaActions(actions []string) {
+	h.captchaActions = captchaActionSet(actions)
 }
 
 func (h *Handler) captchaMW() gin.HandlerFunc {
@@ -38,12 +64,39 @@ func (h *Handler) captchaMW() gin.HandlerFunc {
 	return h.captchaVerifier.Middleware()
 }
 
+func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
+	if !h.captchaActionEnabled(action) {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return h.captchaMW()
+}
+
+func (h *Handler) captchaActionEnabled(action string) bool {
+	if h.captchaVerifier == nil {
+		return false
+	}
+	_, ok := h.captchaActions[strings.ToLower(strings.TrimSpace(action))]
+	return ok
+}
+
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
-	router.POST("/email/send-code", h.captchaMW(), h.sendCode)
-	router.POST("/register", h.captchaMW(), h.register)
-	router.POST("/login", h.captchaMW(), h.login)
-	router.POST("/password/forgot", h.captchaMW(), h.forgotPassword)
+	router.POST("/email/send-code", h.captchaMWFor("email_code"), h.sendCode)
+	router.POST("/register", h.captchaMWFor("register"), h.register)
+	router.POST("/login", h.captchaMWFor("login"), h.login)
+	router.POST("/password/forgot", h.captchaMWFor("password_forgot"), h.forgotPassword)
 	router.POST("/password/reset", h.resetPassword)
+}
+
+func captchaActionSet(actions []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if action == "" {
+			continue
+		}
+		result[action] = struct{}{}
+	}
+	return result
 }
 
 func (h *Handler) sendCode(c *gin.Context) {
@@ -60,6 +113,10 @@ func (h *Handler) sendCode(c *gin.Context) {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if purpose == EmailCodePurposeRegister && h.registrationMode != "open" {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "registration disabled"})
+		return
+	}
 	if !h.allowJSONRateLimit(c, emailCodeRateLimitScope, rateLimitEmailCodeKey(c, purpose, request.Email), emailCodeRateLimitLimit, emailCodeRateLimitWindow) {
 		return
 	}
@@ -71,6 +128,11 @@ func (h *Handler) sendCode(c *gin.Context) {
 }
 
 func (h *Handler) register(c *gin.Context) {
+	if h.registrationMode != "open" {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "registration disabled"})
+		return
+	}
+
 	var request struct {
 		Username    string `json:"username"`
 		Nickname    string `json:"nickname"`
@@ -105,6 +167,11 @@ func (h *Handler) register(c *gin.Context) {
 }
 
 func (h *Handler) login(c *gin.Context) {
+	if !h.localPasswordLoginEnabled {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "local password login disabled"})
+		return
+	}
+
 	var request struct {
 		Identifier string `json:"identifier"`
 		Email      string `json:"email"`

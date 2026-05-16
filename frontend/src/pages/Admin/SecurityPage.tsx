@@ -7,7 +7,7 @@ export default function SecurityPage() {
         <h1 className="text-2xl font-semibold text-ink mb-1">邮件与安全</h1>
         <p className="text-sm text-ink-tertiary">配置邮件服务、安全通知和告警规则</p>
       </div>
-      <div className="bg-surface-solid rounded-xl border border-line p-12 text-center">
+      <div className="bg-surface-solid rounded-[20px] border border-line p-12 text-center">
         <IconMail size={32} className="text-ink-muted mx-auto mb-4" />
         <h3 className="text-sm font-medium text-ink-secondary mb-1">邮件配置</h3>
         <p className="text-xs text-ink-tertiary max-w-sm mx-auto">

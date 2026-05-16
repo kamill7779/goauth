@@ -324,7 +324,7 @@ func userPayload(user store.User) gin.H {
 		"username":       user.Username,
 		"nickname":       user.Nickname,
 		"email":          user.Email,
-		"display_name":   user.DisplayName,
+		"display_name":   user.Nickname,
 		"avatar_url":     user.AvatarURL,
 		"status":         user.Status,
 		"email_verified": user.EmailVerifiedAt != nil,

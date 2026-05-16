@@ -111,3 +111,7 @@ test('oauth client admin routes encode client ids before building paths', () => 
     '/admin/oauth-clients/admin%2Fweb%3Ftab%3D1%23frag/rotate-secret',
   );
 });
+
+test('runtime config admin route is stable', () => {
+  assert.equal(admin.runtimeConfigPath(), '/admin/runtime-config');
+});

@@ -195,7 +195,7 @@ func TestReadyzChecksDBAndRedisClients(t *testing.T) {
 	}
 }
 
-func TestRequireRedisAllowsUnavailableRedis(t *testing.T) {
+func TestRequireRedisFailsWhenUnavailable(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
@@ -205,12 +205,50 @@ func TestRequireRedisAllowsUnavailableRedis(t *testing.T) {
 		t.Fatalf("listener.Close() error = %v", err)
 	}
 
-	client, err := requireRedis(config.Config{RedisURL: "redis://" + addr + "/0"})
-	if err != nil {
-		t.Fatalf("requireRedis() error = %v, want nil for optional startup", err)
+	if _, err := requireRedis(config.Config{RedisURL: "redis://" + addr + "/0"}); err == nil {
+		t.Fatal("requireRedis() error = nil, want failure when redis is unavailable")
 	}
-	if client != nil {
-		t.Fatalf("requireRedis() client = %#v, want nil when redis is unavailable", client)
+}
+
+func TestRequireRedisFailsWhenGitHubLoginConfigured(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("listener.Close() error = %v", err)
+	}
+
+	_, err = requireRedis(config.Config{
+		RedisURL:           "redis://" + addr + "/0",
+		GitHubOAuthEnabled: true,
+		GitHubClientID:     "client-id",
+		GitHubClientSecret: "client-secret",
+		GitHubRedirectURI:  "https://auth.example.com/v1/external/github/callback",
+	})
+	if err == nil {
+		t.Fatal("requireRedis() error = nil, want error when GitHub browser login needs exchange store")
+	}
+}
+
+func TestFrontendCallbackURLFromBrowserLoginURL(t *testing.T) {
+	cases := []struct {
+		name            string
+		browserLoginURL string
+		want            string
+	}{
+		{name: "same origin path", browserLoginURL: "/login", want: "/external/callback"},
+		{name: "absolute frontend url", browserLoginURL: "https://console.example.com/login", want: "https://console.example.com/external/callback"},
+		{name: "nested frontend path", browserLoginURL: "https://console.example.com/auth/login", want: "https://console.example.com/external/callback"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := frontendCallbackURLFromBrowserLoginURL(tc.browserLoginURL); got != tc.want {
+				t.Fatalf("frontendCallbackURLFromBrowserLoginURL(%q) = %q, want %q", tc.browserLoginURL, got, tc.want)
+			}
+		})
 	}
 }
 

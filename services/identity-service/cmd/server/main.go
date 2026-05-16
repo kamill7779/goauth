@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 
@@ -105,8 +106,7 @@ func run() error {
 func requireRedis(cfg config.Config) (*redis.Client, error) {
 	client, err := cache.OpenRedis(cfg)
 	if err != nil {
-		slog.Warn("redis unavailable; continuing with degraded runtime", "error", err)
-		return nil, nil
+		return nil, fmt.Errorf("redis is required: %w", err)
 	}
 	return client, nil
 }
@@ -201,7 +201,14 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		idpService := idp.NewService(db, githubProvider)
 		idpService.SetAuditRecorder(auditService)
 		idpService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
-		registrars = append(registrars, idp.NewHandler(idpService, sessionService, authMiddleware, cfg.BrowserCookieSecure))
+		idpService.SetRegistrationMode(cfg.RegistrationMode)
+		idpHandler := idp.NewHandler(idpService, sessionService, authMiddleware, cfg.BrowserCookieSecure)
+		idpHandler.SetFrontendCallbackPath(frontendCallbackURLFromBrowserLoginURL(cfg.BrowserLoginURL))
+		idpHandler.SetTrustedReturnToOrigins(cfg.PublicIssuerURL)
+		if redisClient != nil {
+			idpHandler.SetExchangeStore(idp.NewExchangeStore(redisClient))
+		}
+		registrars = append(registrars, idpHandler)
 	}
 
 	router := httpserver.NewRouter(cfg, registrars...)
@@ -223,6 +230,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	userHandler.SetLockoutManager(lockoutMgr)
 
 	authGroup := router.Group("/v1/auth")
+	auth.NewPublicConfigHandler(cfg).RegisterRoutes(authGroup)
 	sessionHandler.RegisterRoutes(authGroup)
 	oidc.RegisterRoutes(router, oidcService)
 	httpserver.RegisterRoutes(
@@ -231,11 +239,11 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
 		userHandler,
 		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
-		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware),
+		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware, cfg),
 	)
 
 	// Invite handler.
-	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), tmplEngine, "GoAuth", cfg.PublicIssuerURL)
+	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), tmplEngine, defaultString(cfg.BrandName, "GoAuth"), cfg.PublicIssuerURL)
 	inviteService.SetAuditRecorder(auditService)
 	invite.NewHandler(inviteService, authMiddleware, systemMiddleware).RegisterRoutes(router)
 
@@ -248,6 +256,9 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 		authHandler := auth.NewHandler(authService, sessionService)
 		authHandler.SetRateLimiter(rateLimiter)
 		authHandler.SetCaptchaVerifier(captchaVerifier)
+		authHandler.SetCaptchaActions(cfg.CaptchaActions)
+		authHandler.SetRegistrationMode(cfg.RegistrationMode)
+		authHandler.SetLocalPasswordLoginEnabled(cfg.LocalPasswordLoginEnabled)
 		authHandler.RegisterRoutes(authGroup)
 	}
 
@@ -255,18 +266,25 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 }
 
 func buildMailSender(cfg config.Config) mailer.Sender {
-	if strings.TrimSpace(cfg.SMTPHost) == "" || strings.TrimSpace(cfg.SMTPFrom) == "" {
+	switch cfg.MailerProvider {
+	case "noop":
 		return mailer.NoopSender{}
+	case "smtp":
+		if strings.TrimSpace(cfg.SMTPHost) == "" || strings.TrimSpace(cfg.SMTPFrom) == "" {
+			return mailer.NoopSender{}
+		}
+		return mailer.NewSMTPSender(mailer.SMTPConfig{
+			Host:      cfg.SMTPHost,
+			Port:      cfg.SMTPPort,
+			Username:  cfg.SMTPUsername,
+			Password:  cfg.SMTPPassword,
+			From:      cfg.SMTPFrom,
+			SSL:       cfg.SMTPSSLEnabled,
+			AuthLogin: cfg.SMTPAuthLogin,
+		})
+	default:
+		return mailer.NewConsoleSender(nil)
 	}
-	return mailer.NewSMTPSender(mailer.SMTPConfig{
-		Host:      cfg.SMTPHost,
-		Port:      cfg.SMTPPort,
-		Username:  cfg.SMTPUsername,
-		Password:  cfg.SMTPPassword,
-		From:      cfg.SMTPFrom,
-		SSL:       cfg.SMTPSSLEnabled,
-		AuthLogin: cfg.SMTPAuthLogin,
-	})
 }
 
 func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.ReadinessCheck {
@@ -307,4 +325,19 @@ func githubIDPConfigured(cfg config.Config) bool {
 		strings.TrimSpace(cfg.GitHubClientID) != "" &&
 		strings.TrimSpace(cfg.GitHubClientSecret) != "" &&
 		strings.TrimSpace(cfg.GitHubRedirectURI) != ""
+}
+
+func frontendCallbackURLFromBrowserLoginURL(browserLoginURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(browserLoginURL))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "/external/callback"
+	}
+	return parsed.Scheme + "://" + parsed.Host + "/external/callback"
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }

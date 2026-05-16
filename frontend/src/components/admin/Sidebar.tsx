@@ -50,18 +50,14 @@ export default function Sidebar() {
                   <button
                     key={item.id}
                     onClick={() => navigate(item.path)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 group relative ${
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 group ${
                       isActive
-                        ? 'bg-surface-solid text-ink shadow-soft-sm'
-                        : 'text-ink-secondary hover:text-ink hover:bg-surface-solid/60'
+                        ? 'bg-surface text-ink shadow-soft-sm'
+                        : 'text-ink-secondary hover:text-ink hover:bg-surface-hover'
                     }`}
                   >
-                    {isActive && (
-                      <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 bg-brand rounded-r-full" />
-                    )}
                     <Icon size={17} className={isActive ? 'text-ink' : 'text-ink-tertiary group-hover:text-ink-secondary'} />
                     <span className="font-medium">{item.label}</span>
-                    {isActive && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-brand" />}
                   </button>
                 );
               })}

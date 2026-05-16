@@ -264,7 +264,7 @@ export default function OAuthPage() {
         </div>
       )}
 
-      <div className="overflow-hidden rounded-xl border border-line bg-surface-solid">
+      <div className="overflow-hidden rounded-[20px] border border-line bg-surface-solid">
         {loading ? (
           <div className="space-y-4 p-6">
             {Array.from({ length: 4 }).map((_, i) => (

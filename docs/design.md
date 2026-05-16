@@ -287,6 +287,8 @@ auth:session:{session_id}
 auth:permissions:{tenant_id}:{user_id}
 auth:jti_denylist:{jti}
 auth:oidc_state:{state}
+auth:external_oauth_state:{state}
+auth:external_login_exchange:{code}
 auth:pkce:{state}
 ```
 
@@ -295,6 +297,7 @@ auth:pkce:{state}
 - 邮箱验证码：10 分钟
 - 密码重置码：10 分钟
 - OIDC state：10 分钟
+- GitHub 浏览器登录 exchange code：60 秒
 - 授权码：5 分钟
 - Access Token denylist 条目：直到令牌过期
 - 权限缓存：1 到 5 分钟
@@ -377,6 +380,7 @@ POST /v1/auth/logout-all
 POST /v1/auth/password/forgot
 POST /v1/auth/password/reset
 GET  /v1/auth/me
+GET  /v1/auth/public-config
 ```
 
 ## 外部身份提供方 API
@@ -384,6 +388,7 @@ GET  /v1/auth/me
 ```text
 GET    /v1/external/github/start
 GET    /v1/external/github/callback
+POST   /v1/external/github/exchange
 POST   /v1/external/github/bind
 DELETE /v1/external/github/bind
 GET    /v1/me/identities
@@ -395,6 +400,7 @@ GET    /v1/me/identities
 - 如果 GitHub 身份不存在，但其已验证邮箱已属于某个本地用户，则要求先完成本地登录再执行绑定。
 - 如果身份和邮箱都不存在，则新建本地用户并绑定该身份。
 - 如果请求来自已登录用户，则将 GitHub 身份绑定到当前用户，但前提是它没有绑定到其他用户。
+- 浏览器登录成功后只向前端回传 60 秒一次性 exchange code，前端用 code 换取 GoAuth token；access token 和 refresh token 不进入 URL。
 
 ## RBAC 与租户 API
 
@@ -446,7 +452,7 @@ DELETE /v1/admin/members/:member_id/roles/:role_id
 ```text
 CORS_ALLOWED_ORIGINS=https://app.example.com,https://admin.example.com
 CORS_ALLOWED_METHODS=GET,POST,PUT,PATCH,DELETE,OPTIONS
-CORS_ALLOWED_HEADERS=Authorization,Content-Type,X-Tenant-ID
+CORS_ALLOWED_HEADERS=Authorization,Content-Type,X-Tenant-ID,X-Captcha-Token
 CORS_ALLOW_CREDENTIALS=true
 ```
 
@@ -454,7 +460,7 @@ CORS_ALLOW_CREDENTIALS=true
 
 本地开发和 Docker Compose 部署都使用 `.env`。
 
-必需配置：
+生产关键配置（完整环境变量矩阵见 `docs/configuration.md`）：
 
 ```text
 APP_ENV
@@ -464,16 +470,27 @@ MYSQL_DSN
 REDIS_URL
 JWT_PRIVATE_KEY_PATH
 JWT_KEY_ID
-ACCESS_TOKEN_TTL
-REFRESH_TOKEN_TTL
 SMTP_HOST
 SMTP_PORT
 SMTP_USERNAME
 SMTP_PASSWORD
 SMTP_FROM
+MAILER_PROVIDER
 CORS_ALLOWED_ORIGINS
-DEFAULT_MEMBER_TENANT_SLUGS
 ```
+
+认证入口配置：
+
+```text
+REGISTRATION_MODE=open
+LOCAL_PASSWORD_LOGIN_ENABLED=true
+CAPTCHA_PROVIDER=
+CAPTCHA_SITE_KEY=
+CAPTCHA_SECRET_KEY=
+CAPTCHA_ACTIONS=login,register,email_code,password_forgot
+```
+
+`REGISTRATION_MODE` 支持 `open`、`invite_only`、`disabled`。开源本地默认 `open`，生产建议至少切到 `invite_only`。`MAILER_PROVIDER` 支持 `console`、`smtp`、`noop`，默认 `console` 会把邮件正文写到本机临时 mailbox 文件，并在日志中记录路径，方便本地取验证码而不把凭据明文打进应用日志。
 
 GitHub 外部提供方配置：
 

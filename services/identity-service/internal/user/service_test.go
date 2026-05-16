@@ -51,6 +51,57 @@ func TestListUsersReturnsUsers(t *testing.T) {
 	}
 }
 
+func TestCreateUserTreatsDisplayNameAsNicknameAlias(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Username:    "alias-user",
+		Nickname:    "生产昵称",
+		Email:       "alias@example.com",
+		DisplayName: "旧显示名",
+		Password:    "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if record.Nickname != "生产昵称" {
+		t.Fatalf("nickname = %q, want %q", record.Nickname, "生产昵称")
+	}
+	if record.DisplayName != record.Nickname {
+		t.Fatalf("display_name = %q, want alias of nickname %q", record.DisplayName, record.Nickname)
+	}
+}
+
+func TestUpdateUserDisplayNameAliasUpdatesNickname(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Username: "alias-update",
+		Nickname: "旧昵称",
+		Email:    "alias-update@example.com",
+		Password: "password-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	legacyDisplayName := "兼容昵称"
+	updated, err := service.UpdateUser(ctx, record.ID, UpdateUserInput{
+		DisplayName: &legacyDisplayName,
+	})
+	if err != nil {
+		t.Fatalf("UpdateUser() error = %v", err)
+	}
+	if updated.Nickname != legacyDisplayName {
+		t.Fatalf("nickname = %q, want %q", updated.Nickname, legacyDisplayName)
+	}
+	if updated.DisplayName != updated.Nickname {
+		t.Fatalf("display_name = %q, want alias of nickname %q", updated.DisplayName, updated.Nickname)
+	}
+}
+
 func TestDisableAndEnableUser(t *testing.T) {
 	service := newTestService(t)
 	ctx := context.Background()
@@ -319,6 +370,36 @@ func TestEnsureBootstrapAdminDoesNotRotateTokensForSameActiveUserAndPassword(t *
 	}
 	if !protected {
 		t.Fatal("expected existing bootstrap admin to receive system role")
+	}
+}
+
+func TestEnsureBootstrapAdminPreservesExistingNicknameWhenAliasNotConfigured(t *testing.T) {
+	service := newTestService(t)
+	ctx := context.Background()
+
+	record, err := service.CreateUser(ctx, CreateUserInput{
+		Username: "bootstrap-existing",
+		Nickname: "现有昵称",
+		Email:    "preserve-nickname@example.com",
+		Password: "old-password",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	updated, err := service.EnsureBootstrapAdmin(ctx, BootstrapAdminInput{
+		Email:    record.Email,
+		Password: "old-password",
+		RoleCode: "system-admin",
+	})
+	if err != nil {
+		t.Fatalf("EnsureBootstrapAdmin() error = %v", err)
+	}
+	if updated.Nickname != "现有昵称" {
+		t.Fatalf("nickname = %q, want existing nickname", updated.Nickname)
+	}
+	if updated.DisplayName != updated.Nickname {
+		t.Fatalf("display_name = %q, want alias of nickname %q", updated.DisplayName, updated.Nickname)
 	}
 }
 

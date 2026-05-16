@@ -1,4 +1,4 @@
-import { apiGet, apiPost, type ApiRequestOptions } from './client';
+import { apiGet, apiPost, apiPostV1, type ApiRequestOptions } from './client';
 import type { AuthSession, LoginInput, LoginResponse, RegisterInput, SendCodeInput } from '../types/auth';
 
 export type AuthRequestOptions = ApiRequestOptions;
@@ -25,6 +25,14 @@ export async function resetPassword(input: {
   email_code: string;
 }): Promise<{ reset: boolean }> {
   return apiPost<{ reset: boolean }>('/password/reset', input);
+}
+
+export async function exchangeGitHubLogin(code: string): Promise<{
+  tokens: LoginResponse;
+  return_to?: string;
+  user: { id: number; email: string };
+}> {
+  return apiPostV1('/external/github/exchange', { code });
 }
 
 export async function me(): Promise<AuthSession> {

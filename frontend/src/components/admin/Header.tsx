@@ -3,6 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { IconSearch, IconBell, IconLogOut } from './Icons';
 import { logout } from '../../api/admin';
 import { useAuth } from '../../hooks/useAuth';
+import { usePublicBrand } from '../../hooks/usePublicBrand';
+import BrandMark from '../BrandMark';
 import ThemeToggle from './ThemeToggle';
 
 const navItems = [
@@ -18,6 +20,7 @@ export default function Header() {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
+  const brand = usePublicBrand();
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const notifRef = useRef<HTMLDivElement>(null);
@@ -49,15 +52,9 @@ export default function Header() {
   const avatarLabel = displayEmail.charAt(0).toUpperCase();
 
   return (
-    <header className="fixed top-0 left-0 right-0 h-[72px] bg-surface backdrop-blur-xl border-b border-line z-50 flex items-center px-6">
+    <header className="fixed top-0 left-0 right-0 h-[68px] bg-surface/80 backdrop-blur-2xl border-b border-line z-50 flex items-center px-7" style={{ background: 'var(--surface)' }} >
       <div className="flex items-center gap-3 w-[250px] flex-shrink-0">
-        <div className="w-8 h-8 bg-ink rounded-lg flex items-center justify-center">
-          <span className="text-ink-inverse text-xs font-bold">G</span>
-        </div>
-        <div className="flex flex-col">
-          <span className="text-sm font-semibold text-ink leading-tight">GoAuth</span>
-          <span className="text-[10px] text-ink-tertiary leading-tight">by KMSoft</span>
-        </div>
+        <BrandMark brand={brand} size="sm" showTagline />
       </div>
 
       <nav className="flex-1 flex justify-center">
@@ -68,9 +65,10 @@ export default function Header() {
               onClick={() => handleNavClick(item.paths)}
               className={`px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200 ${
                 currentNav.id === item.id
-                  ? 'bg-ink text-ink-inverse shadow-soft-sm'
+                  ? 'text-ink-inverse shadow-soft-sm'
                   : 'text-ink-secondary hover:text-ink hover:bg-surface-solid/60'
               }`}
+              style={currentNav.id === item.id ? { background: '#2C2C2E' } : {}}
             >
               {item.label}
             </button>

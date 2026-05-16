@@ -20,7 +20,7 @@ export interface RegisterInput {
   username: string;
   nickname: string;
   email: string;
-  display_name: string;
+  display_name?: string;
   password: string;
   email_code: string;
 }

@@ -290,7 +290,7 @@ func TestRegisterRequiresUniqueUsername(t *testing.T) {
 	}
 }
 
-func TestRegisterStoresNicknameSeparately(t *testing.T) {
+func TestRegisterTreatsDisplayNameAsNicknameAlias(t *testing.T) {
 	service, _, _ := newTestService(t)
 
 	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "named@example.com")
@@ -314,6 +314,9 @@ func TestRegisterStoresNicknameSeparately(t *testing.T) {
 	}
 	if user.Nickname != "张三" {
 		t.Fatalf("nickname = %q, want %q", user.Nickname, "张三")
+	}
+	if user.DisplayName != user.Nickname {
+		t.Fatalf("display_name = %q, want alias of nickname %q", user.DisplayName, user.Nickname)
 	}
 }
 
