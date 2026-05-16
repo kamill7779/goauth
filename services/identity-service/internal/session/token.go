@@ -19,6 +19,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/logout"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
@@ -36,6 +37,7 @@ const accessTokenUseSession = "session"
 type Service struct {
 	db                  *gorm.DB
 	privateKey          *rsa.PrivateKey
+	keyring             *jwtkey.Keyring
 	keyID               string
 	accessTokenTTL      time.Duration
 	browserSessionTTL   time.Duration
@@ -75,10 +77,25 @@ type accessClaims struct {
 }
 
 func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Service {
+	var keyring *jwtkey.Keyring
+	if privateKey != nil {
+		keyring, _ = jwtkey.NewKeyring(cfg.JWTKeyID, map[string]*rsa.PrivateKey{cfg.JWTKeyID: privateKey})
+	}
+	return NewServiceWithKeyring(db, cfg, keyring)
+}
+
+func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyring) *Service {
+	privateKey := (*rsa.PrivateKey)(nil)
+	keyID := cfg.JWTKeyID
+	if keyring != nil {
+		privateKey = keyring.ActivePrivateKey()
+		keyID = keyring.ActiveKeyID()
+	}
 	return &Service{
 		db:                  db,
 		privateKey:          privateKey,
-		keyID:               cfg.JWTKeyID,
+		keyring:             keyring,
+		keyID:               keyID,
 		accessTokenTTL:      cfg.AccessTokenTTL,
 		browserSessionTTL:   cfg.BrowserSessionTTL,
 		browserCookieSecure: cfg.BrowserCookieSecure,

@@ -2,7 +2,11 @@ import { useState, useCallback, useEffect, FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { forgotPassword, login, register, resetPassword, sendEmailCode } from '../api/auth'
 import { API_BASE_URL } from '../api/client'
+import { captchaEnabledForAction, defaultPublicConfig, getPublicConfig, normalizePublicConfig } from '../api/publicConfig'
 import ThemeToggle from '../components/admin/ThemeToggle'
+import BrandMark from '../components/BrandMark'
+import TurnstileCaptcha from '../components/auth/TurnstileCaptcha'
+import type { PublicAuthConfig } from '../types/publicConfig'
 
 interface FormData {
   identifier: string
@@ -10,7 +14,6 @@ interface FormData {
   password: string
   username: string
   nickname: string
-  displayName: string
   emailCode: string
 }
 
@@ -20,11 +23,10 @@ const initialForm: FormData = {
   password: '',
   username: '',
   nickname: '',
-  displayName: '',
   emailCode: '',
 }
 
-type CaptchaAction = 'login' | 'register' | 'email/send-code' | 'password/forgot'
+type CaptchaAction = 'login' | 'register' | 'email_code' | 'password_forgot'
 
 type CaptchaBridge = {
   getToken?: (context: { action: CaptchaAction }) => Promise<string | null | undefined> | string | null | undefined
@@ -36,13 +38,14 @@ type AuthorizeReturnOptions = {
   issuerURL?: string
 }
 
+type AuthEntryVisibility = ReturnType<typeof authEntryVisibility>
+
 declare global {
   interface Window {
     __goauthCaptcha?: CaptchaBridge
   }
 }
 
-const CAPTCHA_PROVIDER = import.meta.env?.VITE_CAPTCHA_PROVIDER?.trim().toLowerCase() ?? ''
 const OIDC_ISSUER_URL = import.meta.env?.VITE_OIDC_ISSUER_URL?.trim() ?? ''
 
 function originFromURL(raw: string, fallback: string): string | null {
@@ -64,9 +67,9 @@ export function normalizeAuthorizeReturnTo(raw: string, options?: AuthorizeRetur
   const issuerURL = options?.issuerURL?.trim() || OIDC_ISSUER_URL
   const currentAppOrigin = originFromURL(currentOrigin, 'http://localhost:8080')
   const apiOrigin = originFromURL(apiBaseURL, currentOrigin)
-  const issuerOrigin = originFromURL(issuerURL, currentOrigin)
+  const issuerOrigin = issuerURL ? originFromURL(issuerURL, currentOrigin) : null
 
-  if (!currentAppOrigin && !apiOrigin && !issuerOrigin) {
+  if (!currentAppOrigin && !issuerOrigin && !apiOrigin) {
     return ''
   }
 
@@ -75,10 +78,14 @@ export function normalizeAuthorizeReturnTo(raw: string, options?: AuthorizeRetur
     if (parsed.pathname !== '/oauth2/authorize') {
       return ''
     }
-    if (parsed.origin !== currentAppOrigin && parsed.origin !== apiOrigin && parsed.origin !== issuerOrigin) {
+    const trustedExternalOrigin = issuerOrigin || apiOrigin
+    if (parsed.origin !== currentAppOrigin && parsed.origin !== trustedExternalOrigin) {
       return ''
     }
     if (parsed.origin === currentAppOrigin) {
+      if (trustedExternalOrigin && parsed.origin !== trustedExternalOrigin && issuerOrigin) {
+        return ''
+      }
       return parsed.pathname + parsed.search
     }
     return parsed.toString()
@@ -87,20 +94,60 @@ export function normalizeAuthorizeReturnTo(raw: string, options?: AuthorizeRetur
   }
 }
 
-function getAuthorizeReturnTo(search: string): string {
+function getAuthorizeReturnTo(search: string, issuerURL?: string): string {
   return normalizeAuthorizeReturnTo(new URLSearchParams(search).get('return_to')?.trim() ?? '', {
     currentOrigin: window.location.origin,
     apiBaseURL: API_BASE_URL,
-    issuerURL: OIDC_ISSUER_URL,
+    issuerURL: issuerURL || OIDC_ISSUER_URL,
   })
 }
 
-function isCaptchaEnabled(): boolean {
-  return CAPTCHA_PROVIDER !== '' && CAPTCHA_PROVIDER !== 'none'
+export function authEntryVisibility(configLike: unknown) {
+  const config = normalizePublicConfig(configLike)
+  return {
+    showRegister: config.registration.mode === 'open',
+    showLocalLogin: config.local_login.enabled,
+    githubProvider: config.external_providers.find(provider => provider.slug === 'github') ?? null,
+  }
 }
 
-async function getCaptchaToken(action: CaptchaAction): Promise<string | undefined> {
-  if (!isCaptchaEnabled()) {
+export function buildExternalProviderStartURL(
+  provider: PublicAuthConfig['external_providers'][number],
+  returnTo: string,
+  apiBaseURL = API_BASE_URL,
+): string {
+  const url = new URL(provider.start_url, apiBaseURL)
+  const normalizedReturnTo = normalizeExternalProviderReturnTo(returnTo, url)
+  if (normalizedReturnTo) {
+    url.searchParams.set('return_to', normalizedReturnTo)
+  }
+  return url.toString()
+}
+
+function normalizeExternalProviderReturnTo(returnTo: string, providerStartURL: URL): string {
+  void providerStartURL
+  return returnTo.trim()
+}
+
+export function buildAuthConfigViewState(config: PublicAuthConfig | null, loading: boolean, error: string): {
+  visibility: AuthEntryVisibility
+  canUseAuthActions: boolean
+  statusMessage: string
+} {
+  const emptyVisibility: AuthEntryVisibility = {
+    showRegister: false,
+    showLocalLogin: false,
+    githubProvider: null,
+  }
+  return {
+    visibility: config ? authEntryVisibility(config) : emptyVisibility,
+    canUseAuthActions: Boolean(config) && !loading && !error,
+    statusMessage: loading ? '正在读取认证配置...' : error ? '认证配置不可用，请稍后重试' : '',
+  }
+}
+
+async function getCaptchaToken(config: PublicAuthConfig, action: CaptchaAction): Promise<string | undefined> {
+  if (!captchaEnabledForAction(config, action)) {
     return undefined
   }
 
@@ -131,12 +178,12 @@ export function buildAuthRoutePath(
   return query ? `${pathname}?${query}` : pathname
 }
 
-function ShieldIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="28" height="28" fill="var(--ink-inverse)">
-      <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 4c1.86 0 3.41 1.28 3.86 3H8.14C8.59 6.28 10.14 5 12 5zm5 9H7v-1c0-1.1.9-2 2-2h6c1.1 0 2 .9 2 2v1zm-1 5.72V16h-2v2.73c-.56-.28-1.09-.65-1.56-1.1l1.42-1.42-1.42-1.42 1.42-1.42-1.42-1.42 1.42-1.42-1.42-1.42 1.42-1.42C13.91 8.95 13 9.92 13 11.15V13h-2v-1.85c0-1.23-.91-2.2-1.99-2.47L12 5.15l2.99 3.53c-1.08.27-1.99 1.24-1.99 2.47V13h2v-1.85c0-.83.36-1.58.93-2.11l1.42 1.42-1.42 1.42 1.42 1.42-1.42 1.42 1.42 1.42-1.42 1.42 1.42 1.42-1.56 1.1z" />
-    </svg>
-  )
+export function resolvePostLoginRedirect(returnTo: string): { mode: 'app' | 'external'; target: string } {
+  const target = returnTo.trim()
+  if (target) {
+    return { mode: 'external', target }
+  }
+  return { mode: 'app', target: '/account' }
 }
 
 function Spinner() {
@@ -158,8 +205,6 @@ function Spinner() {
 export default function LoginPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const returnTo = getAuthorizeReturnTo(location.search)
-  const isSSOLogin = returnTo !== ''
   const pageMode = location.pathname === '/forgot-password'
     ? 'forgot'
     : location.pathname === '/reset-password'
@@ -175,6 +220,41 @@ export default function LoginPage() {
   const [codeCountdown, setCodeCountdown] = useState(0)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [authConfig, setAuthConfig] = useState<PublicAuthConfig | null>(null)
+  const [configLoading, setConfigLoading] = useState(true)
+  const [configError, setConfigError] = useState('')
+
+  const authConfigState = buildAuthConfigViewState(authConfig, configLoading, configError)
+  const visibility = authConfigState.visibility
+  const githubProvider = visibility.githubProvider
+  const brand = authConfig?.brand ?? defaultPublicConfig.brand
+  const returnTo = getAuthorizeReturnTo(location.search, authConfig?.issuer_url)
+  const isSSOLogin = returnTo !== ''
+
+  useEffect(() => {
+    let cancelled = false
+    getPublicConfig()
+      .then(config => {
+        if (!cancelled) {
+          setAuthConfig(config)
+          setConfigError('')
+        }
+      })
+      .catch(err => {
+        if (!cancelled) {
+          setAuthConfig(null)
+          setConfigError(err instanceof Error ? err.message : '读取认证配置失败')
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setConfigLoading(false)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     if (routeState?.notice) {
@@ -188,6 +268,15 @@ export default function LoginPage() {
     }
     setForm(prev => (prev.email ? prev : { ...prev, email: emailFromQuery }))
   }, [emailFromQuery])
+
+  useEffect(() => {
+    if (tab === 'register' && !visibility.showRegister) {
+      setTab('login')
+    }
+    if (tab === 'login' && !visibility.showLocalLogin && visibility.showRegister) {
+      setTab('register')
+    }
+  }, [tab, visibility.showLocalLogin, visibility.showRegister])
 
   useEffect(() => {
     if (codeCountdown <= 0) {
@@ -205,6 +294,10 @@ export default function LoginPage() {
   }, [])
 
   const sendRegisterCode = useCallback(async () => {
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     if (!form.email) {
       setError('请先输入邮箱地址')
       return
@@ -212,7 +305,7 @@ export default function LoginPage() {
     setCodeSending(true)
     setError('')
     try {
-      const captchaToken = await getCaptchaToken('email/send-code')
+      const captchaToken = await getCaptchaToken(authConfig, 'email_code')
       await sendEmailCode({ purpose: 'register', email: form.email }, { captchaToken })
       setSuccess('验证码已发送')
       setCodeCountdown(60)
@@ -221,9 +314,13 @@ export default function LoginPage() {
     } finally {
       setCodeSending(false)
     }
-  }, [form.email])
+  }, [authConfig, form.email])
 
   const sendResetCode = useCallback(async () => {
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     if (!form.email) {
       setError('请先输入邮箱地址')
       return
@@ -231,7 +328,7 @@ export default function LoginPage() {
     setCodeSending(true)
     setError('')
     try {
-      const captchaToken = await getCaptchaToken('password/forgot')
+      const captchaToken = await getCaptchaToken(authConfig, 'password_forgot')
       await forgotPassword(form.email, { captchaToken })
       setSuccess('重置验证码已发送，请查收邮箱')
       setCodeCountdown(60)
@@ -240,44 +337,52 @@ export default function LoginPage() {
     } finally {
       setCodeSending(false)
     }
-  }, [form.email])
+  }, [authConfig, form.email])
 
   const handleLoginSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     setLoading(true)
     setError('')
     setSuccess('')
 
     try {
-      const captchaToken = await getCaptchaToken('login')
+      const captchaToken = await getCaptchaToken(authConfig, 'login')
       const result = await login({ identifier: form.identifier || form.email, password: form.password }, { captchaToken })
       window.localStorage.setItem('access_token', result.access_token)
       window.localStorage.setItem('refresh_token', result.refresh_token)
-      if (returnTo) {
-        window.location.assign(returnTo)
+      const redirect = resolvePostLoginRedirect(returnTo)
+      if (redirect.mode === 'external') {
+        window.location.assign(redirect.target)
         return
       }
-      navigate('/admin')
+      navigate(redirect.target)
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
     } finally {
       setLoading(false)
     }
-  }, [form.identifier, form.email, form.password, navigate, returnTo])
+  }, [authConfig, form.identifier, form.email, form.password, navigate, returnTo])
 
   const handleRegisterSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     setLoading(true)
     setError('')
     setSuccess('')
 
     try {
-      const captchaToken = await getCaptchaToken('register')
+      const captchaToken = await getCaptchaToken(authConfig, 'register')
       await register({
         username: form.username,
         nickname: form.nickname,
         email: form.email,
-        display_name: form.displayName || form.nickname,
         password: form.password,
         email_code: form.emailCode,
       }, { captchaToken })
@@ -289,16 +394,20 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }, [form, isSSOLogin])
+  }, [authConfig, form, isSSOLogin])
 
   const handleForgotSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     setLoading(true)
     setError('')
     setSuccess('')
 
     try {
-      const captchaToken = await getCaptchaToken('password/forgot')
+      const captchaToken = await getCaptchaToken(authConfig, 'password_forgot')
       await forgotPassword(form.email, { captchaToken })
       navigate(buildAuthRoutePath('/reset-password', { email: form.email, returnTo }), {
         state: { notice: '重置验证码已发送，请输入邮箱验证码并设置新密码' },
@@ -308,10 +417,14 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }, [form.email, navigate, returnTo])
+  }, [authConfig, form.email, navigate, returnTo])
 
   const handleResetSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     setLoading(true)
     setError('')
     setSuccess('')
@@ -334,6 +447,13 @@ export default function LoginPage() {
     }
   }, [form.email, form.emailCode, form.password, navigate, returnTo])
 
+  const handleGitHubLogin = useCallback(() => {
+    if (!githubProvider) {
+      return
+    }
+    window.location.assign(buildExternalProviderStartURL(githubProvider, returnTo))
+  }, [githubProvider, returnTo])
+
   const switchTab = useCallback((nextTab: 'login' | 'register') => {
     setTab(nextTab)
     setError('')
@@ -348,25 +468,13 @@ export default function LoginPage() {
     backdropFilter: 'blur(24px) saturate(1.8)',
     WebkitBackdropFilter: 'blur(24px) saturate(1.8)',
     border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
+    borderRadius: '24px',
     boxShadow: 'var(--shadow-md)',
-    padding: '48px 40px',
+    padding: '52px 44px',
     position: 'relative',
     overflow: 'hidden',
     animation: 'cardEnter 0.7s cubic-bezier(0.16, 1, 0.3, 1) 0.1s forwards',
     opacity: 0,
-  }
-
-  const logoIconStyle: React.CSSProperties = {
-    width: '56px',
-    height: '56px',
-    background: 'var(--ink)',
-    borderRadius: '14px',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: '20px',
-    boxShadow: 'var(--shadow-sm)',
   }
 
   const segmentedStyle: React.CSSProperties = {
@@ -400,44 +508,58 @@ export default function LoginPage() {
     bottom: '3px',
     width: 'calc(50% - 3px)',
     background: 'var(--surface-solid)',
-    borderRadius: '8px',
+    borderRadius: '10px',
     boxShadow: 'var(--shadow-sm)',
-    transition: 'transform 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+    transition: 'transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1)',
     zIndex: 0,
     transform: tab === 'register' ? 'translateX(calc(100% + 6px))' : 'translateX(0)',
   }
 
   const inputStyle: React.CSSProperties = {
     width: '100%',
-    padding: '13px 16px',
+    padding: '14px 18px',
     fontFamily: 'inherit',
     fontSize: '15px',
     color: 'var(--ink)',
     background: 'var(--surface-solid)',
-    border: '1px solid var(--border-strong)',
-    borderRadius: '10px',
+    border: '1.5px solid var(--border-strong)',
+    borderRadius: '14px',
     outline: 'none',
     transition: 'border-color 0.2s ease, box-shadow 0.2s ease',
   }
 
   const btnPrimaryStyle = (disabled: boolean): React.CSSProperties => ({
     width: '100%',
-    padding: '14px 24px',
+    padding: '15px 24px',
     fontFamily: 'inherit',
     fontSize: '15px',
     fontWeight: 500,
     color: '#fff',
     background: disabled ? 'var(--ink-tertiary)' : 'var(--accent)',
     border: 'none',
-    borderRadius: '10px',
+    borderRadius: '14px',
     cursor: disabled ? 'not-allowed' : 'pointer',
     transition: 'background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease',
-    boxShadow: '0 2px 8px var(--accent-soft)',
+    boxShadow: '0 2px 8px var(--accent-glow)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     gap: '8px',
   })
+
+  const btnSecondaryStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '14px 20px',
+    fontFamily: 'inherit',
+    fontSize: '15px',
+    fontWeight: 500,
+    color: 'var(--ink)',
+    background: 'var(--surface-solid)',
+    border: '1.5px solid var(--border-strong)',
+    borderRadius: '14px',
+    cursor: 'pointer',
+    transition: 'border-color 0.2s ease, background 0.2s ease, transform 0.1s ease',
+  }
 
   const headerTitle = pageMode === 'forgot'
     ? '找回密码'
@@ -453,11 +575,11 @@ export default function LoginPage() {
       ? '输入邮箱验证码并设置新密码'
       : tab === 'login'
         ? isSSOLogin
-          ? '登录你的 GoAuth 账户以继续访问当前服务'
-          : '登录你的 GoAuth 账户'
+          ? `登录你的 ${brand.name} 账户以继续访问当前服务`
+          : `登录你的 ${brand.name} 账户`
         : '开始你的安全身份之旅'
 
-  const loginDisabled = loading
+  const authActionDisabled = loading || !authConfigState.canUseAuthActions
 
   return (
     <div
@@ -476,10 +598,10 @@ export default function LoginPage() {
           position: 'fixed',
           top: '-30%',
           right: '-20%',
-          width: '800px',
-          height: '800px',
+          width: '700px',
+          height: '700px',
           borderRadius: '50%',
-          background: 'radial-gradient(circle, var(--accent-soft) 0%, transparent 70%)',
+          background: 'radial-gradient(circle, var(--cream-glow) 0%, transparent 70%)',
           pointerEvents: 'none',
           zIndex: -1,
         }}
@@ -487,10 +609,10 @@ export default function LoginPage() {
       <div
         style={{
           position: 'fixed',
-          bottom: '-20%',
+          bottom: '-25%',
           left: '-15%',
-          width: '600px',
-          height: '600px',
+          width: '500px',
+          height: '500px',
           borderRadius: '50%',
           background: 'radial-gradient(circle, var(--accent-soft) 0%, transparent 70%)',
           pointerEvents: 'none',
@@ -515,12 +637,7 @@ export default function LoginPage() {
         />
 
         <div style={{ textAlign: 'center', marginBottom: '40px' }}>
-          <div style={logoIconStyle}>
-            <ShieldIcon />
-          </div>
-          <div style={{ fontSize: '22px', fontWeight: 600, letterSpacing: '-0.3px', color: 'var(--ink)' }}>
-            GoAuth
-          </div>
+          <BrandMark brand={brand} size="lg" orientation="stacked" align="center" showTagline />
         </div>
 
         <div style={{ textAlign: 'center', marginBottom: '36px' }}>
@@ -532,7 +649,7 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {pageMode === 'auth' && (
+        {pageMode === 'auth' && visibility.showLocalLogin && visibility.showRegister && (
           <div style={segmentedStyle}>
             <div style={indicatorStyle} />
             <button
@@ -582,12 +699,27 @@ export default function LoginPage() {
             {success}
           </div>
         )}
+        {authConfigState.statusMessage && (
+          <div
+            style={{
+              marginBottom: '20px',
+              padding: '12px 14px',
+              borderRadius: '10px',
+              background: 'var(--surface-hover)',
+              color: 'var(--ink-secondary)',
+              fontSize: '14px',
+              lineHeight: 1.5,
+            }}
+          >
+            {authConfigState.statusMessage}
+          </div>
+        )}
 
         {pageMode === 'auth' && (
           <>
             <form
               onSubmit={handleLoginSubmit}
-              style={{ display: tab === 'login' ? 'block' : 'none', animation: tab === 'login' ? 'fadeIn 0.35s ease' : 'none' }}
+              style={{ display: visibility.showLocalLogin && tab === 'login' ? 'block' : 'none', animation: tab === 'login' ? 'fadeIn 0.35s ease' : 'none' }}
             >
               <div style={{ marginBottom: '18px' }}>
                 <label htmlFor="login-identifier" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
@@ -633,12 +765,12 @@ export default function LoginPage() {
                 </Link>
               </div>
 
-              <button type="submit" disabled={loginDisabled} style={btnPrimaryStyle(loginDisabled)}>
+              <button type="submit" disabled={authActionDisabled} style={btnPrimaryStyle(authActionDisabled)}>
                 {loading ? <><Spinner /> 登录中...</> : isSSOLogin ? '继续' : '登录'}
               </button>
             </form>
 
-            <form onSubmit={handleRegisterSubmit} style={{ display: tab === 'register' ? 'block' : 'none', animation: tab === 'register' ? 'fadeIn 0.35s ease' : 'none' }}>
+            <form onSubmit={handleRegisterSubmit} style={{ display: visibility.showRegister && tab === 'register' ? 'block' : 'none', animation: tab === 'register' ? 'fadeIn 0.35s ease' : 'none' }}>
               <div style={{ marginBottom: '18px' }}>
                 <label htmlFor="register-username" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
                   用户名
@@ -667,21 +799,6 @@ export default function LoginPage() {
                   value={form.nickname}
                   onChange={e => updateField('nickname', e.target.value)}
                   placeholder="选填，用于展示"
-                  style={inputStyle}
-                />
-              </div>
-
-              <div style={{ marginBottom: '18px' }}>
-                <label htmlFor="register-display-name" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
-                  显示名称
-                </label>
-                <input
-                  id="register-display-name"
-                  name="display_name"
-                  type="text"
-                  value={form.displayName}
-                  onChange={e => updateField('displayName', e.target.value)}
-                  placeholder="选填，默认为昵称"
                   style={inputStyle}
                 />
               </div>
@@ -737,7 +854,7 @@ export default function LoginPage() {
                   />
                   <button
                     type="button"
-                    disabled={codeSending || codeCountdown > 0}
+                    disabled={codeSending || codeCountdown > 0 || !authConfigState.canUseAuthActions}
                     onClick={sendRegisterCode}
                     style={{
                       padding: '13px 20px',
@@ -747,7 +864,7 @@ export default function LoginPage() {
                       background: codeCountdown > 0 ? 'var(--surface-hover)' : 'var(--ink)',
                       border: '1px solid ' + (codeCountdown > 0 ? 'var(--border)' : 'transparent'),
                       borderRadius: '10px',
-                      cursor: codeSending || codeCountdown > 0 ? 'not-allowed' : 'pointer',
+                      cursor: codeSending || codeCountdown > 0 || !authConfigState.canUseAuthActions ? 'not-allowed' : 'pointer',
                       transition: 'background 0.2s ease',
                       whiteSpace: 'nowrap',
                     }}
@@ -757,10 +874,31 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <button type="submit" disabled={loading} style={btnPrimaryStyle(loading)}>
+              <button type="submit" disabled={authActionDisabled} style={btnPrimaryStyle(authActionDisabled)}>
                 {loading ? <><Spinner /> 创建中...</> : '创建账户'}
               </button>
             </form>
+
+            {githubProvider && (
+              <div style={{ marginTop: visibility.showLocalLogin || visibility.showRegister ? '24px' : 0 }}>
+                {(visibility.showLocalLogin || visibility.showRegister) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', margin: '0 0 20px' }}>
+                    <span style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
+                    <span style={{ fontSize: '12px', color: 'var(--ink-tertiary)' }}>或</span>
+                    <span style={{ flex: 1, height: '1px', background: 'var(--border)' }} />
+                  </div>
+                )}
+                <button type="button" onClick={handleGitHubLogin} disabled={!authConfigState.canUseAuthActions} style={btnSecondaryStyle}>
+                  使用 {githubProvider.display_name} 继续
+                </button>
+              </div>
+            )}
+
+            {!visibility.showLocalLogin && !visibility.showRegister && !githubProvider && !authConfigState.statusMessage && (
+              <div style={{ fontSize: '14px', color: 'var(--ink-secondary)', lineHeight: 1.6, textAlign: 'center' }}>
+                当前没有可用的登录方式
+              </div>
+            )}
           </>
         )}
 
@@ -783,7 +921,7 @@ export default function LoginPage() {
               />
             </div>
 
-            <button type="submit" disabled={loading} style={btnPrimaryStyle(loading)}>
+            <button type="submit" disabled={authActionDisabled} style={btnPrimaryStyle(authActionDisabled)}>
               {loading ? <><Spinner /> 发送中...</> : '发送重置验证码'}
             </button>
 
@@ -848,7 +986,7 @@ export default function LoginPage() {
                 />
                 <button
                   type="button"
-                  disabled={codeSending || codeCountdown > 0}
+                  disabled={codeSending || codeCountdown > 0 || !authConfigState.canUseAuthActions}
                   onClick={sendResetCode}
                   style={{
                     padding: '13px 20px',
@@ -858,7 +996,7 @@ export default function LoginPage() {
                     background: codeCountdown > 0 ? 'var(--surface-hover)' : 'var(--ink)',
                     border: '1px solid ' + (codeCountdown > 0 ? 'var(--border)' : 'transparent'),
                     borderRadius: '10px',
-                    cursor: codeSending || codeCountdown > 0 ? 'not-allowed' : 'pointer',
+                    cursor: codeSending || codeCountdown > 0 || !authConfigState.canUseAuthActions ? 'not-allowed' : 'pointer',
                     transition: 'background 0.2s ease',
                     whiteSpace: 'nowrap',
                   }}
@@ -868,7 +1006,7 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <button type="submit" disabled={loading} style={btnPrimaryStyle(loading)}>
+            <button type="submit" disabled={authActionDisabled} style={btnPrimaryStyle(authActionDisabled)}>
               {loading ? <><Spinner /> 提交中...</> : '重置密码'}
             </button>
 
@@ -879,6 +1017,8 @@ export default function LoginPage() {
             </div>
           </form>
         )}
+
+        {authConfig && <TurnstileCaptcha config={authConfig} />}
       </div>
     </div>
   )

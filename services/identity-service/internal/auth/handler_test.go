@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/captcha"
 	"goauth/services/identity-service/internal/config"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/session"
@@ -26,6 +27,115 @@ type failingAuditRecorder struct{}
 
 func (failingAuditRecorder) Record(_ context.Context, _ audit.Entry) error {
 	return errors.New("audit unavailable")
+}
+
+func TestRegisterRejectsWhenRegistrationDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewHandler(nil, nil)
+	handler.SetRegistrationMode("disabled")
+
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/v1/auth"))
+
+	body := strings.NewReader(`{"email":"member@example.com","password":"p@ssw0rd!","email_code":"123456"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/register", body)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "registration disabled") {
+		t.Fatalf("expected registration disabled error, got %s", recorder.Body.String())
+	}
+}
+
+func TestSendCodeRejectsRegisterPurposeWhenRegistrationDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, purpose := range []string{"register", ""} {
+		t.Run("purpose="+purpose, func(t *testing.T) {
+			handler := NewHandler(nil, nil)
+			handler.SetRegistrationMode("invite_only")
+
+			router := gin.New()
+			handler.RegisterRoutes(router.Group("/v1/auth"))
+
+			body := `{"purpose":"` + purpose + `","email":"member@example.com"}`
+			request := httptest.NewRequest(http.MethodPost, "/v1/auth/email/send-code", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+
+			router.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), "registration disabled") {
+				t.Fatalf("expected registration disabled error, got %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestLoginRejectsWhenLocalPasswordLoginDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewHandler(nil, nil)
+	handler.SetLocalPasswordLoginEnabled(false)
+
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/v1/auth"))
+
+	body := strings.NewReader(`{"email":"member@example.com","password":"p@ssw0rd!"}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login", body)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "local password login disabled") {
+		t.Fatalf("expected local password login disabled error, got %s", recorder.Body.String())
+	}
+}
+
+func TestCaptchaOnlyAppliesToConfiguredActions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service, _, _ := newTestService(t)
+	handler := NewHandler(service, nil)
+	handler.SetCaptchaVerifier(captcha.NewVerifier(captcha.ProviderTurnstile, "secret"))
+	handler.SetCaptchaActions([]string{"login"})
+
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/v1/auth"))
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/auth/login", strings.NewReader(`{"email":"member@example.com","password":"p@ssw0rd!"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	router.ServeHTTP(loginRec, loginReq)
+
+	if loginRec.Code != http.StatusForbidden {
+		t.Fatalf("login status = %d, want %d body=%s", loginRec.Code, http.StatusForbidden, loginRec.Body.String())
+	}
+	if !strings.Contains(loginRec.Body.String(), "captcha token required") {
+		t.Fatalf("expected login captcha error, got %s", loginRec.Body.String())
+	}
+
+	registerReq := httptest.NewRequest(http.MethodPost, "/v1/auth/register", strings.NewReader(`{"email":"member@example.com","password":"p@ssw0rd!","email_code":"123456"}`))
+	registerReq.Header.Set("Content-Type", "application/json")
+	registerRec := httptest.NewRecorder()
+	router.ServeHTTP(registerRec, registerReq)
+
+	if registerRec.Code == http.StatusForbidden && strings.Contains(registerRec.Body.String(), "captcha") {
+		t.Fatalf("register should not be blocked by captcha when action disabled: %s", registerRec.Body.String())
+	}
 }
 
 func TestLoginSetsOIDCAuthorizeCookie(t *testing.T) {

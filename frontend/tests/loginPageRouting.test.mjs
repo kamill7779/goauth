@@ -51,7 +51,21 @@ test('buildAuthRoutePath omits empty return_to', () => {
   assert.equal(parsed.searchParams.has('return_to'), false);
 });
 
-test('normalizeAuthorizeReturnTo accepts cross-origin authorize return_to from configured api origin', () => {
+test('resolvePostLoginRedirect sends direct logins to account center', () => {
+  assert.deepEqual(loginPage.resolvePostLoginRedirect(''), {
+    mode: 'app',
+    target: '/account',
+  });
+});
+
+test('resolvePostLoginRedirect preserves SSO authorize return_to', () => {
+  assert.deepEqual(loginPage.resolvePostLoginRedirect('/oauth2/authorize?client_id=demo-web'), {
+    mode: 'external',
+    target: '/oauth2/authorize?client_id=demo-web',
+  });
+});
+
+test('normalizeAuthorizeReturnTo accepts cross-origin authorize return_to from configured issuer origin', () => {
   const returnTo = loginPage.normalizeAuthorizeReturnTo(
     'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
     {
@@ -67,6 +81,35 @@ test('normalizeAuthorizeReturnTo accepts cross-origin authorize return_to from c
   );
 });
 
+test('normalizeAuthorizeReturnTo accepts API origin when issuer is not configured', () => {
+  const returnTo = loginPage.normalizeAuthorizeReturnTo(
+    'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
+    {
+      currentOrigin: 'https://console.example.com',
+      apiBaseURL: 'https://identity.example.com',
+      issuerURL: '',
+    },
+  );
+
+  assert.equal(
+    returnTo,
+    'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
+  );
+});
+
+test('normalizeAuthorizeReturnTo rejects cross-origin authorize return_to from api origin when issuer differs', () => {
+  const returnTo = loginPage.normalizeAuthorizeReturnTo(
+    'https://api.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
+    {
+      currentOrigin: 'https://console.example.com',
+      apiBaseURL: 'https://api.example.com',
+      issuerURL: 'https://identity.example.com',
+    },
+  );
+
+  assert.equal(returnTo, '');
+});
+
 test('normalizeAuthorizeReturnTo rejects authorize targets from untrusted origins', () => {
   const returnTo = loginPage.normalizeAuthorizeReturnTo(
     'https://evil.example.com/oauth2/authorize?client_id=demo-web',
@@ -78,4 +121,54 @@ test('normalizeAuthorizeReturnTo rejects authorize targets from untrusted origin
   );
 
   assert.equal(returnTo, '');
+});
+
+test('authEntryVisibility hides register and local login from runtime config', () => {
+  const visibility = loginPage.authEntryVisibility({
+    registration: { mode: 'disabled' },
+    local_login: { enabled: false },
+    external_providers: [
+      { slug: 'github', display_name: 'GitHub', start_url: '/v1/external/github/start' },
+    ],
+  });
+
+  assert.equal(visibility.showRegister, false);
+  assert.equal(visibility.showLocalLogin, false);
+  assert.equal(visibility.githubProvider.display_name, 'GitHub');
+});
+
+test('buildExternalProviderStartURL preserves return_to for GitHub login', () => {
+  const startURL = loginPage.buildExternalProviderStartURL(
+    { slug: 'github', display_name: 'GitHub', start_url: '/v1/external/github/start' },
+    '/oauth2/authorize?client_id=demo-web&state=opaque-state',
+    'https://identity.example.com',
+  );
+  const parsed = new URL(startURL);
+
+  assert.equal(parsed.origin, 'https://identity.example.com');
+  assert.equal(parsed.pathname, '/v1/external/github/start');
+  assert.equal(parsed.searchParams.get('return_to'), '/oauth2/authorize?client_id=demo-web&state=opaque-state');
+});
+
+test('buildExternalProviderStartURL preserves trusted absolute authorize return_to', () => {
+  const startURL = loginPage.buildExternalProviderStartURL(
+    { slug: 'github', display_name: 'GitHub', start_url: '/v1/external/github/start' },
+    'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',
+    'https://identity.example.com',
+  );
+  const parsed = new URL(startURL);
+
+  assert.equal(parsed.origin, 'https://identity.example.com');
+  assert.equal(parsed.searchParams.get('return_to'), 'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state');
+});
+
+test('buildAuthConfigViewState keeps auth actions unavailable until runtime config loads', () => {
+  const loadingState = loginPage.buildAuthConfigViewState(null, true, '');
+  assert.equal(loadingState.canUseAuthActions, false);
+  assert.equal(loadingState.visibility.showRegister, false);
+  assert.equal(loadingState.visibility.showLocalLogin, false);
+
+  const failedState = loginPage.buildAuthConfigViewState(null, false, 'boom');
+  assert.equal(failedState.canUseAuthActions, false);
+  assert.equal(failedState.statusMessage, '认证配置不可用，请稍后重试');
 });

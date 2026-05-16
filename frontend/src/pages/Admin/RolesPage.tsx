@@ -193,7 +193,7 @@ export default function RolesPage() {
                 <div
                   key={role.id}
                   onClick={() => setMatrixRole(isSelected ? null : role)}
-                  className="bg-surface-solid rounded-xl border p-5 cursor-pointer transition-all duration-300"
+                  className="bg-surface-solid rounded-[20px] border p-5 cursor-pointer transition-all duration-300 hover:shadow-card-hover hover:-translate-y-[3px]"
                   style={{
                     borderColor: isSelected ? 'var(--accent)' : 'var(--border)',
                     boxShadow: isSelected ? '0 0 0 3px var(--accent-soft)' : 'none',
@@ -217,7 +217,7 @@ export default function RolesPage() {
           </div>
 
           {matrixRole && (
-            <div className="bg-surface-solid rounded-xl border border-line overflow-hidden animate-[fadeInUp_0.4s_ease]">
+            <div className="bg-surface-solid rounded-[20px] border border-line overflow-hidden animate-[fadeInUp_0.4s_ease]">
               <div className="px-5 py-4 border-b border-line flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-semibold text-ink">权限矩阵 · {matrixRole.name}</h2>

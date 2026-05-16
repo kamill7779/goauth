@@ -179,20 +179,16 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*store
 		return nil, err
 	}
 
-	nickname := identity.NormalizeNickname(input.Nickname, normalizedUser)
-	displayName := strings.TrimSpace(input.DisplayName)
-	if displayName == "" {
-		displayName = nickname
-	}
+	nickname := identity.NormalizeNickname(input.Nickname, identity.NormalizeNickname(input.DisplayName, normalizedUser))
 
 	record := &store.User{
-		Username:      normalizedUser,
-		Nickname:      nickname,
-		Email:         email,
-		DisplayName:   displayName,
-		PasswordHash:  hash,
-		AvatarURL:     strings.TrimSpace(input.AvatarURL),
-		Status:        status,
+		Username:     normalizedUser,
+		Nickname:     nickname,
+		Email:        email,
+		DisplayName:  nickname,
+		PasswordHash: hash,
+		AvatarURL:    strings.TrimSpace(input.AvatarURL),
+		Status:       status,
 	}
 	if err := s.db.WithContext(ctx).Create(record).Error; err != nil {
 		return nil, err
@@ -215,14 +211,19 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInpu
 	if input.Email != nil {
 		updates["email"] = normalizeEmail(*input.Email)
 	}
-	if input.Nickname != nil {
-		nickname := identity.NormalizeNickname(*input.Nickname, "")
+	if input.Nickname != nil || input.DisplayName != nil {
+		rawNickname := ""
+		if input.DisplayName != nil {
+			rawNickname = *input.DisplayName
+		}
+		if input.Nickname != nil {
+			rawNickname = *input.Nickname
+		}
+		nickname := identity.NormalizeNickname(rawNickname, "")
 		if nickname != "" {
 			updates["nickname"] = nickname
+			updates["display_name"] = nickname
 		}
-	}
-	if input.DisplayName != nil {
-		updates["display_name"] = strings.TrimSpace(*input.DisplayName)
 	}
 	if input.AvatarURL != nil {
 		updates["avatar_url"] = strings.TrimSpace(*input.AvatarURL)
@@ -319,11 +320,6 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 		roleCode = "root"
 	}
 
-	displayName := strings.TrimSpace(input.DisplayName)
-	if displayName == "" {
-		displayName = email
-	}
-
 	username := strings.TrimSpace(input.Username)
 	if username == "" {
 		username = identity.UsernameFromEmail(email)
@@ -336,10 +332,7 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 		return nil, fmt.Errorf("bootstrap admin username: %w", err)
 	}
 
-	nickname := identity.NormalizeNickname(input.Nickname, normalizedUsername)
-	if strings.TrimSpace(input.DisplayName) == "" && nickname != displayName {
-		displayName = nickname
-	}
+	requestedNickname := identity.NormalizeNickname(input.Nickname, identity.NormalizeNickname(input.DisplayName, ""))
 
 	var record store.User
 	now := time.Now().UTC()
@@ -351,11 +344,12 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 			if err != nil {
 				return err
 			}
+			nickname := identity.NormalizeNickname(requestedNickname, normalizedUsername)
 			record = store.User{
 				Username:        normalizedUsername,
 				Nickname:        nickname,
 				Email:           email,
-				DisplayName:     displayName,
+				DisplayName:     nickname,
 				PasswordHash:    hash,
 				Status:          store.UserStatusActive,
 				EmailVerifiedAt: &now,
@@ -369,13 +363,16 @@ func (s *Service) EnsureBootstrapAdmin(ctx context.Context, input BootstrapAdmin
 			passwordChanged := auth.CheckPassword(record.PasswordHash, input.Password) != nil
 			reactivated := record.Status != store.UserStatusActive
 			needsEmailVerification := record.EmailVerifiedAt == nil
+			nickname := identity.NormalizeNickname(requestedNickname, identity.NormalizeNickname(record.Nickname, normalizedUsername))
+			displayName := nickname
 			displayNameChanged := record.DisplayName != displayName
+			nicknameChanged := record.Nickname != nickname
 
 			updates := map[string]any{}
 			if record.Username == "" && normalizedUsername != "" {
 				updates["username"] = normalizedUsername
 			}
-			if record.Nickname == "" && nickname != "" {
+			if nicknameChanged && nickname != "" {
 				updates["nickname"] = nickname
 			}
 			if displayNameChanged {

@@ -92,9 +92,10 @@ function numberArrayField(record: UnknownRecord, keys: string[]): number[] {
 export function normalizeUser(raw: unknown): User {
   const record = isRecord(raw) ? raw : {};
   const email = stringField(record, ['email', 'Email']);
-  const displayName = stringField(record, ['display_name', 'DisplayName'], email);
   const username = stringField(record, ['username', 'Username']);
-  const nickname = stringField(record, ['nickname', 'Nickname'], displayName);
+  const legacyDisplayName = stringField(record, ['display_name', 'DisplayName']);
+  const nickname = stringField(record, ['nickname', 'Nickname'], legacyDisplayName || username || email);
+  const displayName = nickname;
 
   return {
     id: numberField(record, ['id', 'ID']),

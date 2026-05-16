@@ -59,6 +59,7 @@ module.exports = {
         'soft-sm': 'var(--shadow-sm)',
         'soft-md': 'var(--shadow-md)',
         'soft-lg': 'var(--shadow-lg)',
+        'card-hover': 'var(--shadow-card-hover)',
       },
     },
   },

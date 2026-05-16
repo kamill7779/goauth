@@ -3,11 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { getDashboard } from '../../api/admin';
 import { IconUsers, IconMonitor, IconBuilding, IconKey, IconAlertTriangle } from '../../components/admin/Icons';
 import StatusBadge from '../../components/admin/StatusBadge';
+import { usePublicBrand } from '../../hooks/usePublicBrand';
 import type { DashboardStats, RecentLogin, PermissionChange, Alert } from '../../types/admin';
 
 function SkeletonCard() {
   return (
-    <div className="bg-surface-solid rounded-xl border border-line p-5 animate-pulse">
+    <div className="bg-surface-solid rounded-[20px] border border-line p-6 animate-pulse">
       <div className="h-4 w-24 bg-surface-hover rounded mb-4" />
       <div className="h-8 w-16 bg-surface-hover rounded mb-2" />
       <div className="h-3 w-20 bg-surface-hover rounded" />
@@ -17,6 +18,7 @@ function SkeletonCard() {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const brand = usePublicBrand();
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [logins, setLogins] = useState<RecentLogin[]>([]);
@@ -47,11 +49,11 @@ export default function DashboardPage() {
     <div className="animate-[fadeInUp_0.4s_ease]">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-ink mb-1">总览</h1>
-        <p className="text-sm text-ink-tertiary">GoAuth 身份基础设施实时状态</p>
+        <p className="text-sm text-ink-tertiary">{brand.name} 身份基础设施实时状态</p>
       </div>
 
       {error && (
-        <div className="mb-5 rounded-xl bg-warn-soft px-4 py-3 text-sm text-warn">
+        <div className="mb-5 rounded-[14px] bg-warn-soft px-4 py-3 text-sm text-warn">
           {error}。当前页面只展示已接入接口返回的数据，不再使用 mock 数据兜底。
         </div>
       )}
@@ -66,8 +68,8 @@ export default function DashboardPage() {
                 <div
                   key={i}
                   onClick={() => navigate(stat.path)}
-                  className="bg-surface-solid rounded-xl border border-line p-5 hover:shadow-soft-md hover:-translate-y-0.5 cursor-pointer transition-all duration-300"
-                  style={{ animationDelay: `${i * 0.08}s` }}
+                  className="bg-surface-solid rounded-[20px] border border-line p-6 hover:shadow-card-hover hover:-translate-y-[3px] cursor-pointer transition-all duration-300"
+                  style={{ animationDelay: `${i * 0.06}s` }}
                 >
                   <div className="flex items-center justify-between mb-4">
                     <span className="text-xs font-medium text-ink-tertiary">{stat.label}</span>
@@ -86,7 +88,7 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-3 gap-5">
-        <div className="col-span-2 bg-surface-solid rounded-xl border border-line overflow-hidden">
+        <div className="col-span-2 bg-surface-solid rounded-[20px] border border-line overflow-hidden">
           <div className="px-5 py-4 border-b border-line flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">最近登录</h2>
             <button onClick={() => navigate('/admin/audit')} className="text-xs text-brand hover:underline flex items-center gap-1">
@@ -112,7 +114,7 @@ export default function DashboardPage() {
         </div>
 
         <div className="space-y-5">
-          <div className="bg-surface-solid rounded-xl border border-line overflow-hidden">
+          <div className="bg-surface-solid rounded-[20px] border border-line overflow-hidden">
             <div className="px-5 py-4 border-b border-line">
               <h2 className="text-sm font-semibold text-ink">权限变更</h2>
             </div>
@@ -129,7 +131,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="bg-surface-solid rounded-xl border border-line overflow-hidden">
+          <div className="bg-surface-solid rounded-[20px] border border-line overflow-hidden">
             <div className="px-5 py-4 border-b border-line flex items-center justify-between">
               <h2 className="text-sm font-semibold text-ink">异常登录</h2>
               <span className="px-2 py-0.5 text-[10px] font-medium bg-danger-soft text-danger rounded-full">{alerts.length} 条</span>

@@ -117,10 +117,37 @@ export interface Alert {
   time: string;
 }
 
+export type RuntimeConfigStatus = 'ok' | 'warning' | 'error';
+
+export interface RuntimeConfigItem {
+  key: string;
+  group: string;
+  status: RuntimeConfigStatus;
+  configured: boolean;
+  required: boolean;
+  secret: boolean;
+  public_config: boolean;
+  source: string;
+  message: string;
+}
+
+export interface RuntimeConfigGroup {
+  key: string;
+  items: RuntimeConfigItem[];
+}
+
+export interface RuntimeConfigPayload {
+  environment: string;
+  groups: RuntimeConfigGroup[];
+}
+
 export interface CreateUserInput {
+  username?: string;
+  nickname?: string;
   email: string;
-  display_name: string;
+  display_name?: string;
   password: string;
+  status?: string;
   tenant_id?: number;
   role_id?: number;
 }

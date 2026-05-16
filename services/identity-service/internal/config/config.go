@@ -23,6 +23,8 @@ type Config struct {
 	RedisURL                  string
 	JWTPrivateKeyPath         string
 	JWTKeyID                  string
+	JWTKeysetDir              string
+	JWTActiveKeyID            string
 	AccessTokenTTL            time.Duration
 	BrowserSessionTTL         time.Duration
 	RefreshTokenTTL           time.Duration
@@ -38,6 +40,13 @@ type Config struct {
 	CORSAllowedMethods        []string
 	CORSAllowedHeaders        []string
 	CORSAllowCredentials      bool
+	RegistrationMode          string
+	LocalPasswordLoginEnabled bool
+	MailerProvider            string
+	BrandName                 string
+	BrandTagline              string
+	BrandIconText             string
+	BrandIconURL              string
 	GitHubOAuthEnabled        bool
 	GitHubClientID            string
 	GitHubClientSecret        string
@@ -72,6 +81,9 @@ type Config struct {
 	CaptchaProvider  string
 	CaptchaSecretKey string
 	CaptchaSiteKey   string
+	CaptchaActions   []string
+
+	ConfiguredEnv map[string]bool `json:"-"`
 }
 
 // Load reads all configuration from environment variables. Missing variables
@@ -97,7 +109,8 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	corsAllowCredentials, err := parseBoolEnv("CORS_ALLOW_CREDENTIALS", false)
+	corsAllowedOrigins := splitCSV(envOrDefault("CORS_ALLOWED_ORIGINS", ""))
+	corsAllowCredentials, err := parseBoolEnv("CORS_ALLOW_CREDENTIALS", defaultCORSAllowCredentials(corsAllowedOrigins))
 	if err != nil {
 		return Config{}, err
 	}
@@ -105,6 +118,18 @@ func Load() (Config, error) {
 	githubOAuthEnabled, err := parseBoolEnv("GITHUB_OAUTH_ENABLED", false)
 	if err != nil {
 		return Config{}, err
+	}
+	registrationMode := strings.ToLower(strings.TrimSpace(envOrDefault("REGISTRATION_MODE", "open")))
+	if registrationMode != "open" && registrationMode != "invite_only" && registrationMode != "disabled" {
+		return Config{}, fmt.Errorf("invalid REGISTRATION_MODE: %s", registrationMode)
+	}
+	localPasswordLoginEnabled, err := parseBoolEnv("LOCAL_PASSWORD_LOGIN_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
+	mailerProvider := strings.ToLower(strings.TrimSpace(envOrDefault("MAILER_PROVIDER", "console")))
+	if mailerProvider != "console" && mailerProvider != "smtp" && mailerProvider != "noop" {
+		return Config{}, fmt.Errorf("invalid MAILER_PROVIDER: %s", mailerProvider)
 	}
 
 	smtpSSLEnabled, err := parseBoolEnv("SMTP_SSL", false)
@@ -158,8 +183,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	githubRedirectURI := strings.TrimSpace(os.Getenv("GITHUB_REDIRECT_URI"))
+	if githubOAuthEnabled && githubRedirectURI == "" {
+		githubRedirectURI = strings.TrimRight(publicIssuerURL, "/") + "/v1/external/github/callback"
+	}
+	captchaProvider := strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER")))
+	captchaSecretKey := os.Getenv("CAPTCHA_SECRET_KEY")
+	captchaSiteKey := os.Getenv("CAPTCHA_SITE_KEY")
+	if err := validateCaptchaConfig(captchaProvider, captchaSiteKey, captchaSecretKey); err != nil {
+		return Config{}, err
+	}
 
-	return Config{
+	cfg := Config{
 		AppEnv:                    envOrDefault("APP_ENV", "development"),
 		HTTPAddr:                  envOrDefault("HTTP_ADDR", ":8080"),
 		PublicIssuerURL:           publicIssuerURL,
@@ -169,6 +204,8 @@ func Load() (Config, error) {
 		RedisURL:                  os.Getenv("REDIS_URL"),
 		JWTPrivateKeyPath:         os.Getenv("JWT_PRIVATE_KEY_PATH"),
 		JWTKeyID:                  os.Getenv("JWT_KEY_ID"),
+		JWTKeysetDir:              os.Getenv("JWT_KEYSET_DIR"),
+		JWTActiveKeyID:            os.Getenv("JWT_ACTIVE_KEY_ID"),
 		AccessTokenTTL:            accessTokenTTL,
 		BrowserSessionTTL:         browserSessionTTL,
 		RefreshTokenTTL:           refreshTokenTTL,
@@ -180,14 +217,21 @@ func Load() (Config, error) {
 		SMTPFrom:                  os.Getenv("SMTP_FROM"),
 		SMTPSSLEnabled:            smtpSSLEnabled,
 		SMTPAuthLogin:             smtpAuthLogin,
-		CORSAllowedOrigins:        splitCSV(envOrDefault("CORS_ALLOWED_ORIGINS", "")),
+		CORSAllowedOrigins:        corsAllowedOrigins,
 		CORSAllowedMethods:        splitCSV(envOrDefault("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE")),
-		CORSAllowedHeaders:        splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type")),
+		CORSAllowedHeaders:        splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Captcha-Token")),
 		CORSAllowCredentials:      corsAllowCredentials,
+		RegistrationMode:          registrationMode,
+		LocalPasswordLoginEnabled: localPasswordLoginEnabled,
+		MailerProvider:            mailerProvider,
+		BrandName:                 envOrDefault("BRAND_NAME", "GoAuth"),
+		BrandTagline:              envOrDefault("BRAND_TAGLINE", ""),
+		BrandIconText:             envOrDefault("BRAND_ICON_TEXT", "G"),
+		BrandIconURL:              strings.TrimSpace(os.Getenv("BRAND_ICON_URL")),
 		GitHubOAuthEnabled:        githubOAuthEnabled,
 		GitHubClientID:            os.Getenv("GITHUB_CLIENT_ID"),
 		GitHubClientSecret:        os.Getenv("GITHUB_CLIENT_SECRET"),
-		GitHubRedirectURI:         os.Getenv("GITHUB_REDIRECT_URI"),
+		GitHubRedirectURI:         githubRedirectURI,
 		DefaultMemberTenantSlugs:  splitUniqueCSV(os.Getenv("DEFAULT_MEMBER_TENANT_SLUGS")),
 		BootstrapAdminEmail:       os.Getenv("BOOTSTRAP_ADMIN_EMAIL"),
 		BootstrapAdminPassword:    os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
@@ -210,10 +254,92 @@ func Load() (Config, error) {
 
 		DefaultLocale: envOrDefault("DEFAULT_LOCALE", "en"),
 
-		CaptchaProvider:  strings.ToLower(strings.TrimSpace(os.Getenv("CAPTCHA_PROVIDER"))),
-		CaptchaSecretKey: os.Getenv("CAPTCHA_SECRET_KEY"),
-		CaptchaSiteKey:   os.Getenv("CAPTCHA_SITE_KEY"),
-	}, nil
+		CaptchaProvider:  captchaProvider,
+		CaptchaSecretKey: captchaSecretKey,
+		CaptchaSiteKey:   captchaSiteKey,
+		CaptchaActions:   splitUniqueLowerCSV(envOrDefault("CAPTCHA_ACTIONS", "login,register,email_code,password_forgot")),
+		ConfiguredEnv:    configuredEnvKeys(),
+	}
+	if err := validateProductionConfig(cfg); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func validateCaptchaConfig(provider, siteKey, secretKey string) error {
+	provider = strings.TrimSpace(provider)
+	siteKey = strings.TrimSpace(siteKey)
+	secretKey = strings.TrimSpace(secretKey)
+	if provider == "" && siteKey == "" && secretKey == "" {
+		return nil
+	}
+	if provider == "" || siteKey == "" || secretKey == "" {
+		return fmt.Errorf("CAPTCHA_PROVIDER, CAPTCHA_SITE_KEY, and CAPTCHA_SECRET_KEY must be set together")
+	}
+	switch provider {
+	case "turnstile", "hcaptcha", "recaptcha":
+		return nil
+	default:
+		return fmt.Errorf("invalid CAPTCHA_PROVIDER: %s", provider)
+	}
+}
+
+func validateProductionConfig(cfg Config) error {
+	if !strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production") {
+		return nil
+	}
+
+	var issues []string
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(cfg.PublicIssuerURL)), "https://") {
+		issues = append(issues, "PUBLIC_ISSUER_URL must use https in production")
+	}
+	if strings.TrimSpace(cfg.MySQLDSN) == "" {
+		issues = append(issues, "MYSQL_DSN is required in production")
+	}
+	if strings.TrimSpace(cfg.RedisURL) == "" {
+		issues = append(issues, "REDIS_URL is required in production")
+	}
+	legacyKeyConfigured := strings.TrimSpace(cfg.JWTPrivateKeyPath) != "" && strings.TrimSpace(cfg.JWTKeyID) != ""
+	keysetConfigured := strings.TrimSpace(cfg.JWTKeysetDir) != "" && strings.TrimSpace(cfg.JWTActiveKeyID) != ""
+	if !legacyKeyConfigured && !keysetConfigured {
+		issues = append(issues, "JWT_PRIVATE_KEY_PATH or JWT_KEYSET_DIR is required in production")
+		issues = append(issues, "JWT_KEY_ID or JWT_ACTIVE_KEY_ID is required in production")
+	}
+	if strings.TrimSpace(cfg.JWTKeysetDir) != "" && strings.TrimSpace(cfg.JWTActiveKeyID) == "" {
+		issues = append(issues, "JWT_ACTIVE_KEY_ID is required when JWT_KEYSET_DIR is configured")
+	}
+	if strings.TrimSpace(cfg.JWTPrivateKeyPath) != "" && strings.TrimSpace(cfg.JWTKeyID) == "" && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
+		issues = append(issues, "JWT_KEY_ID is required when JWT_PRIVATE_KEY_PATH is configured")
+	}
+	if cfg.MailerProvider == "smtp" {
+		if strings.TrimSpace(cfg.SMTPHost) == "" {
+			issues = append(issues, "SMTP_HOST is required when MAILER_PROVIDER=smtp")
+		}
+		if strings.TrimSpace(cfg.SMTPFrom) == "" {
+			issues = append(issues, "SMTP_FROM is required when MAILER_PROVIDER=smtp")
+		}
+	}
+	if len(issues) > 0 {
+		return fmt.Errorf("invalid production config: %s", strings.Join(issues, "; "))
+	}
+	return nil
+}
+
+func (c Config) EnvConfigured(key string) (bool, bool) {
+	if c.ConfiguredEnv == nil {
+		return false, false
+	}
+	configured, ok := c.ConfiguredEnv[key]
+	return configured, ok
+}
+
+func configuredEnvKeys() map[string]bool {
+	result := make(map[string]bool, len(EnvDefinitions()))
+	for _, definition := range EnvDefinitions() {
+		value, ok := os.LookupEnv(definition.Name)
+		result[definition.Name] = ok && strings.TrimSpace(value) != ""
+	}
+	return result
 }
 
 func envOrDefault(key, fallback string) string {
@@ -222,6 +348,18 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func defaultCORSAllowCredentials(origins []string) bool {
+	if len(origins) == 0 {
+		return false
+	}
+	for _, origin := range origins {
+		if strings.TrimSpace(origin) == "*" {
+			return false
+		}
+	}
+	return true
 }
 
 func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
@@ -301,6 +439,25 @@ func splitUniqueCSV(value string) []string {
 	seen := make(map[string]struct{}, len(parts))
 	result := make([]string, 0, len(parts))
 	for _, part := range parts {
+		if _, ok := seen[part]; ok {
+			continue
+		}
+		seen[part] = struct{}{}
+		result = append(result, part)
+	}
+	return result
+}
+
+func splitUniqueLowerCSV(value string) []string {
+	parts := splitCSV(value)
+	if len(parts) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(parts))
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.ToLower(part)
 		if _, ok := seen[part]; ok {
 			continue
 		}

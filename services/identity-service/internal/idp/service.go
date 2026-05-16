@@ -22,6 +22,7 @@ var (
 	ErrIdentityNotFound      = errors.New("identity not found")
 	ErrEmailRequired         = errors.New("external profile email required")
 	ErrUserDisabled          = errors.New("user disabled")
+	ErrRegistrationDisabled  = errors.New("registration disabled")
 )
 
 type AuthenticateResult struct {
@@ -35,11 +36,12 @@ type AuthenticateResult struct {
 }
 
 type Service struct {
-	db        *gorm.DB
-	providers map[string]Provider
-	audit     audit.Recorder
-	policy    *provisioning.DefaultMembershipPolicy
-	now       func() time.Time
+	db               *gorm.DB
+	providers        map[string]Provider
+	audit            audit.Recorder
+	policy           *provisioning.DefaultMembershipPolicy
+	now              func() time.Time
+	registrationMode string
 }
 
 func NewService(db *gorm.DB, providers ...Provider) *Service {
@@ -52,11 +54,20 @@ func NewService(db *gorm.DB, providers ...Provider) *Service {
 	}
 
 	return &Service{
-		db:        db,
-		providers: providerMap,
-		audit:     audit.NoopRecorder{},
-		now:       time.Now,
+		db:               db,
+		providers:        providerMap,
+		audit:            audit.NoopRecorder{},
+		now:              time.Now,
+		registrationMode: "open",
 	}
+}
+
+func (s *Service) SetRegistrationMode(mode string) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "open"
+	}
+	s.registrationMode = mode
 }
 
 func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
@@ -126,6 +137,9 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 		// flow instead of silently linking an external identity to that user.
 		if user != nil {
 			return nil, ErrLocalLoginRequired
+		}
+		if s.registrationMode != "open" {
+			return nil, ErrRegistrationDisabled
 		}
 
 		var provisionedMembers []store.TenantMember

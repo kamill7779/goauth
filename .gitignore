@@ -5,6 +5,7 @@
 .idea/
 .playwright-mcp/
 admin-console-prototype/
+frontend/prototypes/
 node_modules/
 .kiro/
 

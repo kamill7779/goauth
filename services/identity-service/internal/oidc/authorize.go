@@ -73,6 +73,9 @@ func (h *Handler) authorize(c *gin.Context) {
 	}
 
 	sessionClaims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey)
+	if h.service.keyring != nil {
+		sessionClaims, err = session.ParseOIDCAuthorizeCookieWithKeyring(cookieValue, h.service.keyring)
+	}
 	if err != nil {
 		if h.redirectBrowserToLogin(c) {
 			return

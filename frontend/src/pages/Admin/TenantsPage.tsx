@@ -182,7 +182,7 @@ export default function TenantsPage() {
                 setSelectedTenant(tenant);
                 setDrawerOpen(true);
               }}
-              className="bg-surface-solid rounded-xl border border-line p-5 hover:shadow-soft-md hover:-translate-y-0.5 cursor-pointer transition-all duration-300"
+              className="bg-surface-solid rounded-[20px] border border-line p-5 hover:shadow-card-hover hover:-translate-y-[3px] cursor-pointer transition-all duration-300"
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="w-10 h-10 bg-surface-hover rounded-lg flex items-center justify-center">

@@ -111,7 +111,7 @@ grant_type=refresh_token&refresh_token=<refresh_token>
 
 ## JWKS 与 Token 校验
 
-`/oauth2/jwks` 返回单个 RSA 公钥，`alg=RS256`，`kid` 来自 `JWT_KEY_ID`。如果本地开发未配置 `JWT_PRIVATE_KEY_PATH`，服务重启会换 key，调用方需要重新拉取 JWKS。
+`/oauth2/jwks` 返回 RSA 公钥集合，`alg=RS256`。单 key 模式下 `kid` 来自 `JWT_KEY_ID`；轮换模式下 `JWT_KEYSET_DIR` 内所有 `<kid>.pem` 都会发布为可验证 key，`JWT_ACTIVE_KEY_ID` 指定新 token 使用的 active key。调用方应按 JWT header 的 `kid` 选择 JWKS key，并缓存/刷新 JWKS。如果本地开发未配置持久 key，服务重启会换 key，调用方需要重新拉取 JWKS。
 
 校验 ID Token：
 
@@ -180,3 +180,27 @@ GET /oauth2/logout?client_id=<client_id>&post_logout_redirect_uri=<redirect_uri>
 - 传 `post_logout_redirect_uri` 时必须提供 `client_id`，并且 redirect URI 必须属于该 client 的已注册 redirect URI。
 
 业务系统自己的 session 也要同步清理，不能只依赖 Goauth logout。
+
+## 发布前端到端回归
+
+仓库提供黑盒脚本用于发布前验证真实部署的 OIDC 主链路。脚本不会读取仓库内的任何 secret，所有测试账号和 OAuth client 凭据都通过环境变量传入：
+
+```powershell
+$env:GOAUTH_BASE_URL="https://auth.example.com"
+$env:GOAUTH_TEST_EMAIL="oidc-smoke@example.com"
+$env:GOAUTH_TEST_PASSWORD="<password>"
+$env:GOAUTH_CLIENT_ID="smoke-client"
+$env:GOAUTH_CLIENT_SECRET="<client-secret>"
+$env:GOAUTH_REDIRECT_URI="https://app.example.com/callback"
+node scripts/oidc-e2e.mjs --check-config
+node scripts/oidc-e2e.mjs
+```
+
+测试 client 需要允许 `authorization_code` 和 `refresh_token` grant，允许 `openid profile email offline_access` scope，并把 `GOAUTH_REDIRECT_URI` 精确加入 redirect URI 列表。脚本会验证 discovery、JWKS、浏览器登录恢复、Authorization Code + PKCE、ID Token 签名和 claims、userinfo、refresh token 轮换、refresh reuse 拒绝、revoke、logout，并覆盖 bad redirect、错误 PKCE、重复 code、错误 client secret 等负向场景。
+
+可选项：
+
+- `GOAUTH_TOKEN_AUTH_METHOD=basic`：测试 `client_secret_basic` client；默认使用 `client_secret_post`。
+- `GOAUTH_SCOPE="openid profile email offline_access"`：覆盖请求 scope。
+- `GOAUTH_SKIP_NEGATIVE=1`：只跑正向链路，适合只读或受限测试环境。
+- `GOAUTH_INSECURE_TLS=1`：允许自签名 TLS，仅限预发环境。

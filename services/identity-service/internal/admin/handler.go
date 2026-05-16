@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/config"
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
@@ -23,11 +24,16 @@ type Handler struct {
 	audit            audit.Recorder
 	authMiddleware   gin.HandlerFunc
 	systemMiddleware gin.HandlerFunc
+	cfg              config.Config
 }
 
-func NewHandler(db *gorm.DB, sessionService *session.Service, recorder audit.Recorder, authMiddleware, systemMiddleware gin.HandlerFunc) *Handler {
+func NewHandler(db *gorm.DB, sessionService *session.Service, recorder audit.Recorder, authMiddleware, systemMiddleware gin.HandlerFunc, cfg ...config.Config) *Handler {
 	if recorder == nil {
 		recorder = audit.NoopRecorder{}
+	}
+	var runtimeConfig config.Config
+	if len(cfg) > 0 {
+		runtimeConfig = cfg[0]
 	}
 	return &Handler{
 		db:               db,
@@ -35,6 +41,7 @@ func NewHandler(db *gorm.DB, sessionService *session.Service, recorder audit.Rec
 		audit:            recorder,
 		authMiddleware:   authMiddleware,
 		systemMiddleware: systemMiddleware,
+		cfg:              runtimeConfig,
 	}
 }
 
@@ -57,6 +64,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.GET("/users/:id/sessions", h.listUserSessions)
 	admin.POST("/users/:id/logout-all", h.logoutUserSessions)
 	admin.GET("/audit-logs", h.listAuditLogs)
+	admin.GET("/runtime-config", h.runtimeConfig)
 }
 
 func (h *Handler) dashboard(c *gin.Context) {

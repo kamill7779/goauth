@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"goauth/services/identity-service/internal/jwtkey"
 )
 
 const contextClaimsKey = "session_claims"
@@ -39,6 +40,42 @@ func AuthMiddleware(service *Service, publicKey *rsa.PublicKey) gin.HandlerFunc 
 			}
 			return publicKey, nil
 		})
+		if err != nil {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": err.Error()})
+			return
+		}
+
+		claims, ok := token.Claims.(*accessClaims)
+		if !ok || !token.Valid {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+
+		if err := service.validateAccessClaims(c.Request.Context(), *claims); err != nil {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+			return
+		}
+
+		c.Set(contextClaimsKey, *claims)
+		c.Next()
+	}
+}
+
+func AuthMiddlewareWithKeyring(service *Service, keyring *jwtkey.Keyring) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if service == nil || keyring == nil {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid auth configuration"})
+			return
+		}
+
+		header := c.GetHeader("Authorization")
+		tokenString, ok := strings.CutPrefix(header, "Bearer ")
+		if !ok || strings.TrimSpace(tokenString) == "" {
+			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing bearer token"})
+			return
+		}
+
+		token, err := jwt.ParseWithClaims(strings.TrimSpace(tokenString), &accessClaims{}, keyring.Keyfunc)
 		if err != nil {
 			c.AbortWithStatusJSON(stdhttp.StatusUnauthorized, gin.H{"error": err.Error()})
 			return

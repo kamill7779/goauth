@@ -145,11 +145,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		return nil, fmt.Errorf("%w: %v", ErrInvalidUsername, err)
 	}
 
-	nickname := identity.NormalizeNickname(input.Nickname, normalizedUser)
-	displayName := strings.TrimSpace(input.DisplayName)
-	if displayName == "" {
-		displayName = nickname
-	}
+	nickname := identity.NormalizeNickname(input.Nickname, identity.NormalizeNickname(input.DisplayName, normalizedUser))
 
 	if err := s.pwPolicy.Validate(input.Password); err != nil {
 		return nil, err
@@ -167,7 +163,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		Email:           email,
 		EmailVerifiedAt: &now,
 		PasswordHash:    hash,
-		DisplayName:     displayName,
+		DisplayName:     nickname,
 		Status:          store.UserStatusActive,
 	}
 

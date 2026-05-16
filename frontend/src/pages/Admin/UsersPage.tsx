@@ -9,7 +9,6 @@ import type { User } from '../../types/admin';
 const initialCreateForm = {
   username: '',
   nickname: '',
-  displayName: '',
   email: '',
   password: '',
   status: 'active',
@@ -110,7 +109,6 @@ export default function UsersPage() {
         username: createForm.username,
         nickname: createForm.nickname,
         email: createForm.email,
-        display_name: createForm.displayName || createForm.nickname || createForm.username,
         password: createForm.password,
         status: createForm.status,
       } as Parameters<typeof createUser>[0]);
@@ -204,7 +202,7 @@ export default function UsersPage() {
         </button>
       </div>
 
-      <div className="bg-surface-solid rounded-xl border border-line overflow-hidden">
+      <div className="bg-surface-solid rounded-[20px] border border-line overflow-hidden">
         {loading ? (
           <div className="p-6 space-y-4">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -301,15 +299,6 @@ export default function UsersPage() {
               onChange={e => setCreateForm(prev => ({ ...prev, nickname: e.target.value }))}
               className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
               placeholder="展示昵称"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-ink-secondary mb-2">显示名称</label>
-            <input
-              value={createForm.displayName}
-              onChange={e => setCreateForm(prev => ({ ...prev, displayName: e.target.value }))}
-              className="w-full px-3 py-2 text-sm bg-surface-solid border border-line rounded-lg focus:outline-none focus:border-brand text-ink"
-              placeholder="默认使用昵称或用户名"
             />
           </div>
           <div>
