@@ -94,3 +94,7 @@ func (s *Service) isSystemUser(ctx context.Context, userID int64) (bool, error) 
 	}
 	return count > 0, nil
 }
+
+func (s *Service) IsSystemUser(ctx context.Context, userID int64) (bool, error) {
+	return s.isSystemUser(ctx, userID)
+}

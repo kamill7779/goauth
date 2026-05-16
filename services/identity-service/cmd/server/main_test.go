@@ -37,6 +37,7 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 	}{
 		{name: "admin users", method: http.MethodGet, target: "/v1/admin/users"},
 		{name: "admin oauth clients", method: http.MethodGet, target: "/v1/admin/oauth-clients"},
+		{name: "account center", method: http.MethodGet, target: "/v1/account/me"},
 		{name: "authz check", method: http.MethodPost, target: "/v1/authz/check", body: `{"user_id":1,"tenant_id":1,"permission":"project:read"}`},
 		{name: "my permissions", method: http.MethodGet, target: "/v1/tenants/1/my-permissions?user_id=1"},
 	}
@@ -371,6 +372,90 @@ func TestAdminGlobalSessionsListAndSingleRevoke(t *testing.T) {
 	revokedSession := findItemByStringField(t, revokedItems, "id", otherPair.SessionID)
 	if got := stringFromAny(revokedSession["status"]); got != "revoked" {
 		t.Fatalf("revoked session status = %q, want revoked", got)
+	}
+}
+
+func TestAccountMeReturnsCurrentUserAndAdminStatus(t *testing.T) {
+	router, db, sessionService, regularUser, otherUser := newIntegrationRouter(t)
+	regularPair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+	adminPair := issueIntegrationTokens(t, sessionService, *otherUser, 0)
+	makeSystemUser(t, db, otherUser.ID)
+
+	regular := performJSON(t, router, http.MethodGet, "/v1/account/me", "", regularPair.AccessToken)
+	if regular.Code != http.StatusOK {
+		t.Fatalf("regular account status = %d, want %d body=%s", regular.Code, http.StatusOK, regular.Body.String())
+	}
+	regularData := decodeData(t, regular)
+	regularUserData := asMap(t, regularData["user"], "user")
+	if got := stringFromAny(regularUserData["email"]); got != regularUser.Email {
+		t.Fatalf("regular email = %q, want %q", got, regularUser.Email)
+	}
+	if got := boolFromAny(regularData["is_admin"]); got {
+		t.Fatalf("regular is_admin = true, want false")
+	}
+
+	admin := performJSON(t, router, http.MethodGet, "/v1/account/me", "", adminPair.AccessToken)
+	if admin.Code != http.StatusOK {
+		t.Fatalf("admin account status = %d, want %d body=%s", admin.Code, http.StatusOK, admin.Body.String())
+	}
+	adminData := decodeData(t, admin)
+	if got := boolFromAny(adminData["is_admin"]); !got {
+		t.Fatalf("admin is_admin = false, want true")
+	}
+}
+
+func TestAccountSessionsAreScopedToAuthenticatedUser(t *testing.T) {
+	router, _, sessionService, regularUser, otherUser := newIntegrationRouter(t)
+	ownPair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+	otherPair := issueIntegrationTokens(t, sessionService, *otherUser, 0)
+
+	list := performJSON(t, router, http.MethodGet, "/v1/account/sessions", "", ownPair.AccessToken)
+	if list.Code != http.StatusOK {
+		t.Fatalf("account sessions status = %d, want %d body=%s", list.Code, http.StatusOK, list.Body.String())
+	}
+	sessions := asSlice(t, decodeData(t, list)["sessions"], "sessions")
+	ownSession := findItemByStringField(t, sessions, "id", ownPair.SessionID)
+	if got := boolFromAny(ownSession["current"]); !got {
+		t.Fatalf("own current session current = false, want true")
+	}
+	if got := stringFromAny(ownSession["status"]); got != "active" {
+		t.Fatalf("own current session status = %q, want active", got)
+	}
+	if itemWithStringField(sessions, "id", otherPair.SessionID) != nil {
+		t.Fatalf("account sessions leaked other user's session %s in %#v", otherPair.SessionID, sessions)
+	}
+}
+
+func TestAccountSessionRevocationStaysScopedToCurrentUser(t *testing.T) {
+	router, db, sessionService, regularUser, otherUser := newIntegrationRouter(t)
+	ownPair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+	ownSecondPair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+	otherPair := issueIntegrationTokens(t, sessionService, *otherUser, 0)
+
+	revokeOther := performJSON(t, router, http.MethodPost, "/v1/account/sessions/"+otherPair.SessionID+"/revoke", `{}`, ownPair.AccessToken)
+	if revokeOther.Code != http.StatusNotFound {
+		t.Fatalf("revoke other session status = %d, want %d body=%s", revokeOther.Code, http.StatusNotFound, revokeOther.Body.String())
+	}
+	assertSessionStillActive(t, db, otherPair.SessionID)
+
+	revokeOwn := performJSON(t, router, http.MethodPost, "/v1/account/sessions/"+ownSecondPair.SessionID+"/revoke", `{}`, ownPair.AccessToken)
+	if revokeOwn.Code != http.StatusOK {
+		t.Fatalf("revoke own session status = %d, want %d body=%s", revokeOwn.Code, http.StatusOK, revokeOwn.Body.String())
+	}
+	assertSessionRevoked(t, db, ownSecondPair.SessionID)
+	assertSessionStillActive(t, db, ownPair.SessionID)
+
+	logoutAll := performJSON(t, router, http.MethodPost, "/v1/account/logout-all", `{}`, ownPair.AccessToken)
+	if logoutAll.Code != http.StatusOK {
+		t.Fatalf("account logout-all status = %d, want %d body=%s", logoutAll.Code, http.StatusOK, logoutAll.Body.String())
+	}
+	assertSessionRevoked(t, db, ownPair.SessionID)
+	assertSessionRevoked(t, db, ownSecondPair.SessionID)
+	assertSessionStillActive(t, db, otherPair.SessionID)
+
+	revokedAccess := performJSON(t, router, http.MethodGet, "/v1/account/me", "", ownPair.AccessToken)
+	if revokedAccess.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked access status = %d, want %d body=%s", revokedAccess.Code, http.StatusUnauthorized, revokedAccess.Body.String())
 	}
 }
 
@@ -788,13 +873,24 @@ func asMap(t *testing.T, value any, name string) map[string]any {
 func findItemByStringField(t *testing.T, items []any, fieldName, want string) map[string]any {
 	t.Helper()
 
-	for index, item := range items {
-		record := asMap(t, item, "items["+strconv.Itoa(index)+"]")
+	item := itemWithStringField(items, fieldName, want)
+	if item != nil {
+		return item
+	}
+	t.Fatalf("no item with %s = %q in %#v", fieldName, want, items)
+	return nil
+}
+
+func itemWithStringField(items []any, fieldName, want string) map[string]any {
+	for _, item := range items {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
 		if stringFromAny(record[fieldName]) == want {
 			return record
 		}
 	}
-	t.Fatalf("no item with %s = %q in %#v", fieldName, want, items)
 	return nil
 }
 
@@ -803,6 +899,13 @@ func stringFromAny(value any) string {
 		return text
 	}
 	return ""
+}
+
+func boolFromAny(value any) bool {
+	if text, ok := value.(bool); ok {
+		return text
+	}
+	return false
 }
 
 func numberFromAny(value any) int {

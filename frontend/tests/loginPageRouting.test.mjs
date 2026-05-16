@@ -51,6 +51,20 @@ test('buildAuthRoutePath omits empty return_to', () => {
   assert.equal(parsed.searchParams.has('return_to'), false);
 });
 
+test('resolvePostLoginRedirect sends direct logins to account center', () => {
+  assert.deepEqual(loginPage.resolvePostLoginRedirect(''), {
+    mode: 'app',
+    target: '/account',
+  });
+});
+
+test('resolvePostLoginRedirect preserves SSO authorize return_to', () => {
+  assert.deepEqual(loginPage.resolvePostLoginRedirect('/oauth2/authorize?client_id=demo-web'), {
+    mode: 'external',
+    target: '/oauth2/authorize?client_id=demo-web',
+  });
+});
+
 test('normalizeAuthorizeReturnTo accepts cross-origin authorize return_to from configured issuer origin', () => {
   const returnTo = loginPage.normalizeAuthorizeReturnTo(
     'https://identity.example.com/oauth2/authorize?client_id=demo-web&state=opaque-state',

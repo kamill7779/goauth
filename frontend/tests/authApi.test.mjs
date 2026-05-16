@@ -38,6 +38,11 @@ async function importAuthModule(relativePath) {
                 return { ok: true, path, data };
               }
 
+              export async function apiGetV1(path) {
+                globalThis.__authClientCalls.push({ method: 'getV1', path });
+                return { ok: true, path };
+              }
+
               export async function apiGet(path) {
                 globalThis.__authClientCalls.push({ method: 'get', path });
                 return { ok: true, path };
@@ -60,6 +65,7 @@ globalThis.window = {
 };
 
 const { exchangeGitHubLogin, forgotPassword, resetPassword } = await importAuthModule('src/api/auth.ts');
+const account = await importAuthModule('src/api/account.ts');
 
 test('forgotPassword posts email to forgot-password endpoint', async () => {
   globalThis.__authClientCalls.length = 0;
@@ -124,6 +130,32 @@ test('exchangeGitHubLogin posts code to external GitHub exchange endpoint', asyn
       method: 'postV1',
       path: '/external/github/exchange',
       data: { code: 'exchange-code' },
+      options: undefined,
+    },
+  ]);
+});
+
+test('account API uses self-service v1 account routes', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await account.getAccountMe();
+  await account.getAccountSessions();
+  await account.revokeAccountSession('session/with?chars');
+  await account.logoutAllAccountSessions();
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    { method: 'getV1', path: '/account/me' },
+    { method: 'getV1', path: '/account/sessions' },
+    {
+      method: 'postV1',
+      path: '/account/sessions/session%2Fwith%3Fchars/revoke',
+      data: undefined,
+      options: undefined,
+    },
+    {
+      method: 'postV1',
+      path: '/account/logout-all',
+      data: undefined,
       options: undefined,
     },
   ]);

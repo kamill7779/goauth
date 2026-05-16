@@ -178,6 +178,14 @@ export function buildAuthRoutePath(
   return query ? `${pathname}?${query}` : pathname
 }
 
+export function resolvePostLoginRedirect(returnTo: string): { mode: 'app' | 'external'; target: string } {
+  const target = returnTo.trim()
+  if (target) {
+    return { mode: 'external', target }
+  }
+  return { mode: 'app', target: '/account' }
+}
+
 function Spinner() {
   return (
     <span
@@ -346,11 +354,12 @@ export default function LoginPage() {
       const result = await login({ identifier: form.identifier || form.email, password: form.password }, { captchaToken })
       window.localStorage.setItem('access_token', result.access_token)
       window.localStorage.setItem('refresh_token', result.refresh_token)
-      if (returnTo) {
-        window.location.assign(returnTo)
+      const redirect = resolvePostLoginRedirect(returnTo)
+      if (redirect.mode === 'external') {
+        window.location.assign(redirect.target)
         return
       }
-      navigate('/admin')
+      navigate(redirect.target)
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
     } finally {

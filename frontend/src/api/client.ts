@@ -76,6 +76,11 @@ export async function apiPostV1<T>(path: string, data?: unknown, options?: ApiRe
   return response.data.data;
 }
 
+export async function apiGetV1<T>(path: string): Promise<T> {
+  const response = await v1Client.get<ApiSuccessResponse<T>>(path);
+  return response.data.data;
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const response = await client.get<ApiSuccessResponse<T>>(path);
   return response.data.data;
