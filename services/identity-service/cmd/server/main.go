@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/rsa"
 	"fmt"
 	"log"
@@ -23,6 +22,7 @@ import (
 	"goauth/services/identity-service/internal/idp"
 	githubidp "goauth/services/identity-service/internal/idp/github"
 	"goauth/services/identity-service/internal/invite"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/lockout"
 	"goauth/services/identity-service/internal/logout"
 	"goauth/services/identity-service/internal/mailer"
@@ -78,7 +78,7 @@ func run() error {
 		return fmt.Errorf("bootstrap admin: %w", err)
 	}
 
-	privateKey, err := loadSigningKey(cfg)
+	keyring, err := loadSigningKeyring(cfg)
 	if err != nil {
 		return fmt.Errorf("load signing key: %w", err)
 	}
@@ -96,7 +96,7 @@ func run() error {
 		}
 	}()
 
-	router := buildRouter(cfg, db, redisClient, privateKey)
+	router := buildRouterWithKeyring(cfg, db, redisClient, keyring)
 	if err := router.Run(cfg.HTTPAddr); err != nil {
 		return fmt.Errorf("run server: %w", err)
 	}
@@ -112,12 +112,18 @@ func requireRedis(cfg config.Config) (*redis.Client, error) {
 }
 
 func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
-	if cfg.JWTPrivateKeyPath != "" {
-		return session.LoadRSAPrivateKey(cfg.JWTPrivateKeyPath)
+	keyring, err := loadSigningKeyring(cfg)
+	if err != nil {
+		return nil, err
 	}
+	return keyring.ActivePrivateKey(), nil
+}
 
-	log.Printf("JWT_PRIVATE_KEY_PATH is empty, generating ephemeral RSA key for local development")
-	return rsa.GenerateKey(rand.Reader, 2048)
+func loadSigningKeyring(cfg config.Config) (*jwtkey.Keyring, error) {
+	if strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
+		log.Printf("JWT signing key path is empty, generating ephemeral RSA key for local development")
+	}
+	return jwtkey.Load(cfg)
 }
 
 func bootstrapAdminUser(db *gorm.DB, cfg config.Config) error {
@@ -153,15 +159,24 @@ func bootstrapAdminUser(db *gorm.DB, cfg config.Config) error {
 }
 
 func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, privateKey *rsa.PrivateKey) *gin.Engine {
-	sessionService := session.NewService(db, cfg, privateKey)
-	sessionHandler := session.NewHandler(sessionService, &privateKey.PublicKey)
+	var keyring *jwtkey.Keyring
+	if privateKey != nil {
+		keyring, _ = jwtkey.NewKeyring(cfg.JWTKeyID, map[string]*rsa.PrivateKey{cfg.JWTKeyID: privateKey})
+	}
+	return buildRouterWithKeyring(cfg, db, redisClient, keyring)
+}
+
+func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring) *gin.Engine {
+	privateKey := keyring.ActivePrivateKey()
+	sessionService := session.NewServiceWithKeyring(db, cfg, keyring)
+	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
 	rateLimiter := ratelimit.NewService(redisClient)
 	sessionHandler.SetRateLimiter(rateLimiter)
-	authMiddleware := session.AuthMiddleware(sessionService, &privateKey.PublicKey)
+	authMiddleware := session.AuthMiddlewareWithKeyring(sessionService, keyring)
 	systemMiddleware := session.SystemUserMiddleware(sessionService)
 	auditService := audit.NewService(db)
 	sessionService.SetAuditRecorder(auditService)
-	oidcService := oidc.NewService(db, cfg, privateKey)
+	oidcService := oidc.NewServiceWithKeyring(db, cfg, keyring)
 	oidcService.SetAuditRecorder(auditService)
 	oidcService.SetRateLimiter(rateLimiter)
 	oidcService.SetBrowserLoginURL(cfg.BrowserLoginURL)
@@ -177,7 +192,7 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	captchaVerifier := captcha.NewVerifier(captcha.Provider(cfg.CaptchaProvider), cfg.CaptchaSecretKey)
 
 	// Back-channel logout coordinator.
-	logoutCoord := logout.NewCoordinator(db, privateKey, cfg.PublicIssuerURL, cfg.JWTKeyID)
+	logoutCoord := logout.NewCoordinatorWithKeyring(db, keyring, cfg.PublicIssuerURL)
 	logoutCoord.SetAuditRecorder(auditService)
 	sessionService.SetLogoutCoordinator(logoutCoord)
 

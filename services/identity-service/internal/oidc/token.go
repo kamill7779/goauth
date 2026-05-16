@@ -346,6 +346,9 @@ func (h *Handler) currentLogoutCookieSessionID(c *gin.Context) string {
 		return ""
 	}
 	claims, err := session.ParseOIDCAuthorizeCookie(cookieValue, h.service.publicKey)
+	if h.service.keyring != nil {
+		claims, err = session.ParseOIDCAuthorizeCookieWithKeyring(cookieValue, h.service.keyring)
+	}
 	if err != nil {
 		return ""
 	}

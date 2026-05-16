@@ -85,10 +85,36 @@ func (h *Handler) runtimeConfigItem(definition config.EnvDefinition, production 
 			message = "open registration is enabled in production"
 		}
 	case "JWT_PRIVATE_KEY_PATH":
-		if production && strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" {
-			status = "error"
-			message = "persistent signing key is required in production"
+		if production && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
 			required = true
+			if strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" {
+				status = "error"
+				message = "persistent signing key is required in production"
+			}
+		}
+	case "JWT_KEY_ID":
+		if production && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
+			required = true
+			if strings.TrimSpace(cfg.JWTKeyID) == "" {
+				status = "error"
+				message = "required with JWT_PRIVATE_KEY_PATH"
+			}
+		}
+	case "JWT_KEYSET_DIR":
+		if production && strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" {
+			required = true
+			if strings.TrimSpace(cfg.JWTKeysetDir) == "" {
+				status = "error"
+				message = "persistent signing keyset is required in production"
+			}
+		}
+	case "JWT_ACTIVE_KEY_ID":
+		if strings.TrimSpace(cfg.JWTKeysetDir) != "" {
+			required = true
+			if !configured {
+				status = "error"
+				message = "required with JWT_KEYSET_DIR"
+			}
 		}
 	case "MAILER_PROVIDER":
 		if production && strings.EqualFold(strings.TrimSpace(cfg.MailerProvider), "noop") {
@@ -167,6 +193,10 @@ func (h *Handler) configured(key string) bool {
 		return strings.TrimSpace(cfg.JWTPrivateKeyPath) != ""
 	case "JWT_KEY_ID":
 		return strings.TrimSpace(cfg.JWTKeyID) != ""
+	case "JWT_KEYSET_DIR":
+		return strings.TrimSpace(cfg.JWTKeysetDir) != ""
+	case "JWT_ACTIVE_KEY_ID":
+		return strings.TrimSpace(cfg.JWTActiveKeyID) != ""
 	case "ACCESS_TOKEN_TTL":
 		return cfg.AccessTokenTTL > 0
 	case "BROWSER_SESSION_TTL":

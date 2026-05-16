@@ -21,8 +21,10 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 | `BROWSER_COOKIE_SECURE` | core | derived | optional | no | no | Defaults from `PUBLIC_ISSUER_URL` scheme. |
 | `MYSQL_DSN` | storage | empty | required | yes | no | Empty uses in-memory SQLite only for local tests/dev. |
 | `REDIS_URL` | storage | empty | required | yes | no | Empty defaults to local Redis in code paths that require Redis. |
-| `JWT_PRIVATE_KEY_PATH` | tokens | empty | required | yes | no | Empty generates an ephemeral local key; do not use empty in production. |
-| `JWT_KEY_ID` | tokens | empty | required | no | no | Stable `kid` for JWKS and token headers. |
+| `JWT_PRIVATE_KEY_PATH` | tokens | empty | conditional | yes | no | Legacy single-key PEM path. Use with `JWT_KEY_ID`; empty generates an ephemeral local key only when no keyset is configured. |
+| `JWT_KEY_ID` | tokens | empty | conditional | no | no | Legacy single-key `kid` for JWKS and token headers. |
+| `JWT_KEYSET_DIR` | tokens | empty | conditional | yes | no | Directory of RSA private keys named `<kid>.pem`; enables JWT key rotation. |
+| `JWT_ACTIVE_KEY_ID` | tokens | empty | conditional | no | no | Active signing `kid` from `JWT_KEYSET_DIR`; other keys remain verify-only and stay in JWKS. |
 | `ACCESS_TOKEN_TTL` | tokens | `15m` | optional | no | no | Access token lifetime. |
 | `BROWSER_SESSION_TTL` | tokens | `12h` | optional | no | no | Browser SSO session lifetime. |
 | `REFRESH_TOKEN_TTL` | tokens | `720h` | optional | no | no | Refresh token lifetime. |
@@ -75,7 +77,7 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 
 1. Set `APP_ENV=production`.
 2. Set HTTPS `PUBLIC_ISSUER_URL` and verify `/.well-known/openid-configuration` uses the same issuer.
-3. Provide persistent `MYSQL_DSN`, `REDIS_URL`, `JWT_PRIVATE_KEY_PATH`, and `JWT_KEY_ID`.
+3. Provide persistent `MYSQL_DSN`, `REDIS_URL`, and either `JWT_PRIVATE_KEY_PATH` + `JWT_KEY_ID` or `JWT_KEYSET_DIR` + `JWT_ACTIVE_KEY_ID`.
 4. Configure `MAILER_PROVIDER=smtp`, `SMTP_HOST`, `SMTP_FROM`, and verify a real email flow.
 5. Configure CAPTCHA only as a complete provider/site-key/secret-key set.
 6. Remove bootstrap admin secrets after the first administrator is created.

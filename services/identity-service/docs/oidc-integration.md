@@ -111,7 +111,7 @@ grant_type=refresh_token&refresh_token=<refresh_token>
 
 ## JWKS 与 Token 校验
 
-`/oauth2/jwks` 返回单个 RSA 公钥，`alg=RS256`，`kid` 来自 `JWT_KEY_ID`。如果本地开发未配置 `JWT_PRIVATE_KEY_PATH`，服务重启会换 key，调用方需要重新拉取 JWKS。
+`/oauth2/jwks` 返回 RSA 公钥集合，`alg=RS256`。单 key 模式下 `kid` 来自 `JWT_KEY_ID`；轮换模式下 `JWT_KEYSET_DIR` 内所有 `<kid>.pem` 都会发布为可验证 key，`JWT_ACTIVE_KEY_ID` 指定新 token 使用的 active key。调用方应按 JWT header 的 `kid` 选择 JWKS key，并缓存/刷新 JWKS。如果本地开发未配置持久 key，服务重启会换 key，调用方需要重新拉取 JWKS。
 
 校验 ID Token：
 

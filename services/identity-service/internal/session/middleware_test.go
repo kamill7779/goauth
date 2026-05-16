@@ -1,6 +1,8 @@
 package session
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -9,6 +11,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/jwtkey"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
 )
@@ -127,6 +131,44 @@ func TestAuthMiddlewareRejectsOIDCAccessTokenClass(t *testing.T) {
 	assertProtectedStatus(t, router, raw, http.StatusUnauthorized)
 }
 
+func TestAuthMiddlewareWithKeyringAcceptsPreviousKid(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	baseService, user := newTestService(t)
+	oldKey := mustMiddlewareKey(t)
+	newKey := mustMiddlewareKey(t)
+	cfg := config.Config{
+		JWTKeyID:        "previous-kid",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 30 * 24 * time.Hour,
+	}
+	oldKeyring, err := jwtkey.NewKeyring("previous-kid", map[string]*rsa.PrivateKey{"previous-kid": oldKey})
+	if err != nil {
+		t.Fatalf("NewKeyring(old) error = %v", err)
+	}
+	oldService := NewServiceWithKeyring(baseService.db, cfg, oldKeyring)
+	pair := issueSessionPair(t, oldService, *user, 0)
+
+	rotatedKeyring, err := jwtkey.NewKeyring("active-kid", map[string]*rsa.PrivateKey{
+		"active-kid":   newKey,
+		"previous-kid": oldKey,
+	})
+	if err != nil {
+		t.Fatalf("NewKeyring(rotated) error = %v", err)
+	}
+	rotatedService := NewServiceWithKeyring(baseService.db, config.Config{
+		JWTKeyID:        "active-kid",
+		AccessTokenTTL:  15 * time.Minute,
+		RefreshTokenTTL: 30 * 24 * time.Hour,
+	}, rotatedKeyring)
+	router := gin.New()
+	router.GET("/protected", AuthMiddlewareWithKeyring(rotatedService, rotatedKeyring), func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	assertProtectedStatus(t, router, pair.AccessToken, http.StatusOK)
+}
+
 func TestSystemUserMiddlewareRejectsSystemRoleInDisabledTenant(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -214,4 +256,13 @@ func assertSystemProtectedStatus(t *testing.T, router *gin.Engine, accessToken s
 	if recorder.Code != want {
 		t.Fatalf("status = %d, want %d body=%s", recorder.Code, want, recorder.Body.String())
 	}
+}
+
+func mustMiddlewareKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+	return key
 }
