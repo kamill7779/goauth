@@ -65,6 +65,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.POST("/users/:id/logout-all", h.logoutUserSessions)
 	admin.GET("/audit-logs", h.listAuditLogs)
 	admin.GET("/runtime-config", h.runtimeConfig)
+	admin.GET("/access-overview", h.accessOverview)
 }
 
 func (h *Handler) dashboard(c *gin.Context) {
