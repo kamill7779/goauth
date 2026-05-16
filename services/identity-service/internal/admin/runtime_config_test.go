@@ -118,11 +118,12 @@ func TestRuntimeConfigFlagsProductionRisks(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	handler := NewHandler(nil, nil, nil, nil, nil, config.Config{
-		AppEnv:          "production",
-		PublicIssuerURL: "http://auth.example.com",
-		MailerProvider:  "smtp",
-		CaptchaProvider: "turnstile",
-		CaptchaSiteKey:  "site-key",
+		AppEnv:           "production",
+		PublicIssuerURL:  "http://auth.example.com",
+		RegistrationMode: "open",
+		MailerProvider:   "smtp",
+		CaptchaProvider:  "turnstile",
+		CaptchaSiteKey:   "site-key",
 	})
 
 	router := gin.New()
@@ -139,10 +140,13 @@ func TestRuntimeConfigFlagsProductionRisks(t *testing.T) {
 	body := rec.Body.String()
 	for _, expected := range []string{
 		`"key":"PUBLIC_ISSUER_URL"`,
+		`"key":"REGISTRATION_MODE"`,
+		`"open registration is enabled in production"`,
 		`"key":"JWT_PRIVATE_KEY_PATH"`,
 		`"key":"SMTP_HOST"`,
 		`"key":"CAPTCHA_SECRET_KEY"`,
 		`"status":"error"`,
+		`"status":"warning"`,
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("runtime config missing %s: %s", expected, body)
