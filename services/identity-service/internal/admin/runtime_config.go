@@ -21,14 +21,23 @@ type runtimeConfigItem struct {
 	Message      string `json:"message"`
 }
 
+type runtimeConfigSummary struct {
+	Total   int `json:"total"`
+	OK      int `json:"ok"`
+	Warning int `json:"warning"`
+	Error   int `json:"error"`
+}
+
 func (h *Handler) runtimeConfig(c *gin.Context) {
 	cfg := h.cfg
 	production := strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")
 	groups := map[string][]runtimeConfigItem{}
 	order := []string{}
+	summary := runtimeConfigSummary{}
 
 	for _, definition := range config.EnvDefinitions() {
 		item := h.runtimeConfigItem(definition, production)
+		summary.add(item.Status)
 		if _, exists := groups[item.Group]; !exists {
 			order = append(order, item.Group)
 		}
@@ -45,8 +54,21 @@ func (h *Handler) runtimeConfig(c *gin.Context) {
 
 	httpserver.Success(c, http.StatusOK, gin.H{
 		"environment": defaultRuntimeString(cfg.AppEnv, "development"),
+		"summary":     summary,
 		"groups":      responseGroups,
 	})
+}
+
+func (s *runtimeConfigSummary) add(status string) {
+	s.Total++
+	switch status {
+	case "error":
+		s.Error++
+	case "warning":
+		s.Warning++
+	default:
+		s.OK++
+	}
 }
 
 func (h *Handler) runtimeConfigItem(definition config.EnvDefinition, production bool) runtimeConfigItem {

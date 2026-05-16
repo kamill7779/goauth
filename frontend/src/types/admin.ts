@@ -136,8 +136,16 @@ export interface RuntimeConfigGroup {
   items: RuntimeConfigItem[];
 }
 
+export interface RuntimeConfigSummary {
+  total: number;
+  ok: number;
+  warning: number;
+  error: number;
+}
+
 export interface RuntimeConfigPayload {
   environment: string;
+  summary?: RuntimeConfigSummary;
   groups: RuntimeConfigGroup[];
 }
 

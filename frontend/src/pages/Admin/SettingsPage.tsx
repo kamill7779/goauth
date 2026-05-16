@@ -24,6 +24,14 @@ export interface RuntimeDiagnosticItem {
   readOnly: true
 }
 
+export interface RuntimeDiagnosticSummaryItem {
+  label: string
+  value: string
+  description: string
+  severity: RuntimeConfigStatus
+  readOnly: true
+}
+
 export interface RuntimeDiagnosticGroup {
   section: string
   items: RuntimeDiagnosticItem[]
@@ -114,6 +122,60 @@ export function buildRuntimeDiagnosticGroups(runtimeConfig: RuntimeConfigPayload
   }))
 }
 
+export function buildRuntimeDiagnosticSummary(runtimeConfig: RuntimeConfigPayload | null): RuntimeDiagnosticSummaryItem[] {
+  if (!runtimeConfig) {
+    return []
+  }
+  const summary = runtimeConfig.summary ?? summarizeRuntimeGroups(runtimeConfig)
+  return [
+    {
+      label: '运行环境',
+      value: runtimeConfig.environment || 'development',
+      description: '来自 APP_ENV',
+      severity: 'ok',
+      readOnly: true,
+    },
+    {
+      label: '配置项',
+      value: `${summary.total}`,
+      description: `${summary.ok} 项正常`,
+      severity: 'ok',
+      readOnly: true,
+    },
+    {
+      label: '错误',
+      value: `${summary.error}`,
+      description: '生产发布前必须处理',
+      severity: summary.error > 0 ? 'error' : 'ok',
+      readOnly: true,
+    },
+    {
+      label: '警告',
+      value: `${summary.warning}`,
+      description: '建议在公开流量前确认',
+      severity: summary.warning > 0 ? 'warning' : 'ok',
+      readOnly: true,
+    },
+  ]
+}
+
+function summarizeRuntimeGroups(runtimeConfig: RuntimeConfigPayload): NonNullable<RuntimeConfigPayload['summary']> {
+  const summary = { total: 0, ok: 0, warning: 0, error: 0 }
+  for (const group of runtimeConfig.groups) {
+    for (const item of group.items) {
+      summary.total += 1
+      if (item.status === 'error') {
+        summary.error += 1
+      } else if (item.status === 'warning') {
+        summary.warning += 1
+      } else {
+        summary.ok += 1
+      }
+    }
+  }
+  return summary
+}
+
 function registrationModeLabel(mode: PublicAuthConfig['registration']['mode']): string {
   if (mode === 'invite_only') {
     return '仅邀请'
@@ -172,6 +234,16 @@ function severityClass(status: RuntimeConfigStatus): string {
   return 'border-line bg-surface-muted text-ink'
 }
 
+function summaryCardClass(status: RuntimeConfigStatus): string {
+  if (status === 'error') {
+    return 'border-red-200 bg-red-50 text-red-700'
+  }
+  if (status === 'warning') {
+    return 'border-amber-200 bg-amber-50 text-amber-700'
+  }
+  return 'border-line bg-surface-solid text-ink'
+}
+
 export default function SettingsPage() {
   const [config, setConfig] = useState<PublicAuthConfig | null>(null)
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfigPayload | null>(null)
@@ -210,6 +282,7 @@ export default function SettingsPage() {
 
   const groups = runtimeStatusGroupsForLoadedConfig(config)
   const diagnosticGroups = buildRuntimeDiagnosticGroups(runtimeConfig)
+  const diagnosticSummary = buildRuntimeDiagnosticSummary(runtimeConfig)
 
   return (
     <div className="animate-[fadeInUp_0.4s_ease]">
@@ -221,6 +294,18 @@ export default function SettingsPage() {
       {error && (
         <div className="max-w-2xl mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {error}
+        </div>
+      )}
+
+      {diagnosticSummary.length > 0 && (
+        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {diagnosticSummary.map(item => (
+            <div key={item.label} className={`rounded-xl border px-4 py-3 ${summaryCardClass(item.severity)}`}>
+              <p className="text-xs font-medium opacity-80">{item.label}</p>
+              <p className="mt-1 text-2xl font-semibold">{item.value}</p>
+              <p className="mt-1 text-xs opacity-75">{item.description}</p>
+            </div>
+          ))}
         </div>
       )}
 

@@ -168,3 +168,24 @@ test('buildRuntimeDiagnosticGroups maps admin runtime config risks into read-onl
   assert.equal(flatItems.find(item => item.label === 'CAPTCHA_SITE_KEY').value, '正常');
   assert.equal(flatItems.every(item => item.readOnly), true);
 });
+
+test('buildRuntimeDiagnosticSummary prefers backend summary and labels deployment state', () => {
+  const summary = settingsPage.buildRuntimeDiagnosticSummary({
+    environment: 'production',
+    summary: {
+      total: 8,
+      ok: 6,
+      warning: 1,
+      error: 1,
+    },
+    groups: [],
+  });
+
+  assert.deepEqual(summary.map(item => [item.label, item.value, item.severity]), [
+    ['运行环境', 'production', 'ok'],
+    ['配置项', '8', 'ok'],
+    ['错误', '1', 'error'],
+    ['警告', '1', 'warning'],
+  ]);
+  assert.equal(summary.every(item => item.readOnly), true);
+});
