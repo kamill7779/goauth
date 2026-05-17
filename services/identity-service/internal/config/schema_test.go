@@ -8,10 +8,9 @@ import (
 	"testing"
 )
 
-func TestEnvDefinitionsCoverEnvExample(t *testing.T) {
-	definitions := EnvDefinitions()
+func TestEnvDefinitionsHaveStableKeys(t *testing.T) {
 	byName := map[string]EnvDefinition{}
-	for _, definition := range definitions {
+	for _, definition := range EnvDefinitions() {
 		if strings.TrimSpace(definition.Name) == "" {
 			t.Fatalf("env definition has empty name: %+v", definition)
 		}
@@ -20,24 +19,14 @@ func TestEnvDefinitionsCoverEnvExample(t *testing.T) {
 		}
 		byName[definition.Name] = definition
 	}
-
-	envExampleKeys := readEnvExampleKeys(t)
-	for _, key := range envExampleKeys {
-		if _, ok := byName[key]; !ok {
-			t.Fatalf("%s is present in .env.example but missing from EnvDefinitions()", key)
-		}
-	}
 }
 
-func TestEnvDefinitionsAreDocumented(t *testing.T) {
-	keys := mapEnvDefinitionsByName()
-	documented := readBacktickKeys(t, filepath.Join("..", "..", "..", "..", "docs", "configuration.md"))
+func TestEnvExampleMatchesEnvDefinitions(t *testing.T) {
+	assertSameEnvKeys(t, "services/identity-service/.env.example", readEnvExampleKeys(t), envDefinitionKeys())
+}
 
-	for key := range keys {
-		if !documented[key] {
-			t.Fatalf("%s is present in EnvDefinitions() but missing from docs/configuration.md", key)
-		}
-	}
+func TestConfigurationMatrixMatchesEnvDefinitions(t *testing.T) {
+	assertSameEnvKeys(t, "docs/configuration.md", readConfigurationMatrixKeys(t), envDefinitionKeys())
 }
 
 func TestDockerComposePassesAllRuntimeEnvDefinitions(t *testing.T) {
@@ -156,21 +145,32 @@ func readEnvExampleKeys(t *testing.T) []string {
 	return keys
 }
 
-func readBacktickKeys(t *testing.T, path string) map[string]bool {
+func readConfigurationMatrixKeys(t *testing.T) []string {
 	t.Helper()
 
+	path := filepath.Join("..", "..", "..", "..", "docs", "configuration.md")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
 
-	result := map[string]bool{}
-	for _, definition := range EnvDefinitions() {
-		if strings.Contains(string(raw), "`"+definition.Name+"`") {
-			result[definition.Name] = true
+	keys := []string{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 2 {
+			continue
+		}
+		key := strings.Trim(strings.TrimSpace(cells[1]), "`")
+		if key != "" {
+			keys = append(keys, key)
 		}
 	}
-	return result
+	sort.Strings(keys)
+	return keys
 }
 
 func readComposeEnvKeys(t *testing.T) map[string]bool {
@@ -196,4 +196,39 @@ func readComposeEnvKeys(t *testing.T) map[string]bool {
 		}
 	}
 	return keys
+}
+
+func envDefinitionKeys() []string {
+	definitions := EnvDefinitions()
+	keys := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		keys = append(keys, definition.Name)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func assertSameEnvKeys(t *testing.T, source string, got, want []string) {
+	t.Helper()
+
+	gotSet := sliceSet(got)
+	wantSet := sliceSet(want)
+	for _, key := range want {
+		if !gotSet[key] {
+			t.Fatalf("%s missing %s from EnvDefinitions()", source, key)
+		}
+	}
+	for _, key := range got {
+		if !wantSet[key] {
+			t.Fatalf("%s contains %s but EnvDefinitions() does not", source, key)
+		}
+	}
+}
+
+func sliceSet(values []string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		result[value] = true
+	}
+	return result
 }
