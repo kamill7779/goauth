@@ -83,4 +83,3 @@ Admin Console
 - 前端：`npm run test:admin`
 - 构建：`npm run build`
 - 全量：`go test ./...`
-
