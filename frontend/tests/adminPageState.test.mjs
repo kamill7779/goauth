@@ -27,6 +27,7 @@ async function importBundledTsx(relativePath, prefix) {
 const usersPage = await importBundledTsx('src/pages/Admin/UsersPage.tsx', 'goauth-users-page-');
 const rolesPage = await importBundledTsx('src/pages/Admin/RolesPage.tsx', 'goauth-roles-page-');
 const settingsPage = await importBundledTsx('src/pages/Admin/SettingsPage.tsx', 'goauth-settings-page-');
+const securityPage = await importBundledTsx('src/pages/Admin/SecurityPage.tsx', 'goauth-security-page-');
 
 test('planUserListRefreshAfterCreate avoids stale-page refetch when current page is not first page', () => {
   assert.deepEqual(usersPage.planUserListRefreshAfterCreate(1), {
@@ -167,4 +168,101 @@ test('buildRuntimeDiagnosticGroups maps admin runtime config risks into read-onl
   assert.equal(flatItems.find(item => item.label === 'JWT_PRIVATE_KEY_PATH').severity, 'error');
   assert.equal(flatItems.find(item => item.label === 'CAPTCHA_SITE_KEY').value, '正常');
   assert.equal(flatItems.every(item => item.readOnly), true);
+});
+
+test('buildRuntimeDiagnosticSummary prefers backend summary and labels deployment state', () => {
+  const summary = settingsPage.buildRuntimeDiagnosticSummary({
+    environment: 'production',
+    summary: {
+      total: 8,
+      ok: 6,
+      warning: 1,
+      error: 1,
+    },
+    groups: [],
+  });
+
+  assert.deepEqual(summary.map(item => [item.label, item.value, item.severity]), [
+    ['运行环境', 'production', 'ok'],
+    ['配置项', '8', 'ok'],
+    ['错误', '1', 'error'],
+    ['警告', '1', 'warning'],
+  ]);
+  assert.equal(summary.every(item => item.readOnly), true);
+});
+
+test('buildAccessSummaryCards maps access overview counts into compact status cards', () => {
+  const cards = securityPage.buildAccessSummaryCards({
+    summary: {
+      total_tenants: 2,
+      active_tenants: 1,
+      active_members: 12,
+      roles: 3,
+      permissions: 9,
+      oauth_clients: 2,
+      auto_provision_clients: 1,
+      default_membership_slugs: 2,
+    },
+    risks: [{ severity: 'error' }, { severity: 'warning' }],
+  });
+
+  assert.deepEqual(cards.map(card => [card.label, card.value, card.severity]), [
+    ['活跃租户', '1 / 2', 'ok'],
+    ['活跃成员', '12', 'ok'],
+    ['角色 / 权限', '3 / 9', 'ok'],
+    ['风险', '2', 'error'],
+  ]);
+  assert.equal(cards.every(card => card.readOnly), true);
+});
+
+test('buildTenantAccessRows maps tenant overview into readable table rows', () => {
+  const rows = securityPage.buildTenantAccessRows([
+    {
+      id: 1,
+      name: 'System',
+      slug: 'system',
+      status: 'active',
+      members_count: 4,
+      roles_count: 2,
+      permissions_count: 7,
+      oauth_clients_count: 1,
+    },
+    {
+      id: 2,
+      name: 'Disabled',
+      slug: 'disabled',
+      status: 'disabled',
+      members_count: 0,
+      roles_count: 0,
+      permissions_count: 0,
+      oauth_clients_count: 0,
+    },
+  ]);
+
+  assert.deepEqual(rows.map(row => [row.slug, row.statusLabel, row.statusTone, row.members, row.rbac]), [
+    ['system', '启用', 'ok', '4', '2 / 7'],
+    ['disabled', '停用', 'warning', '0', '0 / 0'],
+  ]);
+});
+
+test('buildAccessRiskRows keeps risk severity and provides stable labels', () => {
+  const rows = securityPage.buildAccessRiskRows([
+    {
+      code: 'default_tenant_missing',
+      severity: 'error',
+      message: 'default membership tenant slug does not exist',
+      target: 'missing',
+    },
+    {
+      code: 'role_without_permissions',
+      severity: 'warning',
+      message: 'role has no permissions',
+      target: 'system:empty',
+    },
+  ]);
+
+  assert.deepEqual(rows.map(row => [row.title, row.severityLabel, row.severity]), [
+    ['默认入组租户不存在', '错误', 'error'],
+    ['角色没有权限', '警告', 'warning'],
+  ]);
 });

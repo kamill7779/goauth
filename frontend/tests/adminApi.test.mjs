@@ -115,3 +115,7 @@ test('oauth client admin routes encode client ids before building paths', () => 
 test('runtime config admin route is stable', () => {
   assert.equal(admin.runtimeConfigPath(), '/admin/runtime-config');
 });
+
+test('access overview admin route is stable', () => {
+  assert.equal(admin.accessOverviewPath(), '/admin/access-overview');
+});

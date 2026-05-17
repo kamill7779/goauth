@@ -2,7 +2,7 @@ import type {
   User, Tenant, Permission, OAuthClient, Session, AuditLog,
   DashboardPayload, PaginatedResponse,
   CreateUserInput, CreateTenantInput, CreateRoleInput, CreateOAuthClientInput,
-  RuntimeConfigPayload,
+  RuntimeConfigPayload, AccessOverviewPayload,
 } from '../types/admin';
 import { createAdminHttpClient } from './adminHttp';
 import type { AdminHttpError } from './adminHttp';
@@ -66,6 +66,10 @@ export function runtimeConfigPath(): string {
   return '/admin/runtime-config';
 }
 
+export function accessOverviewPath(): string {
+  return '/admin/access-overview';
+}
+
 export function classifyAdminAccessError(error: unknown): AdminAccessFailure {
   const status = (error as Partial<AdminHttpError> | undefined)?.status;
   if (status === 401) {
@@ -104,6 +108,9 @@ export const getDashboard = () =>
 
 export const getRuntimeConfig = () =>
   getRaw(runtimeConfigPath()).then(asSingle<RuntimeConfigPayload>);
+
+export const getAccessOverview = () =>
+  getRaw(accessOverviewPath()).then(asSingle<AccessOverviewPayload>);
 
 export const getUsers = (params?: { search?: string; status?: string; sort?: string; tenant_id?: number; role_id?: number; page?: number; page_size?: number }) =>
   getRaw('/admin/users', params).then((body) => {

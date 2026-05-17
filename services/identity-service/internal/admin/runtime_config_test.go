@@ -69,6 +69,12 @@ func TestRuntimeConfigSummarizesConfigurationWithoutSecrets(t *testing.T) {
 	var envelope struct {
 		Data struct {
 			Environment string `json:"environment"`
+			Summary     struct {
+				Total   int `json:"total"`
+				OK      int `json:"ok"`
+				Warning int `json:"warning"`
+				Error   int `json:"error"`
+			} `json:"summary"`
 			Groups      []struct {
 				Key   string `json:"key"`
 				Items []struct {
@@ -85,6 +91,15 @@ func TestRuntimeConfigSummarizesConfigurationWithoutSecrets(t *testing.T) {
 	}
 	if envelope.Data.Environment != "production" {
 		t.Fatalf("environment = %q, want production", envelope.Data.Environment)
+	}
+	if envelope.Data.Summary.Total == 0 {
+		t.Fatal("summary.total should count runtime config items")
+	}
+	if envelope.Data.Summary.Warning == 0 {
+		t.Fatal("summary.warning should count production warnings")
+	}
+	if envelope.Data.Summary.OK == 0 {
+		t.Fatal("summary.ok should count healthy items")
 	}
 
 	items := map[string]struct {

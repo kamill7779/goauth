@@ -136,9 +136,72 @@ export interface RuntimeConfigGroup {
   items: RuntimeConfigItem[];
 }
 
+export interface RuntimeConfigSummary {
+  total: number;
+  ok: number;
+  warning: number;
+  error: number;
+}
+
 export interface RuntimeConfigPayload {
   environment: string;
+  summary?: RuntimeConfigSummary;
   groups: RuntimeConfigGroup[];
+}
+
+export interface AccessOverviewSummary {
+  total_tenants: number;
+  active_tenants: number;
+  active_members: number;
+  roles: number;
+  permissions: number;
+  oauth_clients: number;
+  auto_provision_clients: number;
+  default_membership_slugs: number;
+}
+
+export interface AccessOverviewDefaultMembership {
+  slug: string;
+  found: boolean;
+  status: string;
+}
+
+export interface AccessOverviewTenant {
+  id: number;
+  name: string;
+  slug: string;
+  status: string;
+  members_count: number;
+  roles_count: number;
+  permissions_count: number;
+  oauth_clients_count: number;
+}
+
+export interface AccessOverviewOAuthClient {
+  client_id: string;
+  name: string;
+  tenant_slug: string;
+  tenant_status: string;
+  status: string;
+  auto_provision_members: boolean;
+  allowed_scopes: string[];
+}
+
+export type AccessOverviewRiskSeverity = 'error' | 'warning' | 'info';
+
+export interface AccessOverviewRisk {
+  code: string;
+  severity: AccessOverviewRiskSeverity;
+  message: string;
+  target: string;
+}
+
+export interface AccessOverviewPayload {
+  summary: AccessOverviewSummary;
+  default_memberships: AccessOverviewDefaultMembership[];
+  tenants: AccessOverviewTenant[];
+  oauth_clients: AccessOverviewOAuthClient[];
+  risks: AccessOverviewRisk[];
 }
 
 export interface CreateUserInput {
