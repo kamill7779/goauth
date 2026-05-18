@@ -273,7 +273,6 @@ export async function logoutAllAccountSessions(): Promise<{ revoked: boolean }> 
 export interface UpdateProfileData {
   nickname: string;
   display_name: string;
-  username: string;
   email: string;
   locale: string;
   timezone: string;
@@ -281,7 +280,6 @@ export interface UpdateProfileData {
 
 export async function updateAccountProfile(data: UpdateProfileData): Promise<{ updated: boolean }> {
   await apiPatchV1<{ profile: unknown }>('/account/profile', {
-    username: data.username,
     nickname: data.nickname,
     display_name: data.display_name,
     locale: data.locale,

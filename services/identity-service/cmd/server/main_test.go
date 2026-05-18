@@ -490,14 +490,15 @@ func TestAccountProfileCanBeViewedAndUpdated(t *testing.T) {
 		t.Fatalf("profile username is empty: %#v", profile)
 	}
 
-	update := performJSON(t, router, http.MethodPatch, "/v1/account/profile", `{"username":"member-renamed","nickname":"Member Hero","display_name":"Member Hero","locale":"zh-CN","avatar_url":"https://cdn.example.com/avatar.png"}`, pair.AccessToken)
+	updatePayload := fmt.Sprintf(`{"username":%q,"nickname":"Member Hero","display_name":"Member Hero","locale":"zh-CN","avatar_url":"https://cdn.example.com/avatar.png"}`, regularUser.Username)
+	update := performJSON(t, router, http.MethodPatch, "/v1/account/profile", updatePayload, pair.AccessToken)
 	if update.Code != http.StatusOK {
 		t.Fatalf("update profile status = %d, want %d body=%s", update.Code, http.StatusOK, update.Body.String())
 	}
 	updateData := decodeData(t, update)
 	updatedProfile := asMap(t, updateData["profile"], "profile")
-	if got := stringFromAny(updatedProfile["username"]); got != "member-renamed" {
-		t.Fatalf("updated username = %q, want member-renamed", got)
+	if got := stringFromAny(updatedProfile["username"]); got != regularUser.Username {
+		t.Fatalf("updated username = %q, want unchanged %q", got, regularUser.Username)
 	}
 	if got := stringFromAny(updatedProfile["nickname"]); got != "Member Hero" {
 		t.Fatalf("updated nickname = %q, want Member Hero", got)
@@ -513,8 +514,8 @@ func TestAccountProfileCanBeViewedAndUpdated(t *testing.T) {
 	if err := db.First(&stored, regularUser.ID).Error; err != nil {
 		t.Fatalf("db.First(user) error = %v", err)
 	}
-	if stored.Username != "member-renamed" {
-		t.Fatalf("stored username = %q, want member-renamed", stored.Username)
+	if stored.Username != regularUser.Username {
+		t.Fatalf("stored username = %q, want unchanged %q", stored.Username, regularUser.Username)
 	}
 	if stored.Nickname != "Member Hero" {
 		t.Fatalf("stored nickname = %q, want Member Hero", stored.Nickname)

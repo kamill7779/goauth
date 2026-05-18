@@ -296,6 +296,31 @@ test('uploadAccountAvatar posts multipart avatar form data', async () => {
   assert.equal(globalThis.__authClientCalls[0].data.get('avatar'), file);
 });
 
+test('updateAccountProfile does not send immutable username', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await account.updateAccountProfile({
+    nickname: 'Member',
+    display_name: 'Member',
+    username: 'stable-user',
+    email: 'member@example.com',
+    locale: 'zh-CN',
+    timezone: 'Asia/Shanghai',
+  });
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'patchV1',
+      path: '/account/profile',
+      data: {
+        nickname: 'Member',
+        display_name: 'Member',
+        locale: 'zh-CN',
+      },
+    },
+  ]);
+});
+
 test('account 2FA API maps lifecycle routes and response fields', async () => {
   globalThis.__authClientCalls.length = 0;
 

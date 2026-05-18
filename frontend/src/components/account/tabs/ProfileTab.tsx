@@ -20,7 +20,6 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
   const emailEditable = false;
   const [form, setForm] = useState({
     name: user.display_name || user.nickname || '',
-    username: user.username,
     email: user.email,
     locale: user.locale || 'zh-CN',
     timezone: user.timezone || 'Asia/Shanghai',
@@ -33,7 +32,6 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
   useEffect(() => {
     setForm({
       name: user.display_name || user.nickname || '',
-      username: user.username,
       email: user.email,
       locale: user.locale || 'zh-CN',
       timezone: user.timezone || 'Asia/Shanghai',
@@ -52,7 +50,6 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
       await updateAccountProfile({
         nickname: form.name,
         display_name: form.name,
-        username: form.username,
         email: form.email,
         locale: form.locale,
         timezone: form.timezone,
@@ -70,7 +67,6 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
   const handleReset = () => {
     setForm({
       name: user.display_name || user.nickname || '',
-      username: user.username,
       email: user.email,
       locale: user.locale || 'zh-CN',
       timezone: user.timezone || 'Asia/Shanghai',
@@ -170,13 +166,14 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
           <div>
             <div className="mb-2 flex items-center justify-between">
               <label className="text-sm font-medium text-ink">用户名</label>
-              <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[10px] font-medium text-ink-tertiary">不可频繁更改</span>
+              <span className="rounded-full bg-surface-hover px-2 py-0.5 text-[10px] font-medium text-ink-tertiary">不可修改</span>
             </div>
             <div className="relative">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-ink-muted">@</span>
-              <input className="w-full rounded-xl border border-line bg-surface-muted px-4 py-3 pl-7 text-sm outline-none transition-all focus:border-brand focus:ring-2 focus:ring-brand-glow"
-                value={form.username} onChange={update('username')} />
+              <input className="w-full cursor-not-allowed rounded-xl border border-line bg-surface-muted px-4 py-3 pl-7 text-sm text-ink-secondary outline-none disabled:opacity-80"
+                value={user.username} disabled aria-readonly="true" />
             </div>
+            <p className="mt-1.5 text-xs text-ink-tertiary">用户名是稳定账号 ID，用于登录和 OIDC 标识，不支持自行修改。</p>
           </div>
           <div>
             <div className="mb-2 flex items-center justify-between">
@@ -244,7 +241,7 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">{form.name}</div>
-              <div className="mt-0.5 truncate font-mono text-xs text-ink-tertiary">@{form.username}</div>
+              <div className="mt-0.5 truncate font-mono text-xs text-ink-tertiary">@{user.username}</div>
               <div className="mt-0.5 truncate text-xs text-ink-tertiary">{form.email}</div>
             </div>
           </div>

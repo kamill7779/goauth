@@ -246,6 +246,16 @@ func (h *Handler) updateProfile(c *gin.Context) {
 		return
 	}
 
+	currentUserRecord, err := h.loadActiveUser(c, userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
 	updates := map[string]any{}
 	changedFields := make([]string, 0, 5)
 	if request.Username != nil {
@@ -254,8 +264,10 @@ func (h *Handler) updateProfile(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		updates["username"] = username
-		changedFields = append(changedFields, "username")
+		if username != currentUserRecord.Username {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username cannot be changed"})
+			return
+		}
 	}
 	if request.Nickname != nil {
 		updates["nickname"] = strings.TrimSpace(*request.Nickname)
@@ -280,10 +292,6 @@ func (h *Handler) updateProfile(c *gin.Context) {
 			Model(&store.User{}).
 			Where("id = ? AND deleted_at IS NULL", userID).
 			Updates(updates).Error; err != nil {
-			if isUniqueConstraintError(err, "username") {
-				c.JSON(http.StatusConflict, gin.H{"error": "username already exists"})
-				return
-			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -1411,17 +1419,6 @@ func accountProfilePayload(user store.User) gin.H {
 		"created_at":     user.CreatedAt,
 		"updated_at":     user.UpdatedAt,
 	}
-}
-
-func isUniqueConstraintError(err error, field string) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	if !strings.Contains(lower, "unique") && !strings.Contains(lower, "duplicate") {
-		return false
-	}
-	return strings.Contains(lower, strings.ToLower(field))
 }
 
 func accountHasLocalPassword(user store.User) bool {
