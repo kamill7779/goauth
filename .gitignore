@@ -6,6 +6,7 @@
 .playwright-mcp/
 admin-console-prototype/
 frontend/prototypes/
+services/identity-service/data/
 node_modules/
 .kiro/
 

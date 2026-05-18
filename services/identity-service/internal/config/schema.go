@@ -19,6 +19,7 @@ func EnvDefinitions() []EnvDefinition {
 		env("BROWSER_COOKIE_SECURE", "core", "derived", false, false, false, "Whether browser SSO cookies require HTTPS."),
 		env("MYSQL_DSN", "storage", "", true, true, false, "MySQL connection string."),
 		env("REDIS_URL", "storage", "", true, true, false, "Redis connection URL."),
+		env("AVATAR_STORAGE_DIR", "storage", "data/avatars", false, false, false, "Local directory for account avatar uploads."),
 		env("JWT_PRIVATE_KEY_PATH", "tokens", "", false, true, false, "Path to persistent RSA private key."),
 		env("JWT_KEY_ID", "tokens", "", false, false, false, "Legacy single-key JWKS key id."),
 		env("JWT_KEYSET_DIR", "tokens", "", false, true, false, "Directory of RSA private keys named by kid, for key rotation."),

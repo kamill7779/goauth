@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
@@ -9,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -521,6 +523,54 @@ func TestAccountProfileCanBeViewedAndUpdated(t *testing.T) {
 	}
 	if stored.AvatarURL != "https://cdn.example.com/avatar.png" {
 		t.Fatalf("stored avatar_url = %q, want https://cdn.example.com/avatar.png", stored.AvatarURL)
+	}
+}
+
+func TestAccountAvatarUploadStoresImageAndUpdatesProfile(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	file, err := writer.CreateFormFile("avatar", "avatar.png")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := file.Write(tinyPNG()); err != nil {
+		t.Fatalf("write avatar: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("multipart writer close: %v", err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/account/avatar", body)
+	request.Header.Set("Authorization", "Bearer "+pair.AccessToken)
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("avatar upload status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	data := decodeData(t, recorder)
+	avatarURL := stringFromAny(data["avatar_url"])
+	if !strings.HasPrefix(avatarURL, "/uploads/avatars/") {
+		t.Fatalf("avatar_url = %q, want /uploads/avatars/ prefix", avatarURL)
+	}
+
+	var stored store.User
+	if err := db.First(&stored, regularUser.ID).Error; err != nil {
+		t.Fatalf("db.First(user) error = %v", err)
+	}
+	if stored.AvatarURL != avatarURL {
+		t.Fatalf("stored avatar_url = %q, want %q", stored.AvatarURL, avatarURL)
+	}
+
+	static := httptest.NewRequest(http.MethodGet, avatarURL, nil)
+	staticRecorder := httptest.NewRecorder()
+	router.ServeHTTP(staticRecorder, static)
+	if staticRecorder.Code != http.StatusOK {
+		t.Fatalf("static avatar status = %d, want %d body=%s", staticRecorder.Code, http.StatusOK, staticRecorder.Body.String())
 	}
 }
 
@@ -1215,9 +1265,10 @@ func newIntegrationRouter(t *testing.T) (*gin.Engine, *gorm.DB, *session.Service
 	}
 
 	cfg := config.Config{
-		JWTKeyID:        "test-key",
-		AccessTokenTTL:  15 * time.Minute,
-		RefreshTokenTTL: 30 * 24 * time.Hour,
+		JWTKeyID:         "test-key",
+		AccessTokenTTL:   15 * time.Minute,
+		RefreshTokenTTL:  30 * 24 * time.Hour,
+		AvatarStorageDir: t.TempDir(),
 	}
 	router := buildRouter(cfg, db, nil, privateKey)
 	sessionService := session.NewService(db, cfg, privateKey)
@@ -1516,4 +1567,18 @@ func tenantIDString(id int64) string {
 
 func userIDString(id int64) string {
 	return strconv.FormatInt(id, 10)
+}
+
+func tinyPNG() []byte {
+	return []byte{
+		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+		0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+		0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00,
+		0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae,
+		0x42, 0x60, 0x82,
+	}
 }

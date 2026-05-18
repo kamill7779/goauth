@@ -15,7 +15,7 @@ import {
 import type { SharedTabProps } from './types';
 
 export default function ProfileTab({ user, showToast, refresh }: SharedTabProps) {
-  const avatarUploadEnabled = false;
+  const avatarUploadEnabled = true;
   const timezoneEditable = false;
   const emailEditable = false;
   const [form, setForm] = useState({
@@ -80,10 +80,6 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
   };
 
   const handlePickAvatar = () => {
-    if (!avatarUploadEnabled) {
-      showToast('头像上传入口暂未开放', 'info');
-      return;
-    }
     fileRef.current?.click();
   };
   const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -95,6 +91,8 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
       refresh();
     } catch {
       showToast('头像上传失败', 'error');
+    } finally {
+      e.currentTarget.value = '';
     }
   };
   const handleRemoveAvatar = async () => {
@@ -143,7 +141,7 @@ export default function ProfileTab({ user, showToast, refresh }: SharedTabProps)
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">头像</div>
             <div className="mt-1 text-xs leading-relaxed text-ink-tertiary">
-              当前仅支持移除现有头像。上传入口会在对象存储接入后开放。
+              支持上传 PNG、JPEG、GIF、WebP 图片，建议使用清晰的正方形头像。
             </div>
             <div className="mt-3 flex gap-2">
               <button

@@ -76,6 +76,15 @@ export async function apiPostV1<T>(path: string, data?: unknown, options?: ApiRe
   return response.data.data;
 }
 
+export async function apiPostFormV1<T>(path: string, data: FormData): Promise<T> {
+  const response = await v1Client.post<ApiSuccessResponse<T>>(path, data, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+  return response.data.data;
+}
+
 export async function apiPatchV1<T>(path: string, data?: unknown): Promise<T> {
   const response = await v1Client.patch<ApiSuccessResponse<T>>(path, data);
   return response.data.data;
