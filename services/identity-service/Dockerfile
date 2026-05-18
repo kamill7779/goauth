@@ -27,6 +27,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 WORKDIR /app
 
 COPY --from=builder /out/identity-service /app/identity-service
+RUN mkdir -p /app/data/avatars && chown -R identity:identity /app/data
 
 USER identity
 EXPOSE 8080
