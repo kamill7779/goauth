@@ -41,6 +41,27 @@ interface RawActivityItem {
   created_at: string;
 }
 
+interface RawTwoFactorStatus {
+  enabled: boolean;
+  method?: string;
+  recovery_codes_available?: boolean;
+  pending_setup?: boolean;
+}
+
+interface RawTwoFactorSetup {
+  secret: string;
+  otpauth_url: string;
+}
+
+interface RawTwoFactorVerify {
+  verified: boolean;
+  recovery_codes?: string[];
+}
+
+interface RawTwoFactorRecoveryCodes {
+  recovery_codes?: string[];
+}
+
 const LOGIN_METHOD_PLACEHOLDERS: LoginMethod[] = [
   {
     id: 'google',
@@ -321,22 +342,37 @@ export async function revokeAppAuthorization(appId: string): Promise<{ revoked: 
   return apiDeleteV1<{ revoked: boolean }>(`/account/authorized-apps/${encodeURIComponent(appId)}`);
 }
 
-export async function getAccount2FAStatus(): Promise<{ enabled: boolean; recoveryCodesAvailable: boolean }> {
-  return { enabled: false, recoveryCodesAvailable: false };
+export async function getAccount2FAStatus(): Promise<{ enabled: boolean; recoveryCodesAvailable: boolean; pendingSetup: boolean; method: string }> {
+  const data = await apiGetV1<RawTwoFactorStatus>('/account/2fa/status');
+  return {
+    enabled: data.enabled,
+    recoveryCodesAvailable: Boolean(data.recovery_codes_available),
+    pendingSetup: Boolean(data.pending_setup),
+    method: data.method || '',
+  };
 }
 
 export async function enable2FA(): Promise<{ secret: string; qrUrl: string }> {
-  unsupported('两步验证能力暂未开放');
+  const data = await apiPostV1<RawTwoFactorSetup>('/account/2fa/setup/start', {});
+  return {
+    secret: data.secret,
+    qrUrl: data.otpauth_url,
+  };
 }
 
-export async function verify2FASetup(_code: string): Promise<{ verified: boolean }> {
-  unsupported('两步验证能力暂未开放');
+export async function verify2FASetup(code: string): Promise<{ verified: boolean; codes: string[] }> {
+  const data = await apiPostV1<RawTwoFactorVerify>('/account/2fa/verify', { code });
+  return {
+    verified: data.verified,
+    codes: data.recovery_codes || [],
+  };
 }
 
-export async function disable2FA(): Promise<{ disabled: boolean }> {
-  unsupported('两步验证能力暂未开放');
+export async function disable2FA(code: string): Promise<{ disabled: boolean }> {
+  return apiPostV1<{ disabled: boolean }>('/account/2fa/disable', { code });
 }
 
-export async function regenerateRecoveryCodes(): Promise<{ codes: string[] }> {
-  unsupported('两步验证能力暂未开放');
+export async function regenerateRecoveryCodes(code: string): Promise<{ codes: string[] }> {
+  const data = await apiPostV1<RawTwoFactorRecoveryCodes>('/account/2fa/recovery-codes/regenerate', { code });
+  return { codes: data.recovery_codes || [] };
 }

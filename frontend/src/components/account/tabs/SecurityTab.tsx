@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useRef } from 'react';
 import {
   revokeAccountSession,
   logoutAllAccountSessions,
@@ -45,27 +45,16 @@ function statusLabel(status: string) {
   }
 }
 
-function MockQRCode() {
-  const cells = useMemo(() => {
-    const size = 20;
-    const arr: { i: number; j: number; filled: boolean }[] = [];
-    for (let i = 0; i < size; i++) {
-      for (let j = 0; j < size; j++) {
-        const isCorner = (i < 5 && j < 5) || (i < 5 && j >= size - 5) || (i >= size - 5 && j < 5);
-        const hash = Math.sin(i * 31.1 + j * 17.3) > 0;
-        const filled = isCorner
-          ? (i === 0 || i === 4 || j === 0 || j === 4) || (i >= 1 && i <= 3 && j >= 1 && j <= 3 && !(i === 2 && j === 2))
-          : hash;
-        arr.push({ i, j, filled });
-      }
-    }
-    return arr;
-  }, []);
+function ManualSetupCard({ otpauthUrl }: { otpauthUrl: string }) {
   return (
-    <div className="grid gap-px rounded-2xl border border-line bg-white p-3" style={{ gridTemplateColumns: 'repeat(20, 1fr)', width: 180, height: 180 }}>
-      {cells.map((c) => (
-        <div key={`${c.i}-${c.j}`} className={`rounded-[1px] ${c.filled ? 'bg-ink' : 'bg-transparent'}`} />
-      ))}
+    <div className="flex h-[180px] w-[180px] flex-col items-center justify-center rounded-2xl border border-line bg-surface-muted p-4 text-center">
+      <div className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-brand-soft text-brand">
+        <IconKey size={22} />
+      </div>
+      <div className="mt-3 text-sm font-medium">手动配置 TOTP</div>
+      <div className="mt-2 line-clamp-3 break-all text-[11px] leading-relaxed text-ink-tertiary">
+        {otpauthUrl || '等待生成配置链接'}
+      </div>
     </div>
   );
 }
@@ -76,17 +65,24 @@ export default function SecurityTab({
   loginMethods,
   twoFAEnabled,
   setTwoFAEnabled,
+  twoFARecoveryCodesAvailable,
+  setTwoFARecoveryCodesAvailable,
   securityScore,
   showToast,
   refresh,
 }: SharedTabProps) {
   const [totpStep, setTotpStep] = useState(0);
   const [totpCode, setTotpCode] = useState(['', '', '', '', '', '']);
+  const [setupSecret, setSetupSecret] = useState('');
+  const [setupOtpAuthURL, setSetupOtpAuthURL] = useState('');
   const [showCodes, setShowCodes] = useState(true);
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [recoveryCodeMode, setRecoveryCodeMode] = useState<'setup' | 'regenerated'>('setup');
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
   const [loggingOutAll, setLoggingOutAll] = useState(false);
   const [confirmDisable, setConfirmDisable] = useState(false);
+  const [disableCode, setDisableCode] = useState('');
+  const [disabling2FA, setDisabling2FA] = useState(false);
   const codeRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   const scoreColor = securityScore >= 80 ? 'text-ok' : securityScore >= 60 ? 'text-warn' : 'text-danger';
@@ -112,10 +108,31 @@ export default function SecurityTab({
     if (e.key === 'Backspace' && !totpCode[i] && i > 0) codeRefs.current[i - 1]?.focus();
   };
 
+  const copyText = async (text: string, message: string) => {
+    try {
+      await navigator.clipboard?.writeText(text);
+      showToast(message, 'success');
+    } catch {
+      showToast('复制失败，请手动复制', 'error');
+    }
+  };
+
+  const promptTotpCode = (message: string) => {
+    const code = window.prompt(message)?.trim() || '';
+    if (!code) return '';
+    if (!/^\d{6}$/.test(code)) {
+      showToast('请输入 6 位数字验证码', 'error');
+      return '';
+    }
+    return code;
+  };
+
   const startEnable = async () => {
     try {
-      const { secret } = await enable2FA();
-      console.log('2FA secret:', secret);
+      const { secret, qrUrl } = await enable2FA();
+      setSetupSecret(secret);
+      setSetupOtpAuthURL(qrUrl);
+      setRecoveryCodeMode('setup');
       setTotpStep(1);
     } catch (err) {
       showToast(err instanceof Error ? err.message : '获取二维码失败', 'error');
@@ -128,10 +145,10 @@ export default function SecurityTab({
       return;
     }
     try {
-      const { verified } = await verify2FASetup(totpCode.join(''));
+      const { verified, codes } = await verify2FASetup(totpCode.join(''));
       if (verified) {
-        const { codes } = await regenerateRecoveryCodes();
         setRecoveryCodes(codes);
+        setTwoFARecoveryCodesAvailable(codes.length > 0);
         setTotpStep(3);
         showToast('验证码正确，请保存恢复码', 'success');
       }
@@ -144,17 +161,46 @@ export default function SecurityTab({
     setTwoFAEnabled(true);
     setTotpStep(0);
     setTotpCode(['', '', '', '', '', '']);
+    setSetupSecret('');
+    setSetupOtpAuthURL('');
     showToast('两步验证已开启，你的账号更安全了', 'success');
   };
 
   const handleDisable = async () => {
+    if (!/^\d{6}$/.test(disableCode.trim())) {
+      showToast('请输入 6 位数字验证码', 'error');
+      return;
+    }
+    setDisabling2FA(true);
     try {
-      await disable2FA();
+      await disable2FA(disableCode.trim());
       setTwoFAEnabled(false);
+      setTwoFARecoveryCodesAvailable(false);
       setConfirmDisable(false);
+      setDisableCode('');
+      setRecoveryCodes([]);
       showToast('两步验证已关闭', 'info');
+      refresh();
     } catch (err) {
       showToast(err instanceof Error ? err.message : '关闭失败', 'error');
+    } finally {
+      setDisabling2FA(false);
+    }
+  };
+
+  const handleRegenerateRecoveryCodes = async () => {
+    const code = promptTotpCode('请输入验证器中的 6 位验证码，用于重新生成恢复码');
+    if (!code) return;
+    try {
+      const { codes } = await regenerateRecoveryCodes(code);
+      setRecoveryCodes(codes);
+      setRecoveryCodeMode('regenerated');
+      setShowCodes(true);
+      setTwoFARecoveryCodesAvailable(codes.length > 0);
+      setTotpStep(3);
+      showToast('恢复码已重新生成，请立即保存', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '操作失败', 'error');
     }
   };
 
@@ -211,8 +257,12 @@ export default function SecurityTab({
         </div>
         <div className="rounded-[20px] border border-line bg-surface-solid p-5 shadow-soft-sm">
           <div className="text-sm text-ink-secondary">恢复码</div>
-          <div className="mt-3 text-xl font-semibold text-ok">可用</div>
-          <div className="mt-1 text-xs text-ink-tertiary">10 组，可随时重新生成</div>
+          <div className={`mt-3 text-xl font-semibold ${twoFARecoveryCodesAvailable ? 'text-ok' : twoFAEnabled ? 'text-warn' : 'text-ink-tertiary'}`}>
+            {twoFARecoveryCodesAvailable ? '可用' : twoFAEnabled ? '需生成' : '未启用'}
+          </div>
+          <div className="mt-1 text-xs text-ink-tertiary">
+            {twoFAEnabled ? '可重新生成并离线保存' : '开启两步验证后生成'}
+          </div>
         </div>
         <div className="rounded-[20px] border border-line bg-surface-solid p-5 shadow-soft-sm">
           <div className="text-sm text-ink-secondary">邮箱验证</div>
@@ -265,18 +315,23 @@ export default function SecurityTab({
           {totpStep === 1 && (
             <div className="flex flex-wrap gap-6">
               <div className="min-w-[200px] flex-1">
-                <div className="font-medium">用身份验证器扫码</div>
+                <div className="font-medium">在身份验证器中添加账号</div>
                 <div className="mt-2 text-sm leading-relaxed text-ink-secondary">
-                  打开 Google Authenticator、Microsoft Authenticator 或其他 TOTP 应用，扫描下方二维码。你也可以在应用中手动输入密钥。
+                  打开 Google Authenticator、Microsoft Authenticator 或其他 TOTP 应用，选择手动输入密钥，填入下方内容。
                 </div>
                 <div className="mt-4 flex items-center gap-3">
-                  <code className="rounded-xl bg-surface-hover px-3 py-2 font-mono text-sm">JBSW Y3DP EHPK 3PXP</code>
-                  <button onClick={() => showToast('密钥已复制', 'success')} className="rounded-lg px-2 py-1.5 text-xs text-ink-secondary hover:bg-surface-hover">
+                  <code className="rounded-xl bg-surface-hover px-3 py-2 font-mono text-sm">{setupSecret || '-'}</code>
+                  <button onClick={() => copyText(setupSecret, '密钥已复制')} className="rounded-lg px-2 py-1.5 text-xs text-ink-secondary hover:bg-surface-hover">
                     <IconCopy size={14} className="inline" /> 复制
                   </button>
                 </div>
+                {setupOtpAuthURL && (
+                  <button onClick={() => copyText(setupOtpAuthURL, '配置链接已复制')} className="mt-2 rounded-lg px-2 py-1.5 text-xs text-ink-tertiary hover:bg-surface-hover">
+                    复制 otpauth 配置链接
+                  </button>
+                )}
               </div>
-              <MockQRCode />
+              <ManualSetupCard otpauthUrl={setupOtpAuthURL} />
             </div>
           )}
 
@@ -308,7 +363,7 @@ export default function SecurityTab({
                 <div className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-ok-soft text-ok">
                   <IconCheck size={16} />
                 </div>
-                <span className="font-medium">绑定成功 — 请保存恢复码</span>
+                <span className="font-medium">{recoveryCodeMode === 'setup' ? '绑定成功' : '恢复码已重新生成'} — 请保存恢复码</span>
               </div>
               <div className="text-sm leading-relaxed text-ink-secondary">
                 如果你更换了手机、删除了验证器应用或丢失了设备，恢复码是你唯一能在不借助两步验证的情况下恢复账号的方法。请将它们安全保存到离线位置，切勿与他人分享。
@@ -335,12 +390,12 @@ export default function SecurityTab({
           )}
 
           <div className="mt-8 flex justify-between gap-3">
-            <button onClick={() => { setTotpStep(0); setTotpCode(['', '', '', '', '', '']); }} className="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover">
+            <button onClick={() => { setTotpStep(0); setTotpCode(['', '', '', '', '', '']); setSetupSecret(''); setSetupOtpAuthURL(''); }} className="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover">
               <IconX size={14} className="inline mr-1" /> 取消
             </button>
             {totpStep === 1 && (
               <button onClick={() => setTotpStep(2)} className="inline-flex items-center gap-2 rounded-xl bg-ink px-5 py-2.5 text-sm font-medium text-ink-inverse transition-colors hover:bg-ink-secondary">
-                <IconArrowRight size={14} /> 我已扫码
+                <IconArrowRight size={14} /> 我已添加
               </button>
             )}
             {totpStep === 2 && (
@@ -371,7 +426,7 @@ export default function SecurityTab({
                 <div className="text-sm text-ink-secondary">当前通过 TOTP 应用验证第二重身份。恢复码可用，建议定期重新生成。</div>
               </div>
               <div className="flex gap-2">
-                <button onClick={async () => { try { const { codes } = await regenerateRecoveryCodes(); setRecoveryCodes(codes); showToast('恢复码已重新生成', 'success'); } catch (err) { showToast(err instanceof Error ? err.message : '操作失败', 'error'); } }} className="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover">
+                <button onClick={handleRegenerateRecoveryCodes} className="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover">
                   <IconRefreshCw size={14} className="inline mr-1" /> 重新生成恢复码
                 </button>
                 <button onClick={() => setConfirmDisable(true)} className="rounded-xl px-4 py-2.5 text-sm font-medium text-danger transition-colors hover:bg-danger-soft">
@@ -514,12 +569,23 @@ export default function SecurityTab({
           <div className="mt-5 rounded-2xl border border-line bg-surface-muted p-4 text-sm leading-relaxed text-ink-secondary">
             关闭两步验证后，你的账号将仅依赖密码保护。如果密码被泄露，攻击者无需任何额外验证即可登录你的账号。强烈建议保持开启状态。
           </div>
+          <label className="mt-4 block text-sm font-medium text-ink-secondary">
+            当前 6 位验证码
+            <input
+              value={disableCode}
+              onChange={(event) => setDisableCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              maxLength={6}
+              className="mt-2 w-full rounded-xl border border-line bg-surface-solid px-3 py-2.5 font-mono text-base tracking-[0.4em] outline-none transition-all focus:border-brand focus:ring-2 focus:ring-brand-glow"
+              placeholder="000000"
+            />
+          </label>
           <div className="mt-6 flex justify-end gap-2">
-            <button onClick={() => setConfirmDisable(false)} className="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover">
+            <button onClick={() => { setConfirmDisable(false); setDisableCode(''); }} className="rounded-xl px-4 py-2.5 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover">
               保持开启
             </button>
-            <button onClick={handleDisable} className="inline-flex items-center gap-2 rounded-xl bg-danger px-5 py-2.5 text-sm font-medium text-ink-inverse transition-colors hover:bg-danger-strong">
-              <IconUnlink size={14} /> 确认关闭
+            <button onClick={handleDisable} disabled={disabling2FA || disableCode.length !== 6} className="inline-flex items-center gap-2 rounded-xl bg-danger px-5 py-2.5 text-sm font-medium text-ink-inverse transition-colors hover:bg-danger-strong disabled:cursor-not-allowed disabled:opacity-50">
+              <IconUnlink size={14} /> {disabling2FA ? '关闭中' : '确认关闭'}
             </button>
           </div>
         </div>

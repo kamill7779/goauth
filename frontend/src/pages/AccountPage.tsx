@@ -61,6 +61,7 @@ export default function AccountPage() {
   const [authorizedApps, setAuthorizedApps] = useState<Awaited<ReturnType<typeof getAccountAuthorizedApps>>['apps']>([]);
   const [identityActivities, setIdentityActivities] = useState<IdentityActivity[]>([]);
   const [twoFAEnabled, setTwoFAEnabled] = useState(false);
+  const [twoFARecoveryCodesAvailable, setTwoFARecoveryCodesAvailable] = useState(false);
   const [securityScore, setSecurityScore] = useState(72);
 
   const leaveToLogin = useCallback(() => {
@@ -95,6 +96,7 @@ export default function AccountPage() {
       setAuthorizedApps(apps.apps);
       setIdentityActivities(activity.items);
       setTwoFAEnabled(fa.enabled);
+      setTwoFARecoveryCodesAvailable(fa.recoveryCodesAvailable);
       // compute security score
       let score = 40;
       if (me.user.email_verified) score += 15;
@@ -144,6 +146,8 @@ export default function AccountPage() {
       identityActivities,
       twoFAEnabled,
       setTwoFAEnabled,
+      twoFARecoveryCodesAvailable,
+      setTwoFARecoveryCodesAvailable,
       securityScore,
       setSecurityScore,
       showToast,
@@ -164,7 +168,7 @@ export default function AccountPage() {
       default:
         return null;
     }
-  }, [tab, loading, user, account, sessions, loginMethods, authorizedApps, identityActivities, twoFAEnabled, securityScore, loadAccount, showToast]);
+  }, [tab, loading, user, account, sessions, loginMethods, authorizedApps, identityActivities, twoFAEnabled, twoFARecoveryCodesAvailable, securityScore, loadAccount, showToast]);
 
   return (
     <div className="min-h-screen bg-canvas text-ink">
