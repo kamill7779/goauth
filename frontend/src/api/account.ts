@@ -62,7 +62,19 @@ interface RawTwoFactorRecoveryCodes {
   recovery_codes?: string[];
 }
 
+interface RawLoginMethodBindStart {
+  start_url: string;
+}
+
 const LOGIN_METHOD_PLACEHOLDERS: LoginMethod[] = [
+  {
+    id: 'github',
+    name: 'GitHub',
+    status: 'unbound',
+    bound: false,
+    desc: '用 GitHub 账号一键登录',
+    disabled: false,
+  },
   {
     id: 'google',
     name: 'Google',
@@ -183,7 +195,7 @@ function mapLoginMethod(method: RawLoginMethod): LoginMethod {
   let disabledReason: string | undefined;
   if (method.key === 'email') {
     disabledReason = '邮箱换绑即将开放';
-  } else if (method.key !== 'password' && method.bound) {
+  } else if (method.key !== 'password' && method.bound && method.can_unbind === false) {
     disabledReason = '账户中心解绑即将开放';
   }
 
@@ -224,8 +236,11 @@ function mapActivity(item: RawActivityItem): IdentityActivity {
   };
 }
 
-function unsupported(message: string): never {
-  throw new Error(message);
+function accountReturnTo(): string {
+  if (typeof window === 'undefined') {
+    return '/account';
+  }
+  return `${window.location.origin}/account`;
 }
 
 export function accountSessionRevokePath(sessionId: string): string {
@@ -301,12 +316,15 @@ export async function getAccountLoginMethods(): Promise<{ methods: LoginMethod[]
   return { methods };
 }
 
-export async function bindLoginMethod(methodId: string): Promise<{ bound: boolean }> {
-  unsupported(`${methodId} 绑定入口暂未接入账户中心，请先从对应身份提供方发起登录`);
+export async function bindLoginMethod(methodId: string): Promise<{ bound: boolean; redirectUrl?: string }> {
+  const data = await apiPostV1<RawLoginMethodBindStart>(`/account/login-methods/${encodeURIComponent(methodId)}/bind/start`, {
+    return_to: accountReturnTo(),
+  });
+  return { bound: false, redirectUrl: data.start_url };
 }
 
 export async function unbindLoginMethod(methodId: string): Promise<{ unbound: boolean }> {
-  unsupported(`${methodId} 解绑能力暂未开放`);
+  return apiDeleteV1<{ unbound: boolean }>(`/account/login-methods/${encodeURIComponent(methodId)}`);
 }
 
 export async function changeAccountPassword(data: { current: string; newPass: string }): Promise<{ changed: boolean }> {

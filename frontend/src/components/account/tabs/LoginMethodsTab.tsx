@@ -41,7 +41,11 @@ export default function LoginMethodsTab({ loginMethods, setLoginMethods, showToa
   const handleBind = async (id: string) => {
     setLoadingId(id);
     try {
-      await bindLoginMethod(id);
+      const result = await bindLoginMethod(id);
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl;
+        return;
+      }
       setLoginMethods((ms) =>
         ms.map((m) =>
           m.id === id
@@ -50,8 +54,8 @@ export default function LoginMethodsTab({ loginMethods, setLoginMethods, showToa
         )
       );
       showToast('登录方式已绑定', 'success');
-    } catch {
-      showToast('绑定失败，请重试', 'error');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '绑定失败，请重试', 'error');
     } finally {
       setLoadingId(null);
     }
@@ -65,8 +69,8 @@ export default function LoginMethodsTab({ loginMethods, setLoginMethods, showToa
       );
       showToast('已解绑', 'info');
       setModal(null);
-    } catch {
-      showToast('解绑失败', 'error');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : '解绑失败', 'error');
     }
   };
 
