@@ -35,6 +35,18 @@ async function importAuthModule(relativePath) {
 
               export async function apiPostV1(path, data, options) {
                 globalThis.__authClientCalls.push({ method: 'postV1', path, data, options });
+                if (path === '/account/2fa/setup/start') {
+                  return { secret: 'JBSWY3DPEHPK3PXP', otpauth_url: 'otpauth://totp/GoAuth:member@example.com' };
+                }
+                if (path === '/account/2fa/verify') {
+                  return { verified: true, recovery_codes: ['RC-1111', 'RC-2222'] };
+                }
+                if (path === '/account/2fa/disable') {
+                  return { disabled: true };
+                }
+                if (path === '/account/2fa/recovery-codes/regenerate') {
+                  return { recovery_codes: ['RC-3333', 'RC-4444'] };
+                }
                 return { ok: true, path, data };
               }
 
@@ -73,6 +85,14 @@ async function importAuthModule(relativePath) {
                 }
                 if (path.startsWith('/account/activity')) {
                   return { items: [] };
+                }
+                if (path === '/account/2fa/status') {
+                  return {
+                    enabled: true,
+                    method: 'totp',
+                    recovery_codes_available: true,
+                    pending_setup: false,
+                  };
                 }
                 return { ok: true, path };
               }
@@ -241,4 +261,27 @@ test('uploadAccountAvatar posts multipart avatar form data', async () => {
   assert.equal(globalThis.__authClientCalls[0].method, 'postFormV1');
   assert.equal(globalThis.__authClientCalls[0].path, '/account/avatar');
   assert.equal(globalThis.__authClientCalls[0].data.get('avatar'), file);
+});
+
+test('account 2FA API maps lifecycle routes and response fields', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  const status = await account.getAccount2FAStatus();
+  const setup = await account.enable2FA();
+  const verified = await account.verify2FASetup('123456');
+  const disabled = await account.disable2FA('654321');
+  const regenerated = await account.regenerateRecoveryCodes('111222');
+
+  assert.deepEqual(status, { enabled: true, recoveryCodesAvailable: true, pendingSetup: false, method: 'totp' });
+  assert.deepEqual(setup, { secret: 'JBSWY3DPEHPK3PXP', qrUrl: 'otpauth://totp/GoAuth:member@example.com' });
+  assert.deepEqual(verified, { verified: true, codes: ['RC-1111', 'RC-2222'] });
+  assert.deepEqual(disabled, { disabled: true });
+  assert.deepEqual(regenerated, { codes: ['RC-3333', 'RC-4444'] });
+  assert.deepEqual(globalThis.__authClientCalls, [
+    { method: 'getV1', path: '/account/2fa/status' },
+    { method: 'postV1', path: '/account/2fa/setup/start', data: {}, options: undefined },
+    { method: 'postV1', path: '/account/2fa/verify', data: { code: '123456' }, options: undefined },
+    { method: 'postV1', path: '/account/2fa/disable', data: { code: '654321' }, options: undefined },
+    { method: 'postV1', path: '/account/2fa/recovery-codes/regenerate', data: { code: '111222' }, options: undefined },
+  ]);
 });

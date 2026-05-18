@@ -64,6 +64,19 @@ type UserIdentity struct {
 	UpdatedAt      time.Time `gorm:"not null"`
 }
 
+type UserTwoFactor struct {
+	ID                 int64          `gorm:"primaryKey;autoIncrement"`
+	UserID             int64          `gorm:"not null;uniqueIndex"`
+	Method             string         `gorm:"size:32;not null;default:'totp'"`
+	Secret             string         `gorm:"size:255;not null;default:''"`
+	Enabled            bool           `gorm:"not null;default:false;index"`
+	RecoveryCodeHashes datatypes.JSON `gorm:"not null"`
+	EnabledAt          *time.Time
+	LastVerifiedAt     *time.Time
+	CreatedAt          time.Time `gorm:"not null"`
+	UpdatedAt          time.Time `gorm:"not null"`
+}
+
 type Tenant struct {
 	ID        int64          `gorm:"primaryKey;autoIncrement"`
 	Name      string         `gorm:"size:255;not null"`

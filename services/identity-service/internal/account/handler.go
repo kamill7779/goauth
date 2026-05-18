@@ -1,13 +1,19 @@
 package account
 
 import (
+	"crypto/hmac"
 	cryptorand "crypto/rand"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/hex"
 	encodingjson "encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -34,6 +40,14 @@ type Handler struct {
 	avatarDir      string
 }
 
+const (
+	twoFactorMethodTOTP       = "totp"
+	twoFactorIssuer           = "GoAuth"
+	twoFactorRecoveryCodeSize = 10
+	totpPeriodSeconds         = 30
+	totpDigits                = 6
+)
+
 func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin.HandlerFunc, pwPolicy password.Policy, avatarDir string) *Handler {
 	return &Handler{
 		db:             db,
@@ -57,6 +71,11 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	account.POST("/avatar", h.uploadAvatar)
 	account.GET("/login-methods", h.loginMethods)
 	account.POST("/password/change", h.changePassword)
+	account.GET("/2fa/status", h.twoFactorStatus)
+	account.POST("/2fa/setup/start", h.startTwoFactorSetup)
+	account.POST("/2fa/verify", h.verifyTwoFactorSetup)
+	account.POST("/2fa/disable", h.disableTwoFactor)
+	account.POST("/2fa/recovery-codes/regenerate", h.regenerateTwoFactorRecoveryCodes)
 	account.GET("/activity", h.activity)
 	account.GET("/authorized-apps", h.authorizedApps)
 	account.DELETE("/authorized-apps/:client_id", h.revokeAuthorizedApp)
@@ -553,6 +572,335 @@ func (h *Handler) changePassword(c *gin.Context) {
 	})
 }
 
+func (h *Handler) twoFactorStatus(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if _, err := h.loadActiveUser(c, userID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	record, err := h.loadTwoFactorRecord(c, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			httpserver.Success(c, http.StatusOK, gin.H{
+				"enabled":                  false,
+				"method":                   "",
+				"recovery_codes_available": false,
+				"pending_setup":            false,
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	method := ""
+	if record.Enabled {
+		method = strings.TrimSpace(record.Method)
+		if method == "" {
+			method = twoFactorMethodTOTP
+		}
+	}
+	httpserver.Success(c, http.StatusOK, gin.H{
+		"enabled":                  record.Enabled,
+		"method":                   method,
+		"recovery_codes_available": record.Enabled && len(parseJSONStringArray(record.RecoveryCodeHashes)) > 0,
+		"enabled_at":               record.EnabledAt,
+		"pending_setup":            !record.Enabled && strings.TrimSpace(record.Secret) != "",
+	})
+}
+
+func (h *Handler) startTwoFactorSetup(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+
+	user, err := h.loadActiveUser(c, userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	existing, err := h.loadTwoFactorRecord(c, userID)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err == nil && existing.Enabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "two-factor authentication is already enabled"})
+		return
+	}
+
+	setupMissing := errors.Is(err, gorm.ErrRecordNotFound)
+	secret, err := generateTOTPSecret()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate two-factor secret: " + err.Error()})
+		return
+	}
+	now := time.Now().UTC()
+	emptyRecoveryCodes := datatypes.JSON([]byte(`[]`))
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		if setupMissing {
+			return tx.Create(&store.UserTwoFactor{
+				UserID:             userID,
+				Method:             twoFactorMethodTOTP,
+				Secret:             secret,
+				Enabled:            false,
+				RecoveryCodeHashes: emptyRecoveryCodes,
+				CreatedAt:          now,
+				UpdatedAt:          now,
+			}).Error
+		}
+		return tx.Model(&store.UserTwoFactor{}).
+			Where("user_id = ?", userID).
+			Updates(map[string]any{
+				"method":               twoFactorMethodTOTP,
+				"secret":               secret,
+				"enabled":              false,
+				"recovery_code_hashes": emptyRecoveryCodes,
+				"enabled_at":           nil,
+				"last_verified_at":     nil,
+				"updated_at":           now,
+			}).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	httpserver.Success(c, http.StatusOK, gin.H{
+		"secret":      secret,
+		"otpauth_url": twoFactorOTPAuthURL(*user, secret),
+		"method":      twoFactorMethodTOTP,
+		"issuer":      twoFactorIssuer,
+	})
+}
+
+func (h *Handler) verifyTwoFactorSetup(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if _, err := h.loadActiveUser(c, userID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	code, ok := twoFactorCodeFromRequest(c)
+	if !ok {
+		return
+	}
+
+	record, err := h.loadTwoFactorRecord(c, userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": "two-factor setup has not been started"})
+		return
+	}
+	if record.Enabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "two-factor authentication is already enabled"})
+		return
+	}
+	if strings.TrimSpace(record.Secret) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "two-factor setup has not been started"})
+		return
+	}
+	if !verifyTOTPCode(record.Secret, code, time.Now().UTC()) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid two-factor code"})
+		return
+	}
+
+	recoveryCodes, recoveryCodeHashes, err := generateRecoveryCodes(twoFactorRecoveryCodeSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate recovery codes: " + err.Error()})
+		return
+	}
+	recoveryHashPayload, err := encodingjson.Marshal(recoveryCodeHashes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode recovery codes: " + err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&store.UserTwoFactor{}).
+			Where("user_id = ? AND enabled = ?", userID, false).
+			Updates(map[string]any{
+				"enabled":              true,
+				"recovery_code_hashes": datatypes.JSON(recoveryHashPayload),
+				"enabled_at":           now,
+				"last_verified_at":     now,
+				"updated_at":           now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return recordTwoFactorAudit(c, tx, userID, audit.ActionTwoFactorEnabled, map[string]any{
+			"method": twoFactorMethodTOTP,
+			"source": "account_center",
+		})
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	httpserver.Success(c, http.StatusOK, gin.H{
+		"verified":       true,
+		"recovery_codes": recoveryCodes,
+	})
+}
+
+func (h *Handler) disableTwoFactor(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if _, err := h.loadActiveUser(c, userID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	code, ok := twoFactorCodeFromRequest(c)
+	if !ok {
+		return
+	}
+	record, ok := h.requireEnabledTwoFactor(c, userID)
+	if !ok {
+		return
+	}
+	if !verifyTOTPCode(record.Secret, code, time.Now().UTC()) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid two-factor code"})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&store.UserTwoFactor{}).
+			Where("user_id = ? AND enabled = ?", userID, true).
+			Updates(map[string]any{
+				"enabled":              false,
+				"secret":               "",
+				"recovery_code_hashes": datatypes.JSON([]byte(`[]`)),
+				"enabled_at":           nil,
+				"last_verified_at":     nil,
+				"updated_at":           now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return recordTwoFactorAudit(c, tx, userID, audit.ActionTwoFactorDisabled, map[string]any{
+			"method": twoFactorMethodTOTP,
+			"source": "account_center",
+		})
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	httpserver.Success(c, http.StatusOK, gin.H{"disabled": true})
+}
+
+func (h *Handler) regenerateTwoFactorRecoveryCodes(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+	if _, err := h.loadActiveUser(c, userID); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	code, ok := twoFactorCodeFromRequest(c)
+	if !ok {
+		return
+	}
+	record, ok := h.requireEnabledTwoFactor(c, userID)
+	if !ok {
+		return
+	}
+	if !verifyTOTPCode(record.Secret, code, time.Now().UTC()) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid two-factor code"})
+		return
+	}
+
+	recoveryCodes, recoveryCodeHashes, err := generateRecoveryCodes(twoFactorRecoveryCodeSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate recovery codes: " + err.Error()})
+		return
+	}
+	recoveryHashPayload, err := encodingjson.Marshal(recoveryCodeHashes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode recovery codes: " + err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&store.UserTwoFactor{}).
+			Where("user_id = ? AND enabled = ?", userID, true).
+			Updates(map[string]any{
+				"recovery_code_hashes": datatypes.JSON(recoveryHashPayload),
+				"last_verified_at":     now,
+				"updated_at":           now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return recordTwoFactorAudit(c, tx, userID, audit.ActionTwoFactorRecoveryCodesRegenerated, map[string]any{
+			"method": twoFactorMethodTOTP,
+			"source": "account_center",
+		})
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	httpserver.Success(c, http.StatusOK, gin.H{"recovery_codes": recoveryCodes})
+}
+
 func (h *Handler) authorizedApps(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -894,6 +1242,159 @@ func (h *Handler) loadActiveUser(c *gin.Context, userID int64) (*store.User, err
 	return &user, nil
 }
 
+func (h *Handler) loadTwoFactorRecord(c *gin.Context, userID int64) (*store.UserTwoFactor, error) {
+	var record store.UserTwoFactor
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("user_id = ?", userID).
+		First(&record).Error; err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (h *Handler) requireEnabledTwoFactor(c *gin.Context, userID int64) (*store.UserTwoFactor, bool) {
+	record, err := h.loadTwoFactorRecord(c, userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": "two-factor authentication is not enabled"})
+		return nil, false
+	}
+	if !record.Enabled || strings.TrimSpace(record.Secret) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "two-factor authentication is not enabled"})
+		return nil, false
+	}
+	return record, true
+}
+
+func twoFactorCodeFromRequest(c *gin.Context) (string, bool) {
+	var request struct {
+		Code string `json:"code"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return "", false
+	}
+	code, ok := normalizeTOTPCode(request.Code)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "code must be a 6-digit TOTP code"})
+		return "", false
+	}
+	return code, true
+}
+
+func normalizeTOTPCode(raw string) (string, bool) {
+	var builder strings.Builder
+	for _, r := range raw {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			continue
+		}
+		if r < '0' || r > '9' {
+			return "", false
+		}
+		builder.WriteRune(r)
+	}
+	code := builder.String()
+	return code, len(code) == totpDigits
+}
+
+func recordTwoFactorAudit(c *gin.Context, tx *gorm.DB, userID int64, action string, metadata map[string]any) error {
+	return audit.NewService(tx).Record(c.Request.Context(), audit.Entry{
+		ActorUserID: userID,
+		Action:      action,
+		TargetType:  audit.TargetTypeTwoFactor,
+		TargetID:    audit.UserTargetID(userID),
+		Metadata:    metadata,
+	})
+}
+
+func generateTOTPSecret() (string, error) {
+	return randomBase32NoPadding(20)
+}
+
+func twoFactorOTPAuthURL(user store.User, secret string) string {
+	account := strings.TrimSpace(user.Email)
+	if account == "" {
+		account = audit.UserTargetID(user.ID)
+	}
+	label := url.PathEscape(twoFactorIssuer + ":" + account)
+	query := url.Values{}
+	query.Set("secret", secret)
+	query.Set("issuer", twoFactorIssuer)
+	query.Set("algorithm", "SHA1")
+	query.Set("digits", strconv.Itoa(totpDigits))
+	query.Set("period", strconv.Itoa(totpPeriodSeconds))
+	return "otpauth://totp/" + label + "?" + query.Encode()
+}
+
+func verifyTOTPCode(secret, code string, at time.Time) bool {
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
+	if err != nil {
+		return false
+	}
+	counter := at.Unix() / totpPeriodSeconds
+	for offset := int64(-1); offset <= 1; offset++ {
+		if counter+offset < 0 {
+			continue
+		}
+		expected := totpCodeAt(key, uint64(counter+offset))
+		if hmac.Equal([]byte(expected), []byte(code)) {
+			return true
+		}
+	}
+	return false
+}
+
+func totpCodeAt(key []byte, counter uint64) string {
+	var message [8]byte
+	binary.BigEndian.PutUint64(message[:], counter)
+	mac := hmac.New(sha1.New, key)
+	_, _ = mac.Write(message[:])
+	sum := mac.Sum(nil)
+	offset := sum[len(sum)-1] & 0x0f
+	binaryCode := binary.BigEndian.Uint32(sum[offset:offset+4]) & 0x7fffffff
+	return fmt.Sprintf("%06d", binaryCode%1000000)
+}
+
+func generateRecoveryCodes(count int) ([]string, []string, error) {
+	codes := make([]string, 0, count)
+	hashes := make([]string, 0, count)
+	for len(codes) < count {
+		code, err := generateRecoveryCode()
+		if err != nil {
+			return nil, nil, err
+		}
+		codes = append(codes, code)
+		hashes = append(hashes, hashRecoveryCode(code))
+	}
+	return codes, hashes, nil
+}
+
+func generateRecoveryCode() (string, error) {
+	token, err := randomBase32NoPadding(10)
+	if err != nil {
+		return "", err
+	}
+	token = token[:12]
+	return token[0:4] + "-" + token[4:8] + "-" + token[8:12], nil
+}
+
+func hashRecoveryCode(code string) string {
+	normalized := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
+	sum := sha256.Sum256([]byte(normalized))
+	return hex.EncodeToString(sum[:])
+}
+
+func randomBase32NoPadding(byteCount int) (string, error) {
+	raw := make([]byte, byteCount)
+	if _, err := cryptorand.Read(raw); err != nil {
+		return "", err
+	}
+	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
+}
+
 func accountProfilePayload(user store.User) gin.H {
 	return gin.H{
 		"id":             user.ID,
@@ -1116,6 +1617,12 @@ func accountActivityPresentation(action string, metadata map[string]any) (string
 		return "security", "修改了密码", jsonStringValue(metadata, "source")
 	case audit.ActionPasswordReset:
 		return "security", "重置了密码", jsonStringValue(metadata, "source")
+	case audit.ActionTwoFactorEnabled:
+		return "security", "开启了两步验证", jsonStringValue(metadata, "method")
+	case audit.ActionTwoFactorDisabled:
+		return "security", "关闭了两步验证", jsonStringValue(metadata, "method")
+	case audit.ActionTwoFactorRecoveryCodesRegenerated:
+		return "security", "重新生成了恢复代码", jsonStringValue(metadata, "method")
 	case audit.ActionLogin:
 		provider := accountProviderLabel(jsonStringValue(metadata, "provider"))
 		if provider == "" {

@@ -12,6 +12,8 @@ export interface SharedTabProps {
   identityActivities: IdentityActivity[];
   twoFAEnabled: boolean;
   setTwoFAEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  twoFARecoveryCodesAvailable: boolean;
+  setTwoFARecoveryCodesAvailable: React.Dispatch<React.SetStateAction<boolean>>;
   securityScore: number;
   setSecurityScore: React.Dispatch<React.SetStateAction<number>>;
   showToast: (message: string, type?: ToastItem['type']) => void;
