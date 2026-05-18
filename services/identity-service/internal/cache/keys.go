@@ -36,6 +36,14 @@ func ExternalOAuthStateKey(state string) string {
 	return fmt.Sprintf("auth:external_oauth_state:%s", state)
 }
 
+func LoginTwoFactorChallengeKey(challengeID string) string {
+	return fmt.Sprintf("auth:login_2fa_challenge:%s", challengeID)
+}
+
+func LoginTwoFactorChallengeLockKey(challengeID string) string {
+	return fmt.Sprintf("auth:login_2fa_challenge_lock:%s", challengeID)
+}
+
 func RateLimitKey(scope, key string) string {
 	return fmt.Sprintf("auth:rate:%s:%s", scope, key)
 }

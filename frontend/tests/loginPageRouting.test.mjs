@@ -172,3 +172,15 @@ test('buildAuthConfigViewState keeps auth actions unavailable until runtime conf
   assert.equal(failedState.canUseAuthActions, false);
   assert.equal(failedState.statusMessage, '认证配置不可用，请稍后重试');
 });
+
+test('loginTwoFactorPayloadFromInput treats 6 digits as TOTP code', () => {
+  assert.deepEqual(loginPage.loginTwoFactorPayloadFromInput('123 456'), {
+    code: '123456',
+  });
+});
+
+test('loginTwoFactorPayloadFromInput treats non-6-digit input as recovery code', () => {
+  assert.deepEqual(loginPage.loginTwoFactorPayloadFromInput('ABCD-EFGH-IJKL'), {
+    recovery_code: 'ABCD-EFGH-IJKL',
+  });
+});

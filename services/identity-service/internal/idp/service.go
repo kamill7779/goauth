@@ -12,6 +12,7 @@ import (
 	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -23,6 +24,7 @@ var (
 	ErrEmailRequired         = errors.New("external profile email required")
 	ErrUserDisabled          = errors.New("user disabled")
 	ErrRegistrationDisabled  = errors.New("registration disabled")
+	ErrOnlyLoginMethod       = errors.New("cannot unbind the only remaining login method")
 )
 
 type AuthenticateResult struct {
@@ -266,22 +268,35 @@ func (s *Service) BindWithState(ctx context.Context, userID int64, providerSlug,
 }
 
 func (s *Service) Unbind(ctx context.Context, userID int64, providerSlug string) error {
+	providerSlug = strings.ToLower(strings.TrimSpace(providerSlug))
 	var identity store.UserIdentity
-	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND provider = ?", userID, providerSlug).
-		First(&identity).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.
+			Where("user_id = ? AND provider = ?", userID, providerSlug).
+			First(&identity).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrIdentityNotFound
+			}
+			return err
+		}
+
+		if err := ensureUnbindLeavesLoginMethod(ctx, tx, userID); err != nil {
+			return err
+		}
+
+		result := tx.Where("id = ?", identity.ID).Delete(&store.UserIdentity{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
 			return ErrIdentityNotFound
 		}
+		if err := ensureUserHasLoginMethod(ctx, tx, userID); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-
-	result := s.db.WithContext(ctx).Where("id = ?", identity.ID).Delete(&store.UserIdentity{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrIdentityNotFound
 	}
 	_ = s.audit.Record(ctx, audit.Entry{
 		ActorUserID: userID,
@@ -297,6 +312,53 @@ func (s *Service) Unbind(ctx context.Context, userID int64, providerSlug string)
 		},
 	})
 	return nil
+}
+
+func ensureUnbindLeavesLoginMethod(ctx context.Context, tx *gorm.DB, userID int64) error {
+	var user store.User
+	query := tx.WithContext(ctx)
+	if tx.Dialector.Name() != "sqlite" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	if err := query.Where("id = ?", userID).First(&user).Error; err != nil {
+		return err
+	}
+	if hasUsableLocalPassword(user.PasswordHash) {
+		return nil
+	}
+
+	var identityCount int64
+	if err := tx.WithContext(ctx).Model(&store.UserIdentity{}).Where("user_id = ?", userID).Count(&identityCount).Error; err != nil {
+		return err
+	}
+	if identityCount <= 1 {
+		return ErrOnlyLoginMethod
+	}
+	return nil
+}
+
+func ensureUserHasLoginMethod(ctx context.Context, tx *gorm.DB, userID int64) error {
+	var user store.User
+	if err := tx.WithContext(ctx).Where("id = ?", userID).First(&user).Error; err != nil {
+		return err
+	}
+	if hasUsableLocalPassword(user.PasswordHash) {
+		return nil
+	}
+
+	var identityCount int64
+	if err := tx.WithContext(ctx).Model(&store.UserIdentity{}).Where("user_id = ?", userID).Count(&identityCount).Error; err != nil {
+		return err
+	}
+	if identityCount == 0 {
+		return ErrOnlyLoginMethod
+	}
+	return nil
+}
+
+func hasUsableLocalPassword(hash string) bool {
+	hash = strings.TrimSpace(hash)
+	return hash != "" && !strings.HasPrefix(hash, "!external:")
 }
 
 func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]store.UserIdentity, error) {

@@ -6,7 +6,7 @@ import { API_BASE_URL } from '../api/client'
 import ThemeToggle from '../components/admin/ThemeToggle'
 import BrandMark from '../components/BrandMark'
 import type { PublicAuthConfig } from '../types/publicConfig'
-import type { LoginResponse } from '../types/auth'
+import type { LoginTokenResponse } from '../types/auth'
 
 type TokenStorage = Pick<Storage, 'setItem'>
 type RedirectOptions = {
@@ -31,7 +31,7 @@ export function externalCallbackStateFromLocation(search: string, hash: string):
   }
 }
 
-export function storeExternalLoginTokens(storage: TokenStorage, tokens: LoginResponse) {
+export function storeExternalLoginTokens(storage: TokenStorage, tokens: LoginTokenResponse) {
   storage.setItem('access_token', tokens.access_token)
   storage.setItem('refresh_token', tokens.refresh_token)
 }

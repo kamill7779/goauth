@@ -83,6 +83,7 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/email/send-code", h.captchaMWFor("email_code"), h.sendCode)
 	router.POST("/register", h.captchaMWFor("register"), h.register)
 	router.POST("/login", h.captchaMWFor("login"), h.login)
+	router.POST("/login/2fa/verify", h.loginTwoFactorVerify)
 	router.POST("/password/forgot", h.captchaMWFor("password_forgot"), h.forgotPassword)
 	router.POST("/password/reset", h.resetPassword)
 }
@@ -201,6 +202,17 @@ func (h *Handler) login(c *gin.Context) {
 	}
 
 	if result.pair == nil {
+		if result.twoFactor != nil {
+			httpserver.Success(c, stdhttp.StatusOK, gin.H{
+				"id":                  result.user.ID,
+				"email":               result.user.Email,
+				"two_factor_required": true,
+				"challenge_id":        result.twoFactor.ID,
+				"expires_in":          result.twoFactor.ExpiresIn,
+				"methods":             []string{"totp", "recovery_code"},
+			})
+			return
+		}
 		httpserver.Success(c, stdhttp.StatusOK, gin.H{
 			"id":    result.user.ID,
 			"email": result.user.Email,

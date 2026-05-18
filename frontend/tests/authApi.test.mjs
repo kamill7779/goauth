@@ -125,7 +125,7 @@ globalThis.window = {
   localStorage: { getItem: () => null },
 };
 
-const { exchangeGitHubLogin, forgotPassword, resetPassword } = await importAuthModule('src/api/auth.ts');
+const { exchangeGitHubLogin, forgotPassword, resetPassword, verifyLogin2FA } = await importAuthModule('src/api/auth.ts');
 const account = await importAuthModule('src/api/account.ts');
 
 test('forgotPassword posts email to forgot-password endpoint', async () => {
@@ -191,6 +191,21 @@ test('exchangeGitHubLogin posts code to external GitHub exchange endpoint', asyn
       method: 'postV1',
       path: '/external/github/exchange',
       data: { code: 'exchange-code' },
+      options: undefined,
+    },
+  ]);
+});
+
+test('verifyLogin2FA posts challenge code to login 2FA endpoint', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await verifyLogin2FA({ challenge_id: 'challenge-123', code: '123456' });
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'post',
+      path: '/login/2fa/verify',
+      data: { challenge_id: 'challenge-123', code: '123456' },
       options: undefined,
     },
   ]);
@@ -279,6 +294,31 @@ test('uploadAccountAvatar posts multipart avatar form data', async () => {
   assert.equal(globalThis.__authClientCalls[0].method, 'postFormV1');
   assert.equal(globalThis.__authClientCalls[0].path, '/account/avatar');
   assert.equal(globalThis.__authClientCalls[0].data.get('avatar'), file);
+});
+
+test('updateAccountProfile does not send immutable username', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await account.updateAccountProfile({
+    nickname: 'Member',
+    display_name: 'Member',
+    username: 'stable-user',
+    email: 'member@example.com',
+    locale: 'zh-CN',
+    timezone: 'Asia/Shanghai',
+  });
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'patchV1',
+      path: '/account/profile',
+      data: {
+        nickname: 'Member',
+        display_name: 'Member',
+        locale: 'zh-CN',
+      },
+    },
+  ]);
 });
 
 test('account 2FA API maps lifecycle routes and response fields', async () => {

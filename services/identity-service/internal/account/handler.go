@@ -246,6 +246,16 @@ func (h *Handler) updateProfile(c *gin.Context) {
 		return
 	}
 
+	currentUserRecord, err := h.loadActiveUser(c, userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
 	updates := map[string]any{}
 	changedFields := make([]string, 0, 5)
 	if request.Username != nil {
@@ -254,8 +264,10 @@ func (h *Handler) updateProfile(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		updates["username"] = username
-		changedFields = append(changedFields, "username")
+		if username != currentUserRecord.Username {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "username cannot be changed"})
+			return
+		}
 	}
 	if request.Nickname != nil {
 		updates["nickname"] = strings.TrimSpace(*request.Nickname)
@@ -280,10 +292,6 @@ func (h *Handler) updateProfile(c *gin.Context) {
 			Model(&store.User{}).
 			Where("id = ? AND deleted_at IS NULL", userID).
 			Updates(updates).Error; err != nil {
-			if isUniqueConstraintError(err, "username") {
-				c.JSON(http.StatusConflict, gin.H{"error": "username already exists"})
-				return
-			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -425,7 +433,8 @@ func (h *Handler) loginMethods(c *gin.Context) {
 	}
 
 	methods := make([]gin.H, 0, len(identities)+2)
-	if accountHasLocalPassword(*user) {
+	hasLocalPassword := accountHasLocalPassword(*user)
+	if hasLocalPassword {
 		methods = append(methods, gin.H{
 			"key":          "password",
 			"type":         "password",
@@ -452,7 +461,7 @@ func (h *Handler) loginMethods(c *gin.Context) {
 		"last_used_at": nil,
 	})
 	for _, identity := range identities {
-		methods = append(methods, accountIdentityMethod(identity))
+		methods = append(methods, accountIdentityMethod(identity, hasLocalPassword || len(identities) > 1))
 	}
 
 	httpserver.Success(c, http.StatusOK, gin.H{
@@ -1412,17 +1421,6 @@ func accountProfilePayload(user store.User) gin.H {
 	}
 }
 
-func isUniqueConstraintError(err error, field string) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	if !strings.Contains(lower, "unique") && !strings.Contains(lower, "duplicate") {
-		return false
-	}
-	return strings.Contains(lower, strings.ToLower(field))
-}
-
 func accountHasLocalPassword(user store.User) bool {
 	hash := strings.TrimSpace(user.PasswordHash)
 	return hash != "" && !strings.HasPrefix(hash, "!external:")
@@ -1435,7 +1433,7 @@ func accountEmailStatus(user store.User) string {
 	return "pending"
 }
 
-func accountIdentityMethod(identityRecord store.UserIdentity) gin.H {
+func accountIdentityMethod(identityRecord store.UserIdentity, canUnbind bool) gin.H {
 	label := strings.TrimSpace(identityRecord.Provider)
 	if label == "" {
 		label = "oauth"
@@ -1448,7 +1446,7 @@ func accountIdentityMethod(identityRecord store.UserIdentity) gin.H {
 		"status":       "bound",
 		"verified":     identityRecord.EmailVerified,
 		"identifier":   accountIdentityIdentifier(identityRecord),
-		"can_unbind":   true,
+		"can_unbind":   canUnbind,
 		"created_at":   identityRecord.CreatedAt,
 		"last_used_at": nil,
 		"avatar_url":   identityRecord.AvatarURL,
