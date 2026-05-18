@@ -125,7 +125,7 @@ globalThis.window = {
   localStorage: { getItem: () => null },
 };
 
-const { exchangeGitHubLogin, forgotPassword, resetPassword } = await importAuthModule('src/api/auth.ts');
+const { exchangeGitHubLogin, forgotPassword, resetPassword, verifyLogin2FA } = await importAuthModule('src/api/auth.ts');
 const account = await importAuthModule('src/api/account.ts');
 
 test('forgotPassword posts email to forgot-password endpoint', async () => {
@@ -191,6 +191,21 @@ test('exchangeGitHubLogin posts code to external GitHub exchange endpoint', asyn
       method: 'postV1',
       path: '/external/github/exchange',
       data: { code: 'exchange-code' },
+      options: undefined,
+    },
+  ]);
+});
+
+test('verifyLogin2FA posts challenge code to login 2FA endpoint', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await verifyLogin2FA({ challenge_id: 'challenge-123', code: '123456' });
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'post',
+      path: '/login/2fa/verify',
+      data: { challenge_id: 'challenge-123', code: '123456' },
       options: undefined,
     },
   ]);

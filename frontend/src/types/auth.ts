@@ -10,10 +10,27 @@ export interface LoginInput {
   password: string;
 }
 
-export interface LoginResponse {
+export interface LoginTokenResponse {
   access_token: string;
   refresh_token: string;
   session_id: string;
+}
+
+export interface LoginTwoFactorChallengeResponse {
+  id?: number;
+  email?: string;
+  two_factor_required: true;
+  challenge_id: string;
+  expires_in?: number;
+  methods?: string[];
+}
+
+export type LoginResponse = LoginTokenResponse | LoginTwoFactorChallengeResponse;
+
+export interface LoginTwoFactorVerifyInput {
+  challenge_id: string;
+  code?: string;
+  recovery_code?: string;
 }
 
 export interface RegisterInput {

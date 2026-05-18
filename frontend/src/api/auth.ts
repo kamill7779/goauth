@@ -1,10 +1,14 @@
 import { apiGet, apiPost, apiPostV1, type ApiRequestOptions } from './client';
-import type { AuthSession, LoginInput, LoginResponse, RegisterInput, SendCodeInput } from '../types/auth';
+import type { AuthSession, LoginInput, LoginResponse, LoginTokenResponse, LoginTwoFactorVerifyInput, RegisterInput, SendCodeInput } from '../types/auth';
 
 export type AuthRequestOptions = ApiRequestOptions;
 
 export async function login(input: LoginInput, options?: AuthRequestOptions): Promise<LoginResponse> {
   return apiPost<LoginResponse>('/login', input, options);
+}
+
+export async function verifyLogin2FA(input: LoginTwoFactorVerifyInput): Promise<LoginTokenResponse> {
+  return apiPost<LoginTokenResponse>('/login/2fa/verify', input);
 }
 
 export async function register(input: RegisterInput, options?: AuthRequestOptions): Promise<{ id: number; email: string }> {
@@ -28,7 +32,7 @@ export async function resetPassword(input: {
 }
 
 export async function exchangeGitHubLogin(code: string): Promise<{
-  tokens: LoginResponse;
+  tokens: LoginTokenResponse;
   return_to?: string;
   user: { id: number; email: string };
 }> {

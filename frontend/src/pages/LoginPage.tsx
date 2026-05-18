@@ -1,11 +1,12 @@
 import { useState, useCallback, useEffect, FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { forgotPassword, login, register, resetPassword, sendEmailCode } from '../api/auth'
+import { forgotPassword, login, register, resetPassword, sendEmailCode, verifyLogin2FA } from '../api/auth'
 import { API_BASE_URL } from '../api/client'
 import { captchaEnabledForAction, defaultPublicConfig, getPublicConfig, normalizePublicConfig } from '../api/publicConfig'
 import ThemeToggle from '../components/admin/ThemeToggle'
 import BrandMark from '../components/BrandMark'
 import TurnstileCaptcha from '../components/auth/TurnstileCaptcha'
+import type { LoginResponse, LoginTokenResponse, LoginTwoFactorChallengeResponse } from '../types/auth'
 import type { PublicAuthConfig } from '../types/publicConfig'
 
 interface FormData {
@@ -15,6 +16,7 @@ interface FormData {
   username: string
   nickname: string
   emailCode: string
+  twoFactorCode: string
 }
 
 const initialForm: FormData = {
@@ -24,6 +26,7 @@ const initialForm: FormData = {
   username: '',
   nickname: '',
   emailCode: '',
+  twoFactorCode: '',
 }
 
 type CaptchaAction = 'login' | 'register' | 'email_code' | 'password_forgot'
@@ -39,6 +42,10 @@ type AuthorizeReturnOptions = {
 }
 
 type AuthEntryVisibility = ReturnType<typeof authEntryVisibility>
+type PendingTwoFactor = {
+  challengeId: string
+  methods: string[]
+}
 
 declare global {
   interface Window {
@@ -109,6 +116,27 @@ export function authEntryVisibility(configLike: unknown) {
     showLocalLogin: config.local_login.enabled,
     githubProvider: config.external_providers.find(provider => provider.slug === 'github') ?? null,
   }
+}
+
+export function isLoginTwoFactorChallenge(response: LoginResponse): response is LoginTwoFactorChallengeResponse {
+  return 'two_factor_required' in response &&
+    response.two_factor_required === true &&
+    typeof response.challenge_id === 'string' &&
+    response.challenge_id.trim() !== ''
+}
+
+export function storeLoginTokens(tokens: LoginTokenResponse) {
+  window.localStorage.setItem('access_token', tokens.access_token)
+  window.localStorage.setItem('refresh_token', tokens.refresh_token)
+}
+
+export function loginTwoFactorPayloadFromInput(raw: string): { code: string } | { recovery_code: string } {
+  const value = raw.trim()
+  const digits = value.replace(/\s/g, '')
+  if (/^\d{6}$/.test(digits)) {
+    return { code: digits }
+  }
+  return { recovery_code: value }
 }
 
 export function buildExternalProviderStartURL(
@@ -223,6 +251,7 @@ export default function LoginPage() {
   const [authConfig, setAuthConfig] = useState<PublicAuthConfig | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState('')
+  const [pendingTwoFactor, setPendingTwoFactor] = useState<PendingTwoFactor | null>(null)
 
   const authConfigState = buildAuthConfigViewState(authConfig, configLoading, configError)
   const visibility = authConfigState.visibility
@@ -345,15 +374,32 @@ export default function LoginPage() {
       setError('认证运行配置不可用，请稍后重试')
       return
     }
+    if (pendingTwoFactor && !form.twoFactorCode.trim()) {
+      setError('请输入两步验证码或恢复码')
+      return
+    }
     setLoading(true)
     setError('')
     setSuccess('')
 
     try {
-      const captchaToken = await getCaptchaToken(authConfig, 'login')
-      const result = await login({ identifier: form.identifier || form.email, password: form.password }, { captchaToken })
-      window.localStorage.setItem('access_token', result.access_token)
-      window.localStorage.setItem('refresh_token', result.refresh_token)
+      const result = pendingTwoFactor
+        ? await verifyLogin2FA({
+            challenge_id: pendingTwoFactor.challengeId,
+            ...loginTwoFactorPayloadFromInput(form.twoFactorCode),
+          })
+        : await login({ identifier: form.identifier || form.email, password: form.password }, { captchaToken: await getCaptchaToken(authConfig, 'login') })
+      if (isLoginTwoFactorChallenge(result)) {
+        setPendingTwoFactor({
+          challengeId: result.challenge_id,
+          methods: result.methods ?? ['totp', 'recovery_code'],
+        })
+        setForm(prev => ({ ...prev, twoFactorCode: '' }))
+        setSuccess('请输入两步验证码；如果无法使用验证器，可输入恢复码')
+        return
+      }
+      storeLoginTokens(result)
+      setPendingTwoFactor(null)
       const redirect = resolvePostLoginRedirect(returnTo)
       if (redirect.mode === 'external') {
         window.location.assign(redirect.target)
@@ -365,7 +411,7 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
-  }, [authConfig, form.identifier, form.email, form.password, navigate, returnTo])
+  }, [authConfig, form.identifier, form.email, form.password, form.twoFactorCode, navigate, pendingTwoFactor, returnTo])
 
   const handleRegisterSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -458,6 +504,7 @@ export default function LoginPage() {
     setTab(nextTab)
     setError('')
     setSuccess('')
+    setPendingTwoFactor(null)
     setForm({ ...initialForm, email: form.email })
   }, [form.email])
 
@@ -721,52 +768,87 @@ export default function LoginPage() {
               onSubmit={handleLoginSubmit}
               style={{ display: visibility.showLocalLogin && tab === 'login' ? 'block' : 'none', animation: tab === 'login' ? 'fadeIn 0.35s ease' : 'none' }}
             >
-              <div style={{ marginBottom: '18px' }}>
-                <label htmlFor="login-identifier" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
-                  用户名或邮箱
-                </label>
-                <input
-                  id="login-identifier"
-                  name="identifier"
-                  type="text"
-                  value={form.identifier}
-                  onChange={e => updateField('identifier', e.target.value)}
-                  placeholder="用户名或 name@company.com"
-                  autoComplete="username"
-                  required
-                  style={inputStyle}
-                />
-              </div>
+              {pendingTwoFactor ? (
+                <>
+                  <div style={{ marginBottom: '18px' }}>
+                    <label htmlFor="login-2fa-code" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
+                      两步验证码或恢复码
+                    </label>
+                    <input
+                      id="login-2fa-code"
+                      name="two_factor_code"
+                      type="text"
+                      value={form.twoFactorCode}
+                      onChange={e => updateField('twoFactorCode', e.target.value)}
+                      placeholder={pendingTwoFactor.methods.includes('recovery_code') ? '123456 或 ABCD-EFGH-IJKL' : '输入 6 位验证码'}
+                      autoComplete="one-time-code"
+                      required
+                      style={inputStyle}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingTwoFactor(null)
+                      setSuccess('')
+                      setError('')
+                      setForm(prev => ({ ...prev, twoFactorCode: '' }))
+                    }}
+                    style={{ ...btnSecondaryStyle, marginBottom: '14px' }}
+                  >
+                    使用其他账号登录
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div style={{ marginBottom: '18px' }}>
+                    <label htmlFor="login-identifier" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
+                      用户名或邮箱
+                    </label>
+                    <input
+                      id="login-identifier"
+                      name="identifier"
+                      type="text"
+                      value={form.identifier}
+                      onChange={e => updateField('identifier', e.target.value)}
+                      placeholder="用户名或 name@company.com"
+                      autoComplete="username"
+                      required
+                      style={inputStyle}
+                    />
+                  </div>
 
-              <div style={{ marginBottom: '18px' }}>
-                <label htmlFor="login-password" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
-                  密码
-                </label>
-                <input
-                  id="login-password"
-                  name="password"
-                  type="password"
-                  value={form.password}
-                  onChange={e => updateField('password', e.target.value)}
-                  placeholder="输入密码"
-                  autoComplete="current-password"
-                  required
-                  style={inputStyle}
-                />
-              </div>
+                  <div style={{ marginBottom: '18px' }}>
+                    <label htmlFor="login-password" style={{ display: 'block', fontSize: '13px', fontWeight: 500, color: 'var(--ink-secondary)', marginBottom: '7px', paddingLeft: '2px' }}>
+                      密码
+                    </label>
+                    <input
+                      id="login-password"
+                      name="password"
+                      type="password"
+                      value={form.password}
+                      onChange={e => updateField('password', e.target.value)}
+                      placeholder="输入密码"
+                      autoComplete="current-password"
+                      required
+                      style={inputStyle}
+                    />
+                  </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '8px 0 24px' }}>
-                <label htmlFor="remember-me" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--ink-secondary)' }}>
-                  <input id="remember-me" name="remember_me" type="checkbox" style={{ width: '18px', height: '18px', accentColor: 'var(--accent)' }} />
-                  <span>记住我</span>
-                </label>
-                <Link to={buildAuthRoutePath('/forgot-password', { returnTo })} style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
-                  忘记密码？
-                </Link>
-              </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '8px 0 24px' }}>
+                    <label htmlFor="remember-me" style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--ink-secondary)' }}>
+                      <input id="remember-me" name="remember_me" type="checkbox" style={{ width: '18px', height: '18px', accentColor: 'var(--accent)' }} />
+                      <span>记住我</span>
+                    </label>
+                    <Link to={buildAuthRoutePath('/forgot-password', { returnTo })} style={{ fontSize: '13px', color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+                      忘记密码？
+                    </Link>
+                  </div>
+                </>
+              )}
 
               <button type="submit" disabled={authActionDisabled} style={btnPrimaryStyle(authActionDisabled)}>
-                {loading ? <><Spinner /> 登录中...</> : isSSOLogin ? '继续' : '登录'}
+                {loading ? <><Spinner /> 登录中...</> : pendingTwoFactor ? '验证并登录' : isSSOLogin ? '继续' : '登录'}
               </button>
             </form>
 

@@ -425,7 +425,8 @@ func (h *Handler) loginMethods(c *gin.Context) {
 	}
 
 	methods := make([]gin.H, 0, len(identities)+2)
-	if accountHasLocalPassword(*user) {
+	hasLocalPassword := accountHasLocalPassword(*user)
+	if hasLocalPassword {
 		methods = append(methods, gin.H{
 			"key":          "password",
 			"type":         "password",
@@ -452,7 +453,7 @@ func (h *Handler) loginMethods(c *gin.Context) {
 		"last_used_at": nil,
 	})
 	for _, identity := range identities {
-		methods = append(methods, accountIdentityMethod(identity))
+		methods = append(methods, accountIdentityMethod(identity, hasLocalPassword || len(identities) > 1))
 	}
 
 	httpserver.Success(c, http.StatusOK, gin.H{
@@ -1435,7 +1436,7 @@ func accountEmailStatus(user store.User) string {
 	return "pending"
 }
 
-func accountIdentityMethod(identityRecord store.UserIdentity) gin.H {
+func accountIdentityMethod(identityRecord store.UserIdentity, canUnbind bool) gin.H {
 	label := strings.TrimSpace(identityRecord.Provider)
 	if label == "" {
 		label = "oauth"
@@ -1448,7 +1449,7 @@ func accountIdentityMethod(identityRecord store.UserIdentity) gin.H {
 		"status":       "bound",
 		"verified":     identityRecord.EmailVerified,
 		"identifier":   accountIdentityIdentifier(identityRecord),
-		"can_unbind":   true,
+		"can_unbind":   canUnbind,
 		"created_at":   identityRecord.CreatedAt,
 		"last_used_at": nil,
 		"avatar_url":   identityRecord.AvatarURL,

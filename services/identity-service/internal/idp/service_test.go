@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"goauth/services/identity-service/internal/audit"
@@ -442,5 +443,74 @@ func TestBindAndUnbindRecordAuditLogs(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("external identity audit log count = %d, want 2", count)
+	}
+}
+
+func TestUnbindRejectsOnlyLoginMethodForExternalOnlyUser(t *testing.T) {
+	provider := &fakeProvider{slug: "github", displayName: "GitHub"}
+	service := newTestService(t, provider)
+	user := &store.User{
+		Email:        "external-only@example.com",
+		DisplayName:  "External Only",
+		PasswordHash: "!external:github",
+		Status:       store.UserStatusActive,
+	}
+	if err := service.db.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	identity := &store.UserIdentity{
+		UserID:         user.ID,
+		Provider:       "github",
+		ProviderUserID: "42",
+		Email:          user.Email,
+	}
+	if err := service.db.Create(identity).Error; err != nil {
+		t.Fatalf("create identity: %v", err)
+	}
+
+	err := service.Unbind(context.Background(), user.ID, "github")
+	if err == nil || !strings.Contains(err.Error(), "only remaining login method") {
+		t.Fatalf("Unbind() error = %v, want only remaining login method", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.UserIdentity{}).Where("user_id = ?", user.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count identities: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("identity count = %d, want identity preserved", count)
+	}
+}
+
+func TestUnbindAllowsExternalOnlyUserWithAnotherProvider(t *testing.T) {
+	provider := &fakeProvider{slug: "github", displayName: "GitHub"}
+	service := newTestService(t, provider)
+	user := &store.User{
+		Email:        "external-two@example.com",
+		DisplayName:  "External Two",
+		PasswordHash: "!external:github",
+		Status:       store.UserStatusActive,
+	}
+	if err := service.db.Create(user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	identities := []store.UserIdentity{
+		{UserID: user.ID, Provider: "github", ProviderUserID: "42", Email: user.Email},
+		{UserID: user.ID, Provider: "google", ProviderUserID: "84", Email: user.Email},
+	}
+	if err := service.db.Create(&identities).Error; err != nil {
+		t.Fatalf("create identities: %v", err)
+	}
+
+	if err := service.Unbind(context.Background(), user.ID, "github"); err != nil {
+		t.Fatalf("Unbind() error = %v", err)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.UserIdentity{}).Where("user_id = ?", user.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count identities: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("identity count = %d, want remaining provider identity", count)
 	}
 }

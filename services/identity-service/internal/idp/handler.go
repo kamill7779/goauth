@@ -347,6 +347,8 @@ func (h *Handler) unbindAccountProvider(c *gin.Context) {
 		status := stdhttp.StatusBadRequest
 		if errors.Is(err, ErrIdentityNotFound) {
 			status = stdhttp.StatusNotFound
+		} else if errors.Is(err, ErrOnlyLoginMethod) {
+			status = stdhttp.StatusConflict
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
@@ -422,6 +424,8 @@ func (h *Handler) unbind(c *gin.Context) {
 		status := stdhttp.StatusBadRequest
 		if errors.Is(err, ErrIdentityNotFound) {
 			status = stdhttp.StatusNotFound
+		} else if errors.Is(err, ErrOnlyLoginMethod) {
+			status = stdhttp.StatusConflict
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
 		return
