@@ -1,5 +1,5 @@
 import { apiDeleteV1, apiGetV1, apiPatchV1, apiPostV1 } from './client';
-import type { AccountMe, AccountSession, AuthorizedApp, LoginMethod } from '../types/account';
+import type { AccountMe, AccountSession, AuthorizedApp, IdentityActivity, LoginMethod } from '../types/account';
 
 interface RawAccountUser extends Omit<AccountMe['user'], 'timezone'> {
   timezone?: string;
@@ -30,6 +30,15 @@ interface RawAuthorizedApp {
   granted_at: string;
   last_access_at: string;
   active: boolean;
+}
+
+interface RawActivityItem {
+  id: number;
+  action: string;
+  category: string;
+  title: string;
+  description: string;
+  created_at: string;
 }
 
 const LOGIN_METHOD_PLACEHOLDERS: LoginMethod[] = [
@@ -172,6 +181,30 @@ function mapLoginMethod(method: RawLoginMethod): LoginMethod {
   };
 }
 
+function mapActivityType(category: string): IdentityActivity['type'] {
+  switch (category) {
+    case 'security':
+      return 'security';
+    case 'login_method':
+      return 'binding';
+    case 'profile':
+      return 'profile';
+    case 'session':
+    default:
+      return 'auth';
+  }
+}
+
+function mapActivity(item: RawActivityItem): IdentityActivity {
+  return {
+    id: item.id,
+    type: mapActivityType(item.category),
+    title: item.title || item.action,
+    desc: item.description || '',
+    time: relativeTimeLabel(item.created_at) || dateLabel(item.created_at),
+  };
+}
+
 function unsupported(message: string): never {
   throw new Error(message);
 }
@@ -273,6 +306,12 @@ export async function getAccountAuthorizedApps(): Promise<{ apps: AuthorizedApp[
       initial: appInitial(app.name),
     })),
   };
+}
+
+export async function getAccountActivity(limit = 5): Promise<{ items: IdentityActivity[] }> {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const data = await apiGetV1<{ items: RawActivityItem[] }>(`/account/activity?limit=${encodeURIComponent(String(safeLimit))}`);
+  return { items: data.items.map(mapActivity) };
 }
 
 export async function revokeAppAuthorization(appId: string): Promise<{ revoked: boolean }> {

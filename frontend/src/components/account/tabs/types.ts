@@ -1,4 +1,4 @@
-import type { AccountUser, AccountMe, AccountSession, LoginMethod, AuthorizedApp } from '../../../types/account';
+import type { AccountUser, AccountMe, AccountSession, LoginMethod, AuthorizedApp, IdentityActivity } from '../../../types/account';
 import type { ToastItem } from '../AccountToast';
 
 export interface SharedTabProps {
@@ -9,6 +9,7 @@ export interface SharedTabProps {
   setLoginMethods: React.Dispatch<React.SetStateAction<LoginMethod[]>>;
   authorizedApps: AuthorizedApp[];
   setAuthorizedApps: React.Dispatch<React.SetStateAction<AuthorizedApp[]>>;
+  identityActivities: IdentityActivity[];
   twoFAEnabled: boolean;
   setTwoFAEnabled: React.Dispatch<React.SetStateAction<boolean>>;
   securityScore: number;

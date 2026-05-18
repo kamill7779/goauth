@@ -5,6 +5,7 @@ import {
   getAccountSessions,
   getAccountLoginMethods,
   getAccountAuthorizedApps,
+  getAccountActivity,
   getAccount2FAStatus,
 } from '../api/account';
 import BrandMark from '../components/BrandMark';
@@ -28,7 +29,7 @@ import {
   IconX,
 } from '../components/admin/Icons';
 import { usePublicBrand } from '../hooks/usePublicBrand';
-import type { AccountMe, AccountSession } from '../types/account';
+import type { AccountMe, AccountSession, IdentityActivity } from '../types/account';
 import type { ToastItem } from '../components/account/AccountToast';
 
 function clearStoredTokens() {
@@ -58,6 +59,7 @@ export default function AccountPage() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [loginMethods, setLoginMethods] = useState<Awaited<ReturnType<typeof getAccountLoginMethods>>['methods']>([]);
   const [authorizedApps, setAuthorizedApps] = useState<Awaited<ReturnType<typeof getAccountAuthorizedApps>>['apps']>([]);
+  const [identityActivities, setIdentityActivities] = useState<IdentityActivity[]>([]);
   const [twoFAEnabled, setTwoFAEnabled] = useState(false);
   const [securityScore, setSecurityScore] = useState(72);
 
@@ -79,17 +81,19 @@ export default function AccountPage() {
     setLoading(true);
     setError('');
     try {
-      const [me, sess, methods, apps, fa] = await Promise.all([
+      const [me, sess, methods, apps, activity, fa] = await Promise.all([
         getAccountMe(),
         getAccountSessions(),
         getAccountLoginMethods(),
         getAccountAuthorizedApps(),
+        getAccountActivity(5),
         getAccount2FAStatus(),
       ]);
       setAccount(me);
       setSessions(sess.sessions);
       setLoginMethods(methods.methods);
       setAuthorizedApps(apps.apps);
+      setIdentityActivities(activity.items);
       setTwoFAEnabled(fa.enabled);
       // compute security score
       let score = 40;
@@ -137,6 +141,7 @@ export default function AccountPage() {
       setLoginMethods,
       authorizedApps,
       setAuthorizedApps,
+      identityActivities,
       twoFAEnabled,
       setTwoFAEnabled,
       securityScore,
@@ -159,7 +164,7 @@ export default function AccountPage() {
       default:
         return null;
     }
-  }, [tab, loading, user, account, sessions, loginMethods, authorizedApps, twoFAEnabled, securityScore, loadAccount, showToast]);
+  }, [tab, loading, user, account, sessions, loginMethods, authorizedApps, identityActivities, twoFAEnabled, securityScore, loadAccount, showToast]);
 
   return (
     <div className="min-h-screen bg-canvas text-ink">

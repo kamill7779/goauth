@@ -66,6 +66,9 @@ async function importAuthModule(relativePath) {
                 if (path === '/account/authorized-apps') {
                   return { apps: [] };
                 }
+                if (path.startsWith('/account/activity')) {
+                  return { items: [] };
+                }
                 return { ok: true, path };
               }
 
@@ -168,6 +171,7 @@ test('account API uses self-service v1 account routes', async () => {
   await account.getAccountSessions();
   await account.revokeAccountSession('session/with?chars');
   await account.logoutAllAccountSessions();
+  await account.getAccountActivity(5);
 
   assert.deepEqual(globalThis.__authClientCalls, [
     { method: 'getV1', path: '/account/me' },
@@ -184,5 +188,6 @@ test('account API uses self-service v1 account routes', async () => {
       data: undefined,
       options: undefined,
     },
+    { method: 'getV1', path: '/account/activity?limit=5' },
   ]);
 });

@@ -6,7 +6,6 @@ import {
   IconEdit,
   IconCheck,
   IconInfo,
-  IconGithub,
   IconArrowRight,
   IconMonitor,
   IconRefreshCw,
@@ -20,6 +19,7 @@ export default function OverviewTab({
   twoFAEnabled,
   securityScore,
   sessions,
+  identityActivities,
   setTab,
   refresh,
 }: SharedTabProps) {
@@ -74,14 +74,13 @@ export default function OverviewTab({
     ...(!user.email_verified ? [{ id: 'email-unverified', level: 'danger' as const, title: '邮箱尚未验证', desc: '未验证邮箱无法用于重置密码与接收安全通知。', action: '立即验证' }] : []),
   ];
 
-  const activities = [
-    { id: 1, title: '开启了两步验证', desc: '为账号添加了一层额外保护', time: '今天 14:32', icon: IconShield },
-    { id: 2, title: '授权了应用「Inkwell Lab」', desc: '允许访问基本资料与邮箱', time: '昨天 09:18', icon: IconApps },
-    { id: 3, title: '绑定了 GitHub 账号', desc: '@zhixia 已成为登录方式之一', time: '3 天前', icon: IconGithub },
-    { id: 4, title: '更新了显示名', desc: '「知夏」改为「林知夏」', time: '1 周前', icon: IconEdit },
-  ];
-
   const activeCount = sessions.filter((s) => s.status === 'active').length;
+  const activityIconMap = {
+    security: IconShield,
+    auth: IconApps,
+    binding: IconKey,
+    profile: IconEdit,
+  };
 
   return (
     <div className="space-y-5">
@@ -229,21 +228,39 @@ export default function OverviewTab({
               <p className="mt-1 text-sm text-ink-tertiary">只展示与你身份有关的事件</p>
             </div>
           </div>
-          <div className="relative pl-6">
-            <div className="absolute bottom-4 left-[11px] top-4 w-px bg-line" />
-            {activities.map((act) => (
-                <div key={act.id} className="relative mb-5">
-                  <span className="absolute -left-6 top-0.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-brand bg-surface-solid">
-                    <span className="h-1.5 w-1.5 rounded-full bg-brand" />
-                  </span>
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-sm font-medium">{act.title}</span>
-                    <span className="shrink-0 text-[11px] text-ink-tertiary">{act.time}</span>
+          {identityActivities.length === 0 ? (
+            <div className="flex flex-col items-center py-10 text-center">
+              <div className="mb-4 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-muted text-ink-tertiary">
+                <IconInfo size={24} />
+              </div>
+              <p className="text-base font-medium">暂无身份活动</p>
+              <p className="mt-1 max-w-xs text-sm text-ink-tertiary">登录、资料变更、绑定变更等事件会出现在这里。</p>
+            </div>
+          ) : (
+            <div className="relative pl-6">
+              <div className="absolute bottom-4 left-[11px] top-4 w-px bg-line" />
+              {identityActivities.map((act) => {
+                const ActivityIcon = activityIconMap[act.type] || IconInfo;
+                return (
+                  <div key={act.id} className="relative mb-5">
+                    <span className="absolute -left-6 top-0.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-brand bg-surface-solid">
+                      <span className="h-1.5 w-1.5 rounded-full bg-brand" />
+                    </span>
+                    <div className="flex items-start gap-2">
+                      <ActivityIcon size={14} className="mt-0.5 shrink-0 text-brand" />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline justify-between gap-3">
+                          <span className="text-sm font-medium">{act.title}</span>
+                          <span className="shrink-0 text-[11px] text-ink-tertiary">{act.time}</span>
+                        </div>
+                        {act.desc && <div className="mt-1 text-xs leading-relaxed text-ink-tertiary">{act.desc}</div>}
+                      </div>
+                    </div>
                   </div>
-                  <div className="mt-1 text-xs leading-relaxed text-ink-tertiary">{act.desc}</div>
-                </div>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
