@@ -76,6 +76,16 @@ export async function apiPostV1<T>(path: string, data?: unknown, options?: ApiRe
   return response.data.data;
 }
 
+export async function apiPatchV1<T>(path: string, data?: unknown): Promise<T> {
+  const response = await v1Client.patch<ApiSuccessResponse<T>>(path, data);
+  return response.data.data;
+}
+
+export async function apiDeleteV1<T>(path: string): Promise<T> {
+  const response = await v1Client.delete<ApiSuccessResponse<T>>(path);
+  return response.data.data;
+}
+
 export async function apiGetV1<T>(path: string): Promise<T> {
   const response = await v1Client.get<ApiSuccessResponse<T>>(path);
   return response.data.data;

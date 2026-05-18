@@ -1,47 +1,50 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getAccountMe, getAccountSessions, logoutAllAccountSessions, revokeAccountSession } from '../api/account';
+import {
+  getAccountMe,
+  getAccountSessions,
+  getAccountLoginMethods,
+  getAccountAuthorizedApps,
+  getAccount2FAStatus,
+} from '../api/account';
 import BrandMark from '../components/BrandMark';
 import ThemeToggle from '../components/admin/ThemeToggle';
+import AccountModal from '../components/account/AccountModal';
+import AccountToast from '../components/account/AccountToast';
+import OverviewTab from '../components/account/tabs/OverviewTab';
+import ProfileTab from '../components/account/tabs/ProfileTab';
+import LoginMethodsTab from '../components/account/tabs/LoginMethodsTab';
+import SecurityTab from '../components/account/tabs/SecurityTab';
+import AuthorizedAppsTab from '../components/account/tabs/AuthorizedAppsTab';
 import {
-  IconActivity,
-  IconCheckCircle,
-  IconLogOut,
-  IconMonitor,
-  IconRefreshCw,
+  IconHome,
+  IconUser,
+  IconKey,
   IconShield,
+  IconApps,
+  IconLogOut,
+  IconBell,
+  IconMenu,
+  IconX,
 } from '../components/admin/Icons';
 import { usePublicBrand } from '../hooks/usePublicBrand';
 import type { AccountMe, AccountSession } from '../types/account';
-
-function formatDate(value: string) {
-  if (!value) {
-    return '-';
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return date.toLocaleString('zh-CN', { hour12: false });
-}
-
-function statusLabel(status: string) {
-  switch (status) {
-    case 'active':
-      return '活跃';
-    case 'revoked':
-      return '已下线';
-    case 'expired':
-      return '已过期';
-    default:
-      return '未活跃';
-  }
-}
+import type { ToastItem } from '../components/account/AccountToast';
 
 function clearStoredTokens() {
   window.localStorage.removeItem('access_token');
   window.localStorage.removeItem('refresh_token');
 }
+
+const TABS = [
+  { id: 'overview' as const, label: '概览', icon: IconHome },
+  { id: 'profile' as const, label: '个人资料', icon: IconUser },
+  { id: 'login' as const, label: '登录方式', icon: IconKey },
+  { id: 'security' as const, label: '安全中心', icon: IconShield },
+  { id: 'apps' as const, label: '已授权应用', icon: IconApps },
+];
+
+type TabId = (typeof TABS)[number]['id'];
 
 export default function AccountPage() {
   const navigate = useNavigate();
@@ -50,13 +53,22 @@ export default function AccountPage() {
   const [sessions, setSessions] = useState<AccountSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [busySessionId, setBusySessionId] = useState<string | null>(null);
-  const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [tab, setTab] = useState<TabId>('overview');
+  const [toast, setToast] = useState<ToastItem | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [loginMethods, setLoginMethods] = useState<Awaited<ReturnType<typeof getAccountLoginMethods>>['methods']>([]);
+  const [authorizedApps, setAuthorizedApps] = useState<Awaited<ReturnType<typeof getAccountAuthorizedApps>>['apps']>([]);
+  const [twoFAEnabled, setTwoFAEnabled] = useState(false);
+  const [securityScore, setSecurityScore] = useState(72);
 
   const leaveToLogin = useCallback(() => {
     clearStoredTokens();
     navigate('/login', { replace: true });
   }, [navigate]);
+
+  const showToast = useCallback((message: string, type: ToastItem['type'] = 'success') => {
+    setToast({ id: `${Date.now()}`, message, type });
+  }, []);
 
   const loadAccount = useCallback(async () => {
     const token = window.localStorage.getItem('access_token');
@@ -64,16 +76,29 @@ export default function AccountPage() {
       leaveToLogin();
       return;
     }
-
     setLoading(true);
     setError('');
     try {
-      const [nextAccount, nextSessions] = await Promise.all([
+      const [me, sess, methods, apps, fa] = await Promise.all([
         getAccountMe(),
         getAccountSessions(),
+        getAccountLoginMethods(),
+        getAccountAuthorizedApps(),
+        getAccount2FAStatus(),
       ]);
-      setAccount(nextAccount);
-      setSessions(nextSessions.sessions);
+      setAccount(me);
+      setSessions(sess.sessions);
+      setLoginMethods(methods.methods);
+      setAuthorizedApps(apps.apps);
+      setTwoFAEnabled(fa.enabled);
+      // compute security score
+      let score = 40;
+      if (me.user.email_verified) score += 15;
+      if (fa.enabled) score += 20;
+      const boundCount = methods.methods.filter((m) => m.bound).length;
+      if (boundCount >= 2) score += 15;
+      if (boundCount >= 3) score += 10;
+      setSecurityScore(Math.min(100, score));
     } catch (err) {
       setError(err instanceof Error ? err.message : '账号信息加载失败');
     } finally {
@@ -85,201 +110,201 @@ export default function AccountPage() {
     loadAccount();
   }, [loadAccount]);
 
-  const handleRevokeSession = async (session: AccountSession) => {
-    const confirmed = window.confirm(session.current ? '确认退出当前会话？' : '确认下线这个会话？');
-    if (!confirmed) {
-      return;
-    }
-
-    setBusySessionId(session.id);
-    setError('');
-    try {
-      await revokeAccountSession(session.id);
-      if (session.current) {
-        leaveToLogin();
-        return;
-      }
-      await loadAccount();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '会话下线失败');
-    } finally {
-      setBusySessionId(null);
-    }
-  };
-
-  const handleLogoutAll = async () => {
-    const confirmed = window.confirm('确认退出当前账号的所有会话？');
-    if (!confirmed) {
-      return;
-    }
-
-    setLoggingOutAll(true);
-    setError('');
-    try {
-      await logoutAllAccountSessions();
-      leaveToLogin();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '退出所有会话失败');
-    } finally {
-      setLoggingOutAll(false);
-    }
-  };
-
   const user = account?.user;
-  const displayName = user?.nickname || user?.display_name || user?.username || user?.email || 'GoAuth User';
-  const activeCount = sessions.filter(session => session.status === 'active').length;
+  const displayName = user?.display_name || user?.nickname || user?.username || user?.email || 'GoAuth User';
+
+  const tabContent = useMemo(() => {
+    if (loading) {
+      return (
+        <div className="flex min-h-[360px] items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-line-strong border-t-ink" />
+        </div>
+      );
+    }
+    if (!user) {
+      return (
+        <div className="flex min-h-[360px] flex-col items-center justify-center gap-3 text-center">
+          <p className="text-sm text-ink-tertiary">无法加载账号信息</p>
+          <button onClick={loadAccount} className="rounded-xl border border-line bg-surface-muted px-4 py-2 text-sm font-medium hover:bg-surface-hover">重试</button>
+        </div>
+      );
+    }
+    const shared = {
+      user,
+      account,
+      sessions,
+      loginMethods,
+      setLoginMethods,
+      authorizedApps,
+      setAuthorizedApps,
+      twoFAEnabled,
+      setTwoFAEnabled,
+      securityScore,
+      setSecurityScore,
+      showToast,
+      refresh: loadAccount,
+      setTab,
+    };
+    switch (tab) {
+      case 'overview':
+        return <OverviewTab {...shared} />;
+      case 'profile':
+        return <ProfileTab {...shared} />;
+      case 'login':
+        return <LoginMethodsTab {...shared} />;
+      case 'security':
+        return <SecurityTab {...shared} />;
+      case 'apps':
+        return <AuthorizedAppsTab {...shared} />;
+      default:
+        return null;
+    }
+  }, [tab, loading, user, account, sessions, loginMethods, authorizedApps, twoFAEnabled, securityScore, loadAccount, showToast]);
 
   return (
-    <div className="min-h-screen bg-canvas-subtle text-ink">
-      <header className="border-b border-line bg-surface-solid">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-4">
-          <BrandMark brand={brand} size="sm" orientation="horizontal" align="left" showTagline={false} />
+    <div className="min-h-screen bg-canvas text-ink">
+      {/* Header */}
+      <header className="sticky top-0 z-30 border-b border-line bg-canvas/80 backdrop-blur-xl">
+        <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-3.5">
+          <div className="flex items-center gap-3">
+            <BrandMark brand={brand} size="sm" orientation="horizontal" align="left" showTagline={false} />
+            <span className="hidden text-xs text-ink-tertiary md:inline">· 账户中心</span>
+          </div>
+          <div className="hidden text-sm italic text-ink-tertiary md:block">
+            「这是你在所有接入应用中的统一身份」
+          </div>
           <div className="flex items-center gap-2">
-            {account?.is_admin && (
-              <button
-                onClick={() => navigate('/admin')}
-                className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-solid px-3 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink"
-              >
-                <IconShield size={16} />
-                Admin Console
-              </button>
-            )}
+            <button className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-ink-tertiary transition-colors hover:bg-surface-hover hover:text-ink">
+              <IconBell size={18} />
+            </button>
             <ThemeToggle variant="inline" />
+            <button
+              onClick={() => {
+                clearStoredTokens();
+                navigate('/login', { replace: true });
+              }}
+              className="hidden items-center gap-1.5 rounded-lg border border-line bg-surface-solid px-3 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink md:inline-flex"
+            >
+              <IconLogOut size={14} />
+              退出
+            </button>
+            <button
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-ink-tertiary transition-colors hover:bg-surface-hover hover:text-ink md:hidden"
+              onClick={() => setMobileNavOpen(true)}
+            >
+              <IconMenu size={20} />
+            </button>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-5 py-8 md:py-10">
-        {loading ? (
-          <div className="flex min-h-[360px] items-center justify-center">
-            <div className="h-7 w-7 animate-spin rounded-full border-2 border-line-strong border-t-ink" />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <section className="flex flex-col gap-5 border-b border-line pb-6 md:flex-row md:items-center md:justify-between">
-              <div className="flex min-w-0 items-center gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-xl font-semibold text-brand">
-                  {displayName.slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <h1 className="truncate text-2xl font-semibold text-ink">{displayName}</h1>
-                  <p className="mt-1 truncate text-sm text-ink-secondary">{user?.email}</p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-ok-soft px-2.5 py-1 font-medium text-ok">
-                      <IconCheckCircle size={14} />
-                      {user?.email_verified ? '邮箱已验证' : '邮箱待验证'}
-                    </span>
-                    {account?.is_admin && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-info-soft px-2.5 py-1 font-medium text-info">
-                        <IconShield size={14} />
-                        系统管理员
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 sm:min-w-[300px]">
-                <div className="rounded-xl border border-line bg-surface-muted p-4">
-                  <p className="text-xs text-ink-tertiary">活跃会话</p>
-                  <p className="mt-1 text-2xl font-semibold text-ink">{activeCount}</p>
-                </div>
-                <div className="rounded-xl border border-line bg-surface-muted p-4">
-                  <p className="text-xs text-ink-tertiary">当前租户</p>
-                  <p className="mt-1 truncate text-2xl font-semibold text-ink">{account?.session.tenant_id || '-'}</p>
-                </div>
-              </div>
-            </section>
-
-            {error && (
-              <div className="rounded-xl border border-danger bg-danger-soft px-4 py-3 text-sm text-danger">
-                {error}
-              </div>
-            )}
-
-            <section>
-              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-ink">我的会话</h2>
-                  <p className="mt-1 text-sm text-ink-tertiary">查看当前账号最近 100 个登录会话，并下线不再使用的设备。</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={loadAccount}
-                    disabled={loading}
-                    className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface-solid px-3 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
-                  >
-                    <IconRefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-                    刷新
-                  </button>
-                  <button
-                    onClick={handleLogoutAll}
-                    disabled={loggingOutAll}
-                    className="inline-flex items-center gap-2 rounded-lg bg-danger px-3 py-2 text-sm font-medium text-ink-inverse transition-colors hover:bg-danger-strong disabled:opacity-50"
-                  >
-                    <IconLogOut size={16} />
-                    退出所有会话
-                  </button>
-                </div>
-              </div>
-
-              {sessions.length === 0 ? (
-                <div className="rounded-[20px] border border-line bg-surface-solid px-6 py-14 text-center">
-                  <IconMonitor size={24} className="mx-auto mb-3 text-ink-tertiary" />
-                  <p className="text-sm font-medium text-ink">暂无会话记录</p>
-                </div>
+      {/* Hero identity */}
+      <section className="mx-auto w-full max-w-6xl px-5 pt-8">
+        <div className="relative overflow-hidden rounded-[24px] border border-line bg-surface-solid p-7 shadow-soft-md">
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-brand-soft/40 via-transparent to-transparent" />
+          <div className="relative flex flex-wrap items-center gap-6">
+            <div className="flex h-[88px] w-[88px] shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#C99B6E] to-[#9A6E47] text-[28px] font-medium text-white shadow-lg"
+              style={{ fontFamily: '"Newsreader", serif', fontStyle: 'italic' }}
+            >
+              {user?.avatar_url ? (
+                <img src={user.avatar_url} alt="" className="h-full w-full rounded-full object-cover" />
               ) : (
-                <div className="grid gap-3">
-                  {sessions.map(session => (
-                    <article
-                      key={session.id}
-                      className="grid gap-4 rounded-[16px] border border-line bg-surface-solid p-4 shadow-soft-sm md:grid-cols-[1fr_auto] md:items-center"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-sm font-semibold text-ink">{session.client || 'GoAuth'}</p>
-                          {session.current && (
-                            <span className="rounded-full bg-brand-soft px-2 py-0.5 text-xs font-medium text-brand">当前会话</span>
-                          )}
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                            session.status === 'active'
-                              ? 'bg-ok-soft text-ok'
-                              : session.status === 'revoked'
-                                ? 'bg-danger-soft text-danger'
-                                : 'bg-surface-hover text-ink-tertiary'
-                          }`}>
-                            {statusLabel(session.status)}
-                          </span>
-                        </div>
-                        <div className="mt-3 grid gap-2 text-xs text-ink-tertiary sm:grid-cols-2 lg:grid-cols-4">
-                          <span className="truncate">会话：{session.id}</span>
-                          <span className="truncate">IP：{session.ip || '-'}</span>
-                          <span className="truncate">创建：{formatDate(session.created_at)}</span>
-                          <span className="truncate">过期：{formatDate(session.expires_at)}</span>
-                        </div>
-                        {session.user_agent && (
-                          <p className="mt-2 truncate text-xs text-ink-muted">{session.user_agent}</p>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-end gap-2">
-                        <IconActivity size={16} className="hidden text-ink-tertiary md:block" />
-                        <button
-                          onClick={() => handleRevokeSession(session)}
-                          disabled={session.status !== 'active' || busySessionId === session.id}
-                          className="inline-flex items-center gap-2 rounded-lg border border-line px-3 py-2 text-sm font-medium text-ink-secondary transition-colors hover:bg-danger-soft hover:text-danger disabled:cursor-not-allowed disabled:opacity-40"
-                        >
-                          <IconLogOut size={16} />
-                          {session.current ? '退出当前' : '下线'}
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                displayName.slice(0, 1)
               )}
-            </section>
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-2xl font-semibold tracking-tight text-ink md:text-3xl">{displayName}</h1>
+                {user?.email_verified && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-ok-soft px-2.5 py-1 text-xs font-medium text-ok">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+                    已验证
+                  </span>
+                )}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-ink-secondary">
+                <span className="font-mono">@{user?.username}</span>
+                <span className="hidden h-1 w-1 rounded-full bg-ink-muted md:inline" />
+                <span className="flex items-center gap-1.5">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                  {user?.email}
+                </span>
+              </div>
+              <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-secondary italic">
+                这是你在所有接入应用中的统一身份 — 头像、名字、邮箱、安全设置 在这里管一次，处处生效。
+              </p>
+            </div>
+            <div className="hidden flex-col items-end gap-1 md:flex">
+              <div className="text-xs text-ink-tertiary">账号创建于</div>
+              <div className="text-lg font-medium">{user?.created_at?.slice(0, 10) || '-'}</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Tabs */}
+      <nav className="mx-auto w-full max-w-6xl px-5 pt-6">
+        <div className="inline-flex gap-1 rounded-2xl border border-line bg-surface p-1.5 shadow-soft-sm">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
+                  active
+                    ? 'bg-surface-solid text-ink shadow-soft-sm'
+                    : 'text-ink-secondary hover:text-ink hover:bg-surface-hover'
+                }`}
+              >
+                <Icon size={16} />
+                <span className="hidden sm:inline">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      {/* Content */}
+      <main className="mx-auto w-full max-w-6xl px-5 pb-20 pt-5">
+        {error && (
+          <div className="mb-6 rounded-2xl border border-danger bg-danger-soft px-5 py-3.5 text-sm text-danger">
+            {error}
           </div>
         )}
+        <div key={tab + (loading ? '-loading' : '')} className="animate-fade-in-up">
+          {tabContent}
+        </div>
       </main>
+
+      {/* Mobile nav drawer */}
+      {mobileNavOpen && (
+        <AccountModal open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} maxWidth={320}>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-medium">菜单</span>
+              <button onClick={() => setMobileNavOpen(false)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ink-tertiary hover:bg-surface-hover">
+                <IconX size={18} />
+              </button>
+            </div>
+            <div className="h-px bg-line" />
+            <button
+              onClick={() => {
+                clearStoredTokens();
+                navigate('/login', { replace: true });
+              }}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-ink-secondary transition-colors hover:bg-surface-hover hover:text-ink"
+            >
+              <IconLogOut size={16} />
+              退出登录
+            </button>
+          </div>
+        </AccountModal>
+      )}
+
+      {/* Toast */}
+      <AccountToast toast={toast} onDismiss={() => setToast(null)} />
     </div>
   );
 }

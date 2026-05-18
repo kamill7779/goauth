@@ -23,6 +23,7 @@ import (
 	"goauth/services/identity-service/internal/store"
 	"goauth/services/identity-service/internal/tenant"
 	"goauth/services/identity-service/internal/user"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -459,6 +460,321 @@ func TestAccountSessionRevocationStaysScopedToCurrentUser(t *testing.T) {
 	}
 }
 
+func TestAccountProfileCanBeViewedAndUpdated(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	view := performJSON(t, router, http.MethodGet, "/v1/account/profile", "", pair.AccessToken)
+	if view.Code != http.StatusOK {
+		t.Fatalf("account profile status = %d, want %d body=%s", view.Code, http.StatusOK, view.Body.String())
+	}
+	viewData := decodeData(t, view)
+	profile := asMap(t, viewData["profile"], "profile")
+	if got := stringFromAny(profile["email"]); got != regularUser.Email {
+		t.Fatalf("profile email = %q, want %q", got, regularUser.Email)
+	}
+	if got := stringFromAny(profile["username"]); got == "" {
+		t.Fatalf("profile username is empty: %#v", profile)
+	}
+
+	update := performJSON(t, router, http.MethodPatch, "/v1/account/profile", `{"username":"member-renamed","nickname":"Member Hero","display_name":"Member Hero","locale":"zh-CN","avatar_url":"https://cdn.example.com/avatar.png"}`, pair.AccessToken)
+	if update.Code != http.StatusOK {
+		t.Fatalf("update profile status = %d, want %d body=%s", update.Code, http.StatusOK, update.Body.String())
+	}
+	updateData := decodeData(t, update)
+	updatedProfile := asMap(t, updateData["profile"], "profile")
+	if got := stringFromAny(updatedProfile["username"]); got != "member-renamed" {
+		t.Fatalf("updated username = %q, want member-renamed", got)
+	}
+	if got := stringFromAny(updatedProfile["nickname"]); got != "Member Hero" {
+		t.Fatalf("updated nickname = %q, want Member Hero", got)
+	}
+	if got := stringFromAny(updatedProfile["locale"]); got != "zh-CN" {
+		t.Fatalf("updated locale = %q, want zh-CN", got)
+	}
+	if got := stringFromAny(updatedProfile["avatar_url"]); got != "https://cdn.example.com/avatar.png" {
+		t.Fatalf("updated avatar_url = %q, want https://cdn.example.com/avatar.png", got)
+	}
+
+	var stored store.User
+	if err := db.First(&stored, regularUser.ID).Error; err != nil {
+		t.Fatalf("db.First(user) error = %v", err)
+	}
+	if stored.Username != "member-renamed" {
+		t.Fatalf("stored username = %q, want member-renamed", stored.Username)
+	}
+	if stored.Nickname != "Member Hero" {
+		t.Fatalf("stored nickname = %q, want Member Hero", stored.Nickname)
+	}
+	if stored.DisplayName != "Member Hero" {
+		t.Fatalf("stored display_name = %q, want Member Hero", stored.DisplayName)
+	}
+	if stored.Locale != "zh-CN" {
+		t.Fatalf("stored locale = %q, want zh-CN", stored.Locale)
+	}
+	if stored.AvatarURL != "https://cdn.example.com/avatar.png" {
+		t.Fatalf("stored avatar_url = %q, want https://cdn.example.com/avatar.png", stored.AvatarURL)
+	}
+}
+
+func TestAccountLoginMethodsExposeLocalAndGitHubBindings(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	now := time.Now().UTC()
+	if err := db.Model(&store.User{}).Where("id = ?", regularUser.ID).Update("email_verified_at", now).Error; err != nil {
+		t.Fatalf("verify email: %v", err)
+	}
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	identity := store.UserIdentity{
+		UserID:         regularUser.ID,
+		Provider:       "github",
+		ProviderUserID: "github-42",
+		Email:          regularUser.Email,
+		EmailVerified:  true,
+		Username:       "octocat",
+		DisplayName:    "The Octocat",
+		AvatarURL:      "https://avatars.example.com/octocat.png",
+	}
+	if err := db.Create(&identity).Error; err != nil {
+		t.Fatalf("db.Create(identity) error = %v", err)
+	}
+
+	list := performJSON(t, router, http.MethodGet, "/v1/account/login-methods", "", pair.AccessToken)
+	if list.Code != http.StatusOK {
+		t.Fatalf("login methods status = %d, want %d body=%s", list.Code, http.StatusOK, list.Body.String())
+	}
+	data := decodeData(t, list)
+	methods := asSlice(t, data["methods"], "methods")
+
+	passwordMethod := findItemByStringField(t, methods, "key", "password")
+	if got := boolFromAny(passwordMethod["bound"]); !got {
+		t.Fatalf("password bound = false, want true")
+	}
+	if got := stringFromAny(passwordMethod["status"]); got != "enabled" {
+		t.Fatalf("password status = %q, want enabled", got)
+	}
+
+	emailMethod := findItemByStringField(t, methods, "key", "email")
+	if got := stringFromAny(emailMethod["status"]); got != "verified" {
+		t.Fatalf("email status = %q, want verified", got)
+	}
+	if got := stringFromAny(emailMethod["identifier"]); got != regularUser.Email {
+		t.Fatalf("email identifier = %q, want %q", got, regularUser.Email)
+	}
+
+	githubMethod := findItemByStringField(t, methods, "key", "github")
+	if got := boolFromAny(githubMethod["bound"]); !got {
+		t.Fatalf("github bound = false, want true")
+	}
+	if got := stringFromAny(githubMethod["status"]); got != "bound" {
+		t.Fatalf("github status = %q, want bound", got)
+	}
+	if got := stringFromAny(githubMethod["identifier"]); got != "octocat" {
+		t.Fatalf("github identifier = %q, want octocat", got)
+	}
+}
+
+func TestAccountAuthorizedAppsListAndRevokeStayScopedToCurrentUser(t *testing.T) {
+	router, db, sessionService, regularUser, otherUser := newIntegrationRouter(t)
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	client := store.OAuthClient{
+		TenantID:                1,
+		ClientID:                "notes-client",
+		ClientSecretHash:        "hash",
+		Name:                    "Notes",
+		RedirectURIs:            datatypes.JSON([]byte(`["https://notes.example.com/callback"]`)),
+		AllowedScopes:           datatypes.JSON([]byte(`["openid","profile"]`)),
+		GrantTypes:              datatypes.JSON([]byte(`["authorization_code","refresh_token"]`)),
+		TokenEndpointAuthMethod: "client_secret_post",
+		Status:                  "active",
+	}
+	if err := db.Create(&client).Error; err != nil {
+		t.Fatalf("db.Create(client) error = %v", err)
+	}
+	otherClient := store.OAuthClient{
+		TenantID:                1,
+		ClientID:                "tasks-client",
+		ClientSecretHash:        "hash",
+		Name:                    "Tasks",
+		RedirectURIs:            datatypes.JSON([]byte(`["https://tasks.example.com/callback"]`)),
+		AllowedScopes:           datatypes.JSON([]byte(`["openid"]`)),
+		GrantTypes:              datatypes.JSON([]byte(`["authorization_code","refresh_token"]`)),
+		TokenEndpointAuthMethod: "client_secret_post",
+		Status:                  "active",
+	}
+	if err := db.Create(&otherClient).Error; err != nil {
+		t.Fatalf("db.Create(otherClient) error = %v", err)
+	}
+
+	notesPair := issueIntegrationTokensForClient(t, sessionService, *regularUser, 0, "notes-client")
+	otherNotesPair := issueIntegrationTokensForClient(t, sessionService, *otherUser, 0, "tasks-client")
+
+	list := performJSON(t, router, http.MethodGet, "/v1/account/authorized-apps", "", pair.AccessToken)
+	if list.Code != http.StatusOK {
+		t.Fatalf("authorized apps status = %d, want %d body=%s", list.Code, http.StatusOK, list.Body.String())
+	}
+	data := decodeData(t, list)
+	apps := asSlice(t, data["apps"], "apps")
+	app := findItemByStringField(t, apps, "client_id", "notes-client")
+	if got := stringFromAny(app["name"]); got != "Notes" {
+		t.Fatalf("authorized app name = %q, want Notes", got)
+	}
+	if got := boolFromAny(app["active"]); !got {
+		t.Fatalf("authorized app active = false, want true")
+	}
+	if itemWithStringField(apps, "client_id", "tasks-client") != nil {
+		t.Fatalf("authorized apps leaked other user's client: %#v", apps)
+	}
+
+	revoke := performJSON(t, router, http.MethodDelete, "/v1/account/authorized-apps/notes-client", "", pair.AccessToken)
+	if revoke.Code != http.StatusOK {
+		t.Fatalf("revoke app status = %d, want %d body=%s", revoke.Code, http.StatusOK, revoke.Body.String())
+	}
+
+	assertSessionRevoked(t, db, notesPair.SessionID)
+	assertSessionStillActive(t, db, pair.SessionID)
+	assertSessionStillActive(t, db, otherNotesPair.SessionID)
+}
+
+func TestAccountActivityReturnsRecentUserScopedTimeline(t *testing.T) {
+	router, db, sessionService, regularUser, otherUser := newIntegrationRouter(t)
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	now := time.Now().UTC()
+	entries := []store.AuditLog{
+		{
+			ActorUserID: regularUser.ID,
+			Action:      audit.ActionUserUpdated,
+			TargetType:  audit.TargetTypeUser,
+			TargetID:    userIDString(regularUser.ID),
+			Metadata:    datatypes.JSON([]byte(`{"fields":["nickname","locale"],"source":"account_profile"}`)),
+			CreatedAt:   now.Add(-time.Minute),
+		},
+		{
+			ActorUserID: regularUser.ID,
+			Action:      audit.ActionExternalIdentityChanged,
+			TargetType:  audit.TargetTypeIdentity,
+			TargetID:    "1",
+			Metadata:    datatypes.JSON([]byte(`{"change":"bound","provider":"github","identity_username":"octocat"}`)),
+			CreatedAt:   now,
+		},
+		{
+			ActorUserID: otherUser.ID,
+			Action:      audit.ActionPasswordReset,
+			TargetType:  audit.TargetTypeUser,
+			TargetID:    userIDString(otherUser.ID),
+			Metadata:    datatypes.JSON([]byte(`{"source":"self_service"}`)),
+			CreatedAt:   now.Add(time.Minute),
+		},
+	}
+	if err := db.Create(&entries).Error; err != nil {
+		t.Fatalf("db.Create(audit logs) error = %v", err)
+	}
+
+	list := performJSON(t, router, http.MethodGet, "/v1/account/activity?limit=2", "", pair.AccessToken)
+	if list.Code != http.StatusOK {
+		t.Fatalf("account activity status = %d, want %d body=%s", list.Code, http.StatusOK, list.Body.String())
+	}
+	data := decodeData(t, list)
+	items := asSlice(t, data["items"], "items")
+	if len(items) != 2 {
+		t.Fatalf("activity items length = %d, want 2 body=%s", len(items), list.Body.String())
+	}
+
+	first := asMap(t, items[0], "items[0]")
+	if got := stringFromAny(first["action"]); got != audit.ActionExternalIdentityChanged {
+		t.Fatalf("first action = %q, want %q", got, audit.ActionExternalIdentityChanged)
+	}
+	if got := stringFromAny(first["category"]); got != "login_method" {
+		t.Fatalf("first category = %q, want login_method", got)
+	}
+	if got := stringFromAny(first["title"]); !strings.Contains(got, "GitHub") {
+		t.Fatalf("first title = %q, want GitHub", got)
+	}
+
+	second := asMap(t, items[1], "items[1]")
+	if got := stringFromAny(second["action"]); got != audit.ActionUserUpdated {
+		t.Fatalf("second action = %q, want %q", got, audit.ActionUserUpdated)
+	}
+	if got := stringFromAny(second["category"]); got != "profile" {
+		t.Fatalf("second category = %q, want profile", got)
+	}
+}
+
+func TestAccountOverviewAggregatesStatsAlertsAndRecentActivity(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	identity := store.UserIdentity{
+		UserID:         regularUser.ID,
+		Provider:       "github",
+		ProviderUserID: "github-42",
+		Email:          regularUser.Email,
+		EmailVerified:  true,
+		Username:       "octocat",
+		DisplayName:    "The Octocat",
+	}
+	if err := db.Create(&identity).Error; err != nil {
+		t.Fatalf("db.Create(identity) error = %v", err)
+	}
+
+	client := store.OAuthClient{
+		TenantID:                1,
+		ClientID:                "notes-client",
+		ClientSecretHash:        "hash",
+		Name:                    "Notes",
+		RedirectURIs:            datatypes.JSON([]byte(`["https://notes.example.com/callback"]`)),
+		AllowedScopes:           datatypes.JSON([]byte(`["openid","profile"]`)),
+		GrantTypes:              datatypes.JSON([]byte(`["authorization_code","refresh_token"]`)),
+		TokenEndpointAuthMethod: "client_secret_post",
+		Status:                  "active",
+	}
+	if err := db.Create(&client).Error; err != nil {
+		t.Fatalf("db.Create(client) error = %v", err)
+	}
+	_ = issueIntegrationTokensForClient(t, sessionService, *regularUser, 0, "notes-client")
+
+	logEntry := store.AuditLog{
+		ActorUserID: regularUser.ID,
+		Action:      audit.ActionExternalIdentityChanged,
+		TargetType:  audit.TargetTypeIdentity,
+		TargetID:    "1",
+		Metadata:    datatypes.JSON([]byte(`{"change":"bound","provider":"github","identity_username":"octocat"}`)),
+		CreatedAt:   time.Now().UTC(),
+	}
+	if err := db.Create(&logEntry).Error; err != nil {
+		t.Fatalf("db.Create(logEntry) error = %v", err)
+	}
+
+	overview := performJSON(t, router, http.MethodGet, "/v1/account/overview", "", pair.AccessToken)
+	if overview.Code != http.StatusOK {
+		t.Fatalf("account overview status = %d, want %d body=%s", overview.Code, http.StatusOK, overview.Body.String())
+	}
+	data := decodeData(t, overview)
+	stats := asMap(t, data["stats"], "stats")
+	if got := numberFromAny(stats["active_sessions"]); got != 2 {
+		t.Fatalf("active_sessions = %d, want 2", got)
+	}
+	if got := numberFromAny(stats["login_methods"]); got != 3 {
+		t.Fatalf("login_methods = %d, want 3", got)
+	}
+	if got := numberFromAny(stats["authorized_apps"]); got != 1 {
+		t.Fatalf("authorized_apps = %d, want 1", got)
+	}
+
+	alerts := asSlice(t, data["alerts"], "alerts")
+	emailAlert := findItemByStringField(t, alerts, "key", "email_unverified")
+	if got := stringFromAny(emailAlert["severity"]); got != "warning" {
+		t.Fatalf("email alert severity = %q, want warning", got)
+	}
+
+	recentActivity := asSlice(t, data["recent_activity"], "recent_activity")
+	if len(recentActivity) != 1 {
+		t.Fatalf("recent activity length = %d, want 1 body=%s", len(recentActivity), overview.Body.String())
+	}
+}
+
 func TestAdminOAuthClientSecretRotation(t *testing.T) {
 	router, db, sessionService, adminUser, _ := newIntegrationRouter(t)
 	makeSystemUser(t, db, adminUser.ID)
@@ -753,6 +1069,20 @@ func issueIntegrationTokens(t *testing.T, service *session.Service, user store.U
 	})
 	if err != nil {
 		t.Fatalf("IssueTokens() error = %v", err)
+	}
+	return pair
+}
+
+func issueIntegrationTokensForClient(t *testing.T, service *session.Service, user store.User, tenantID int64, clientID string) *session.TokenPair {
+	t.Helper()
+
+	pair, err := service.IssueTokens(t.Context(), session.IssueTokensInput{
+		User:     user,
+		TenantID: tenantID,
+		ClientID: clientID,
+	})
+	if err != nil {
+		t.Fatalf("IssueTokens(%s) error = %v", clientID, err)
 	}
 	return pair
 }

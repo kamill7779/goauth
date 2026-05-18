@@ -38,8 +38,34 @@ async function importAuthModule(relativePath) {
                 return { ok: true, path, data };
               }
 
+              export async function apiPatchV1(path, data) {
+                globalThis.__authClientCalls.push({ method: 'patchV1', path, data });
+                return { ok: true, path, data };
+              }
+
+              export async function apiDeleteV1(path) {
+                globalThis.__authClientCalls.push({ method: 'deleteV1', path });
+                return { ok: true, path };
+              }
+
               export async function apiGetV1(path) {
                 globalThis.__authClientCalls.push({ method: 'getV1', path });
+                if (path === '/account/me') {
+                  return {
+                    user: { timezone: '' },
+                    session: { id: 'session-1', tenant_id: 0 },
+                    is_admin: false,
+                  };
+                }
+                if (path === '/account/sessions') {
+                  return { sessions: [] };
+                }
+                if (path === '/account/login-methods') {
+                  return { methods: [] };
+                }
+                if (path === '/account/authorized-apps') {
+                  return { apps: [] };
+                }
                 return { ok: true, path };
               }
 
