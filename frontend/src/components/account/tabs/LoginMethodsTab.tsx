@@ -78,9 +78,12 @@ export default function LoginMethodsTab({ loginMethods, setLoginMethods, showToa
     setChangingPassword(true);
     try {
       await changeAccountPassword({ current: passwordForm.current, newPass: passwordForm.newPass });
-      showToast('密码已更新', 'success');
+      showToast('密码已更新，请重新登录', 'success');
       setModal(null);
       setPasswordForm({ current: '', newPass: '', confirm: '' });
+      window.localStorage.removeItem('access_token');
+      window.localStorage.removeItem('refresh_token');
+      window.location.href = '/login?expired=1';
     } catch {
       showToast('修改失败', 'error');
     } finally {

@@ -17,6 +17,7 @@ import (
 const (
 	ActionLogin                     = "login"
 	ActionLogout                    = "logout"
+	ActionPasswordChanged           = "password_changed"
 	ActionPasswordReset             = "password_reset"
 	ActionRefreshTokenReuseDetected = "refresh_reuse_detected"
 	ActionTenantMembershipAdded     = "tenant_membership_added"

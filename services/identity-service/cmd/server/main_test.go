@@ -15,6 +15,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/auth"
 	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/config"
 	"goauth/services/identity-service/internal/oidc"
@@ -514,6 +515,94 @@ func TestAccountProfileCanBeViewedAndUpdated(t *testing.T) {
 	}
 	if stored.AvatarURL != "https://cdn.example.com/avatar.png" {
 		t.Fatalf("stored avatar_url = %q, want https://cdn.example.com/avatar.png", stored.AvatarURL)
+	}
+}
+
+func TestAccountPasswordChangeRequiresCurrentPasswordAndInvalidatesToken(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	oldHash, err := auth.HashPassword("old-password-123")
+	if err != nil {
+		t.Fatalf("HashPassword(old) error = %v", err)
+	}
+	if err := db.Model(&store.User{}).Where("id = ?", regularUser.ID).Updates(map[string]any{
+		"password_hash": oldHash,
+	}).Error; err != nil {
+		t.Fatalf("set old password hash: %v", err)
+	}
+	regularUser.PasswordHash = oldHash
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	wrongCurrent := performJSON(t, router, http.MethodPost, "/v1/account/password/change", `{"current_password":"wrong-password","new_password":"new-password-456"}`, pair.AccessToken)
+	if wrongCurrent.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong current password status = %d, want %d body=%s", wrongCurrent.Code, http.StatusUnauthorized, wrongCurrent.Body.String())
+	}
+	assertSessionStillActive(t, db, pair.SessionID)
+
+	change := performJSON(t, router, http.MethodPost, "/v1/account/password/change", `{"current_password":"old-password-123","new_password":"new-password-456"}`, pair.AccessToken)
+	if change.Code != http.StatusOK {
+		t.Fatalf("password change status = %d, want %d body=%s", change.Code, http.StatusOK, change.Body.String())
+	}
+	data := decodeData(t, change)
+	if got := boolFromAny(data["changed"]); !got {
+		t.Fatalf("changed = false, want true")
+	}
+
+	var updated store.User
+	if err := db.First(&updated, regularUser.ID).Error; err != nil {
+		t.Fatalf("db.First(updated user) error = %v", err)
+	}
+	if updated.TokenVersion != regularUser.TokenVersion+1 {
+		t.Fatalf("token_version = %d, want %d", updated.TokenVersion, regularUser.TokenVersion+1)
+	}
+	if err := auth.CheckPassword(updated.PasswordHash, "new-password-456"); err != nil {
+		t.Fatalf("new password hash check error = %v", err)
+	}
+	if err := auth.CheckPassword(updated.PasswordHash, "old-password-123"); err == nil {
+		t.Fatalf("old password still matches updated hash")
+	}
+
+	staleAccess := performJSON(t, router, http.MethodGet, "/v1/account/me", "", pair.AccessToken)
+	if staleAccess.Code != http.StatusUnauthorized {
+		t.Fatalf("stale access status = %d, want %d body=%s", staleAccess.Code, http.StatusUnauthorized, staleAccess.Body.String())
+	}
+
+	var logEntry store.AuditLog
+	if err := db.Where("actor_user_id = ? AND action = ?", regularUser.ID, audit.ActionPasswordChanged).First(&logEntry).Error; err != nil {
+		t.Fatalf("password change audit log missing: %v", err)
+	}
+}
+
+func TestAccountPasswordChangeRollsBackWhenAuditCannotBeRecorded(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	oldHash, err := auth.HashPassword("old-password-123")
+	if err != nil {
+		t.Fatalf("HashPassword(old) error = %v", err)
+	}
+	if err := db.Model(&store.User{}).Where("id = ?", regularUser.ID).Updates(map[string]any{
+		"password_hash": oldHash,
+	}).Error; err != nil {
+		t.Fatalf("set old password hash: %v", err)
+	}
+	regularUser.PasswordHash = oldHash
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+	if err := db.Migrator().DropTable(&store.AuditLog{}); err != nil {
+		t.Fatalf("drop audit_logs: %v", err)
+	}
+
+	change := performJSON(t, router, http.MethodPost, "/v1/account/password/change", `{"current_password":"old-password-123","new_password":"new-password-456"}`, pair.AccessToken)
+	if change.Code != http.StatusInternalServerError {
+		t.Fatalf("password change status = %d, want %d body=%s", change.Code, http.StatusInternalServerError, change.Body.String())
+	}
+
+	var updated store.User
+	if err := db.First(&updated, regularUser.ID).Error; err != nil {
+		t.Fatalf("db.First(updated user) error = %v", err)
+	}
+	if updated.TokenVersion != regularUser.TokenVersion {
+		t.Fatalf("token_version = %d, want unchanged %d", updated.TokenVersion, regularUser.TokenVersion)
+	}
+	if err := auth.CheckPassword(updated.PasswordHash, "old-password-123"); err != nil {
+		t.Fatalf("old password hash check error = %v", err)
 	}
 }
 
