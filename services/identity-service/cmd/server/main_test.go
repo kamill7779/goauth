@@ -1,9 +1,14 @@
 package main
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -40,6 +45,7 @@ func TestProtectedRoutesRejectAnonymous(t *testing.T) {
 		{name: "admin users", method: http.MethodGet, target: "/v1/admin/users"},
 		{name: "admin oauth clients", method: http.MethodGet, target: "/v1/admin/oauth-clients"},
 		{name: "account center", method: http.MethodGet, target: "/v1/account/me"},
+		{name: "account 2fa status", method: http.MethodGet, target: "/v1/account/2fa/status"},
 		{name: "authz check", method: http.MethodPost, target: "/v1/authz/check", body: `{"user_id":1,"tenant_id":1,"permission":"project:read"}`},
 		{name: "my permissions", method: http.MethodGet, target: "/v1/tenants/1/my-permissions?user_id=1"},
 	}
@@ -603,6 +609,140 @@ func TestAccountPasswordChangeRollsBackWhenAuditCannotBeRecorded(t *testing.T) {
 	}
 	if err := auth.CheckPassword(updated.PasswordHash, "old-password-123"); err != nil {
 		t.Fatalf("old password hash check error = %v", err)
+	}
+}
+
+func TestAccountTwoFactorLifecyclePersistsStateAndWritesAuditLogs(t *testing.T) {
+	router, db, sessionService, regularUser, _ := newIntegrationRouter(t)
+	pair := issueIntegrationTokens(t, sessionService, *regularUser, 0)
+
+	initialStatus := performJSON(t, router, http.MethodGet, "/v1/account/2fa/status", "", pair.AccessToken)
+	if initialStatus.Code != http.StatusOK {
+		t.Fatalf("initial 2fa status = %d, want %d body=%s", initialStatus.Code, http.StatusOK, initialStatus.Body.String())
+	}
+	initialData := decodeData(t, initialStatus)
+	if got := boolFromAny(initialData["enabled"]); got {
+		t.Fatalf("initial enabled = true, want false")
+	}
+	if got := boolFromAny(initialData["recovery_codes_available"]); got {
+		t.Fatalf("initial recovery_codes_available = true, want false")
+	}
+
+	setup := performJSON(t, router, http.MethodPost, "/v1/account/2fa/setup/start", `{}`, pair.AccessToken)
+	if setup.Code != http.StatusOK {
+		t.Fatalf("2fa setup status = %d, want %d body=%s", setup.Code, http.StatusOK, setup.Body.String())
+	}
+	setupData := decodeData(t, setup)
+	secret := stringFromAny(setupData["secret"])
+	if secret == "" {
+		t.Fatalf("setup secret is empty: %#v", setupData)
+	}
+	if got := stringFromAny(setupData["otpauth_url"]); !strings.HasPrefix(got, "otpauth://totp/") {
+		t.Fatalf("otpauth_url = %q, want otpauth totp URL", got)
+	}
+
+	code := totpCodeForTest(t, secret, time.Now().UTC())
+	verify := performJSON(t, router, http.MethodPost, "/v1/account/2fa/verify", `{"code":"`+code+`"}`, pair.AccessToken)
+	if verify.Code != http.StatusOK {
+		t.Fatalf("2fa verify status = %d, want %d body=%s", verify.Code, http.StatusOK, verify.Body.String())
+	}
+	verifyData := decodeData(t, verify)
+	if got := boolFromAny(verifyData["verified"]); !got {
+		t.Fatalf("verified = false, want true")
+	}
+	recoveryCodes := asSlice(t, verifyData["recovery_codes"], "recovery_codes")
+	if len(recoveryCodes) != 10 {
+		t.Fatalf("recovery code count = %d, want 10 body=%s", len(recoveryCodes), verify.Body.String())
+	}
+
+	var persisted struct {
+		Enabled            bool
+		RecoveryCodeHashes string
+	}
+	if err := db.Raw("SELECT enabled, recovery_code_hashes FROM user_two_factors WHERE user_id = ?", regularUser.ID).Scan(&persisted).Error; err != nil {
+		t.Fatalf("load persisted 2fa state: %v", err)
+	}
+	if !persisted.Enabled {
+		t.Fatalf("persisted enabled = false, want true")
+	}
+	firstRecoveryCode := stringFromAny(recoveryCodes[0])
+	if firstRecoveryCode == "" {
+		t.Fatalf("first recovery code is empty: %#v", recoveryCodes)
+	}
+	if strings.Contains(persisted.RecoveryCodeHashes, firstRecoveryCode) {
+		t.Fatalf("persisted recovery code hashes leaked raw code %q", firstRecoveryCode)
+	}
+
+	enabledStatus := performJSON(t, router, http.MethodGet, "/v1/account/2fa/status", "", pair.AccessToken)
+	if enabledStatus.Code != http.StatusOK {
+		t.Fatalf("enabled 2fa status = %d, want %d body=%s", enabledStatus.Code, http.StatusOK, enabledStatus.Body.String())
+	}
+	enabledData := decodeData(t, enabledStatus)
+	if got := boolFromAny(enabledData["enabled"]); !got {
+		t.Fatalf("enabled status = false, want true")
+	}
+	if got := boolFromAny(enabledData["recovery_codes_available"]); !got {
+		t.Fatalf("enabled recovery_codes_available = false, want true")
+	}
+	if got := stringFromAny(enabledData["method"]); got != "totp" {
+		t.Fatalf("enabled method = %q, want totp", got)
+	}
+
+	badRegenerate := performJSON(t, router, http.MethodPost, "/v1/account/2fa/recovery-codes/regenerate", `{"code":"000000"}`, pair.AccessToken)
+	if badRegenerate.Code != http.StatusUnauthorized {
+		t.Fatalf("bad recovery regeneration status = %d, want %d body=%s", badRegenerate.Code, http.StatusUnauthorized, badRegenerate.Body.String())
+	}
+
+	regenerateCode := totpCodeForTest(t, secret, time.Now().UTC())
+	regenerate := performJSON(t, router, http.MethodPost, "/v1/account/2fa/recovery-codes/regenerate", `{"code":"`+regenerateCode+`"}`, pair.AccessToken)
+	if regenerate.Code != http.StatusOK {
+		t.Fatalf("recovery regeneration status = %d, want %d body=%s", regenerate.Code, http.StatusOK, regenerate.Body.String())
+	}
+	regenerateData := decodeData(t, regenerate)
+	regeneratedCodes := asSlice(t, regenerateData["recovery_codes"], "recovery_codes")
+	if len(regeneratedCodes) != 10 {
+		t.Fatalf("regenerated recovery code count = %d, want 10 body=%s", len(regeneratedCodes), regenerate.Body.String())
+	}
+
+	badDisable := performJSON(t, router, http.MethodPost, "/v1/account/2fa/disable", `{"code":"000000"}`, pair.AccessToken)
+	if badDisable.Code != http.StatusUnauthorized {
+		t.Fatalf("bad 2fa disable status = %d, want %d body=%s", badDisable.Code, http.StatusUnauthorized, badDisable.Body.String())
+	}
+
+	disableCode := totpCodeForTest(t, secret, time.Now().UTC())
+	disable := performJSON(t, router, http.MethodPost, "/v1/account/2fa/disable", `{"code":"`+disableCode+`"}`, pair.AccessToken)
+	if disable.Code != http.StatusOK {
+		t.Fatalf("2fa disable status = %d, want %d body=%s", disable.Code, http.StatusOK, disable.Body.String())
+	}
+	disableData := decodeData(t, disable)
+	if got := boolFromAny(disableData["disabled"]); !got {
+		t.Fatalf("disabled = false, want true")
+	}
+
+	finalStatus := performJSON(t, router, http.MethodGet, "/v1/account/2fa/status", "", pair.AccessToken)
+	if finalStatus.Code != http.StatusOK {
+		t.Fatalf("final 2fa status = %d, want %d body=%s", finalStatus.Code, http.StatusOK, finalStatus.Body.String())
+	}
+	finalData := decodeData(t, finalStatus)
+	if got := boolFromAny(finalData["enabled"]); got {
+		t.Fatalf("final enabled = true, want false")
+	}
+	if got := boolFromAny(finalData["recovery_codes_available"]); got {
+		t.Fatalf("final recovery_codes_available = true, want false")
+	}
+
+	var auditCount int64
+	if err := db.Model(&store.AuditLog{}).
+		Where("actor_user_id = ? AND action IN ?", regularUser.ID, []string{
+			"two_factor_enabled",
+			"two_factor_recovery_codes_regenerated",
+			"two_factor_disabled",
+		}).
+		Count(&auditCount).Error; err != nil {
+		t.Fatalf("count 2fa audit logs: %v", err)
+	}
+	if auditCount != 3 {
+		t.Fatalf("2fa audit log count = %d, want 3", auditCount)
 	}
 }
 
@@ -1348,6 +1488,26 @@ func mustRSAKey(t *testing.T) *rsa.PrivateKey {
 		t.Fatalf("rsa.GenerateKey() error = %v", err)
 	}
 	return privateKey
+}
+
+func totpCodeForTest(t *testing.T, secret string, at time.Time) string {
+	t.Helper()
+
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
+	if err != nil {
+		t.Fatalf("decode totp secret: %v", err)
+	}
+	counter := uint64(at.Unix() / 30)
+	var message [8]byte
+	binary.BigEndian.PutUint64(message[:], counter)
+	mac := hmac.New(sha1.New, key)
+	if _, err := mac.Write(message[:]); err != nil {
+		t.Fatalf("write totp hmac: %v", err)
+	}
+	sum := mac.Sum(nil)
+	offset := sum[len(sum)-1] & 0x0f
+	binaryCode := binary.BigEndian.Uint32(sum[offset:offset+4]) & 0x7fffffff
+	return fmt.Sprintf("%06d", binaryCode%1000000)
 }
 
 func tenantIDString(id int64) string {

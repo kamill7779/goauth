@@ -33,6 +33,12 @@ const (
 )
 
 const (
+	ActionTwoFactorEnabled                  = "two_factor_enabled"
+	ActionTwoFactorDisabled                 = "two_factor_disabled"
+	ActionTwoFactorRecoveryCodesRegenerated = "two_factor_recovery_codes_regenerated"
+)
+
+const (
 	TargetTypeUser         = "user"
 	TargetTypeTenantMember = "tenant_member"
 	TargetTypeRole         = "role"
@@ -40,6 +46,10 @@ const (
 	TargetTypeTokenFamily  = "refresh_token_family"
 	TargetTypeOAuthClient  = "oauth_client"
 	TargetTypeIdentity     = "external_identity"
+)
+
+const (
+	TargetTypeTwoFactor = "two_factor"
 )
 
 type Entry struct {

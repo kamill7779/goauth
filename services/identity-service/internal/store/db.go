@@ -35,6 +35,7 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(
 		&User{},
 		&UserIdentity{},
+		&UserTwoFactor{},
 		&Tenant{},
 		&TenantMember{},
 		&Role{},
