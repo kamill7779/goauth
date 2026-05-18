@@ -61,7 +61,7 @@ async function importAuthModule(relativePath) {
                   return { sessions: [] };
                 }
                 if (path === '/account/login-methods') {
-                  return { methods: [] };
+                  return { methods: globalThis.__accountLoginMethodsStub ?? [] };
                 }
                 if (path === '/account/authorized-apps') {
                   return { apps: [] };
@@ -88,6 +88,7 @@ async function importAuthModule(relativePath) {
 }
 
 globalThis.__authClientCalls = [];
+globalThis.__accountLoginMethodsStub = [];
 globalThis.window = {
   location: { origin: 'http://goauth.test' },
   localStorage: { getItem: () => null },
@@ -172,6 +173,7 @@ test('account API uses self-service v1 account routes', async () => {
   await account.revokeAccountSession('session/with?chars');
   await account.logoutAllAccountSessions();
   await account.getAccountActivity(5);
+  await account.changeAccountPassword({ current: 'old-password-123', newPass: 'new-password-456' });
 
   assert.deepEqual(globalThis.__authClientCalls, [
     { method: 'getV1', path: '/account/me' },
@@ -189,5 +191,36 @@ test('account API uses self-service v1 account routes', async () => {
       options: undefined,
     },
     { method: 'getV1', path: '/account/activity?limit=5' },
+    {
+      method: 'postV1',
+      path: '/account/password/change',
+      data: {
+        current_password: 'old-password-123',
+        new_password: 'new-password-456',
+      },
+      options: undefined,
+    },
   ]);
+});
+
+test('password login method remains enabled for password changes', async () => {
+  globalThis.__authClientCalls.length = 0;
+  globalThis.__accountLoginMethodsStub = [
+    {
+      key: 'password',
+      type: 'password',
+      label: '密码',
+      bound: true,
+      status: 'enabled',
+      verified: true,
+      identifier: '已设置密码',
+      can_unbind: false,
+    },
+  ];
+
+  const result = await account.getAccountLoginMethods();
+  const passwordMethod = result.methods.find((method) => method.id === 'password');
+
+  assert.equal(passwordMethod?.disabled, false);
+  assert.equal(passwordMethod?.disabledReason, undefined);
 });

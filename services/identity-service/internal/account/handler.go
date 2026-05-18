@@ -10,8 +10,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/auth"
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/identity"
+	"goauth/services/identity-service/internal/password"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/datatypes"
@@ -22,13 +24,15 @@ type Handler struct {
 	db             *gorm.DB
 	sessionService *session.Service
 	authMiddleware gin.HandlerFunc
+	pwPolicy       password.Policy
 }
 
-func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin.HandlerFunc) *Handler {
+func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin.HandlerFunc, pwPolicy password.Policy) *Handler {
 	return &Handler{
 		db:             db,
 		sessionService: sessionService,
 		authMiddleware: authMiddleware,
+		pwPolicy:       pwPolicy,
 	}
 }
 
@@ -43,6 +47,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	account.GET("/profile", h.profile)
 	account.PATCH("/profile", h.updateProfile)
 	account.GET("/login-methods", h.loginMethods)
+	account.POST("/password/change", h.changePassword)
 	account.GET("/activity", h.activity)
 	account.GET("/authorized-apps", h.authorizedApps)
 	account.DELETE("/authorized-apps/:client_id", h.revokeAuthorizedApp)
@@ -335,6 +340,118 @@ func (h *Handler) loginMethods(c *gin.Context) {
 
 	httpserver.Success(c, http.StatusOK, gin.H{
 		"methods": methods,
+	})
+}
+
+func (h *Handler) changePassword(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+
+	var request struct {
+		CurrentPassword string `json:"current_password"`
+		NewPassword     string `json:"new_password"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if request.CurrentPassword == "" || request.NewPassword == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "current_password and new_password are required"})
+		return
+	}
+
+	user, err := h.loadActiveUser(c, userID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	if !accountHasLocalPassword(*user) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "local password is not set"})
+		return
+	}
+	if err := auth.CheckPassword(user.PasswordHash, request.CurrentPassword); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "current password is incorrect"})
+		return
+	}
+	if err := h.pwPolicy.Validate(request.NewPassword); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if h.pwPolicy.HistoryCount > 0 {
+		var historyHashes []string
+		if err := h.db.WithContext(c.Request.Context()).
+			Model(&store.PasswordHistory{}).
+			Where("user_id = ?", userID).
+			Order("created_at DESC").
+			Limit(h.pwPolicy.HistoryCount).
+			Pluck("password_hash", &historyHashes).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		historyHashes = append([]string{user.PasswordHash}, historyHashes...)
+		if err := h.pwPolicy.CheckHistory(request.NewPassword, historyHashes); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	newHash, err := auth.HashPassword(request.NewPassword)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "hash password: " + err.Error()})
+		return
+	}
+
+	now := time.Now().UTC()
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&store.User{}).
+			Where("id = ? AND deleted_at IS NULL", userID).
+			Updates(map[string]any{
+				"password_hash": newHash,
+				"token_version": gorm.Expr("token_version + 1"),
+				"updated_at":    now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		if h.pwPolicy.HistoryCount > 0 {
+			if err := tx.Create(&store.PasswordHistory{
+				UserID:       userID,
+				PasswordHash: user.PasswordHash,
+				CreatedAt:    now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return audit.NewService(tx).Record(c.Request.Context(), audit.Entry{
+			ActorUserID: userID,
+			Action:      audit.ActionPasswordChanged,
+			TargetType:  audit.TargetTypeUser,
+			TargetID:    audit.UserTargetID(userID),
+			Metadata: map[string]any{
+				"source": "account_center",
+			},
+		})
+	}); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusUnauthorized
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	httpserver.Success(c, http.StatusOK, gin.H{
+		"changed": true,
 	})
 }
 
@@ -872,6 +989,8 @@ func accountActivityPresentation(action string, metadata map[string]any) (string
 		default:
 			return "login_method", "绑定了 " + provider, description
 		}
+	case audit.ActionPasswordChanged:
+		return "security", "修改了密码", jsonStringValue(metadata, "source")
 	case audit.ActionPasswordReset:
 		return "security", "重置了密码", jsonStringValue(metadata, "source")
 	case audit.ActionLogin:

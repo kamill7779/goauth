@@ -255,7 +255,7 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
 		userHandler,
 		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
-		account.NewHandler(db, sessionService, authMiddleware),
+		account.NewHandler(db, sessionService, authMiddleware, pwPolicy),
 		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware, cfg),
 	)
 

@@ -160,11 +160,9 @@ function mapLoginMethodStatus(method: RawLoginMethod): LoginMethod['status'] {
 
 function mapLoginMethod(method: RawLoginMethod): LoginMethod {
   let disabledReason: string | undefined;
-  if (method.key === 'password') {
-    disabledReason = '密码修改即将开放';
-  } else if (method.key === 'email') {
+  if (method.key === 'email') {
     disabledReason = '邮箱换绑即将开放';
-  } else if (method.bound) {
+  } else if (method.key !== 'password' && method.bound) {
     disabledReason = '账户中心解绑即将开放';
   }
 
@@ -288,8 +286,11 @@ export async function unbindLoginMethod(methodId: string): Promise<{ unbound: bo
   unsupported(`${methodId} 解绑能力暂未开放`);
 }
 
-export async function changeAccountPassword(_data: { current: string; newPass: string }): Promise<{ changed: boolean }> {
-  unsupported('密码修改能力暂未开放');
+export async function changeAccountPassword(data: { current: string; newPass: string }): Promise<{ changed: boolean }> {
+  return apiPostV1<{ changed: boolean }>('/account/password/change', {
+    current_password: data.current,
+    new_password: data.newPass,
+  });
 }
 
 export async function getAccountAuthorizedApps(): Promise<{ apps: AuthorizedApp[] }> {
