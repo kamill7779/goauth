@@ -21,6 +21,7 @@ type Config struct {
 	BrowserCookieSecure       bool
 	MySQLDSN                  string
 	RedisURL                  string
+	AvatarStorageDir          string
 	JWTPrivateKeyPath         string
 	JWTKeyID                  string
 	JWTKeysetDir              string
@@ -202,6 +203,7 @@ func Load() (Config, error) {
 		BrowserCookieSecure:       browserCookieSecure,
 		MySQLDSN:                  os.Getenv("MYSQL_DSN"),
 		RedisURL:                  os.Getenv("REDIS_URL"),
+		AvatarStorageDir:          envOrDefault("AVATAR_STORAGE_DIR", "data/avatars"),
 		JWTPrivateKeyPath:         os.Getenv("JWT_PRIVATE_KEY_PATH"),
 		JWTKeyID:                  os.Getenv("JWT_KEY_ID"),
 		JWTKeysetDir:              os.Getenv("JWT_KEYSET_DIR"),

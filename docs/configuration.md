@@ -21,6 +21,7 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 | `BROWSER_COOKIE_SECURE` | core | derived | optional | no | no | Defaults from `PUBLIC_ISSUER_URL` scheme. |
 | `MYSQL_DSN` | storage | empty | required | yes | no | Empty uses in-memory SQLite only for local tests/dev. |
 | `REDIS_URL` | storage | empty | required | yes | no | Empty defaults to local Redis in code paths that require Redis. |
+| `AVATAR_STORAGE_DIR` | storage | `data/avatars` | optional | no | no | Local filesystem directory for account avatar uploads. Mount it as persistent storage in containers. |
 | `JWT_PRIVATE_KEY_PATH` | tokens | empty | conditional | yes | no | Legacy single-key PEM path. Use with `JWT_KEY_ID`; empty generates an ephemeral local key only when no keyset is configured. |
 | `JWT_KEY_ID` | tokens | empty | conditional | no | no | Legacy single-key `kid` for JWKS and token headers. |
 | `JWT_KEYSET_DIR` | tokens | empty | conditional | yes | no | Directory of RSA private keys named `<kid>.pem`; enables JWT key rotation. |

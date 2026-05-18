@@ -1,4 +1,4 @@
-import { apiDeleteV1, apiGetV1, apiPatchV1, apiPostV1 } from './client';
+import { apiDeleteV1, apiGetV1, apiPatchV1, apiPostFormV1, apiPostV1 } from './client';
 import type { AccountMe, AccountSession, AuthorizedApp, IdentityActivity, LoginMethod } from '../types/account';
 
 interface RawAccountUser extends Omit<AccountMe['user'], 'timezone'> {
@@ -253,8 +253,10 @@ export async function updateAccountProfile(data: UpdateProfileData): Promise<{ u
   return { updated: true };
 }
 
-export async function uploadAccountAvatar(_file: File): Promise<{ avatar_url: string }> {
-  unsupported('当前版本暂不支持直接上传头像，请等待对象存储接入');
+export async function uploadAccountAvatar(file: File): Promise<{ avatar_url: string }> {
+  const data = new FormData();
+  data.append('avatar', file);
+  return apiPostFormV1<{ avatar_url: string }>('/account/avatar', data);
 }
 
 export async function removeAccountAvatar(): Promise<{ removed: boolean }> {

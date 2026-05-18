@@ -1,9 +1,15 @@
 package account
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	encodingjson "encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,14 +31,16 @@ type Handler struct {
 	sessionService *session.Service
 	authMiddleware gin.HandlerFunc
 	pwPolicy       password.Policy
+	avatarDir      string
 }
 
-func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin.HandlerFunc, pwPolicy password.Policy) *Handler {
+func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin.HandlerFunc, pwPolicy password.Policy, avatarDir string) *Handler {
 	return &Handler{
 		db:             db,
 		sessionService: sessionService,
 		authMiddleware: authMiddleware,
 		pwPolicy:       pwPolicy,
+		avatarDir:      defaultString(avatarDir, "data/avatars"),
 	}
 }
 
@@ -46,6 +54,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	account.GET("/overview", h.overview)
 	account.GET("/profile", h.profile)
 	account.PATCH("/profile", h.updateProfile)
+	account.POST("/avatar", h.uploadAvatar)
 	account.GET("/login-methods", h.loginMethods)
 	account.POST("/password/change", h.changePassword)
 	account.GET("/activity", h.activity)
@@ -54,6 +63,10 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	account.GET("/sessions", h.listSessions)
 	account.POST("/sessions/:session_id/revoke", h.revokeSession)
 	account.POST("/logout-all", h.logoutAll)
+
+	if err := os.MkdirAll(h.avatarDir, 0o755); err == nil {
+		router.Static("/uploads/avatars", h.avatarDir)
+	}
 }
 
 func (h *Handler) me(c *gin.Context) {
@@ -279,6 +292,91 @@ func (h *Handler) updateProfile(c *gin.Context) {
 
 	httpserver.Success(c, http.StatusOK, gin.H{
 		"profile": accountProfilePayload(*user),
+	})
+}
+
+func (h *Handler) uploadAvatar(c *gin.Context) {
+	userID, _, _, ok := currentUser(c)
+	if !ok {
+		return
+	}
+
+	header, err := c.FormFile("avatar")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "avatar file is required"})
+		return
+	}
+	if header.Size > maxAvatarUploadBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "avatar file is too large"})
+		return
+	}
+
+	file, err := header.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	defer file.Close()
+
+	payload, err := io.ReadAll(io.LimitReader(file, maxAvatarUploadBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if int64(len(payload)) > maxAvatarUploadBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "avatar file is too large"})
+		return
+	}
+
+	ext, ok := avatarFileExtension(http.DetectContentType(payload))
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "avatar must be png, jpeg, gif, or webp"})
+		return
+	}
+
+	if err := os.MkdirAll(h.avatarDir, 0o755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	filename, err := avatarFilename(userID, ext)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	path := filepath.Join(h.avatarDir, filename)
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	avatarURL := "/uploads/avatars/" + filename
+	now := time.Now().UTC()
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&store.User{}).
+		Where("id = ? AND deleted_at IS NULL", userID).
+		Updates(map[string]any{
+			"avatar_url": avatarURL,
+			"updated_at": now,
+		}).Error; err != nil {
+		_ = os.Remove(path)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	_ = audit.NewService(h.db).Record(c.Request.Context(), audit.Entry{
+		ActorUserID: userID,
+		Action:      audit.ActionUserUpdated,
+		TargetType:  audit.TargetTypeUser,
+		TargetID:    audit.UserTargetID(userID),
+		Metadata: map[string]any{
+			"fields": []string{"avatar_url"},
+			"source": "account_avatar",
+		},
+	})
+
+	httpserver.Success(c, http.StatusOK, gin.H{
+		"avatar_url": avatarURL,
 	})
 }
 
@@ -686,6 +784,31 @@ type accountSessionRow struct {
 	CreatedAt time.Time
 }
 
+const maxAvatarUploadBytes int64 = 2 * 1024 * 1024
+
+func avatarFileExtension(contentType string) (string, bool) {
+	switch contentType {
+	case "image/png":
+		return ".png", true
+	case "image/jpeg":
+		return ".jpg", true
+	case "image/gif":
+		return ".gif", true
+	case "image/webp":
+		return ".webp", true
+	default:
+		return "", false
+	}
+}
+
+func avatarFilename(userID int64, ext string) (string, error) {
+	random := make([]byte, 16)
+	if _, err := cryptorand.Read(random); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d-%s%s", userID, hex.EncodeToString(random), ext), nil
+}
+
 func currentUser(c *gin.Context) (int64, string, int64, bool) {
 	claims, ok := session.ClaimsFromContext(c)
 	if !ok {
@@ -1070,6 +1193,13 @@ func uniqueAuthorizedAppCount(rows []accountAuthorizedAppRow) int {
 		seen[row.ClientID] = struct{}{}
 	}
 	return len(seen)
+}
+
+func defaultString(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 func accountOverviewAlerts(user store.User, signInMethodCount int) []gin.H {

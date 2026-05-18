@@ -38,6 +38,11 @@ async function importAuthModule(relativePath) {
                 return { ok: true, path, data };
               }
 
+              export async function apiPostFormV1(path, data) {
+                globalThis.__authClientCalls.push({ method: 'postFormV1', path, data });
+                return { avatar_url: '/uploads/avatars/member.png' };
+              }
+
               export async function apiPatchV1(path, data) {
                 globalThis.__authClientCalls.push({ method: 'patchV1', path, data });
                 return { ok: true, path, data };
@@ -223,4 +228,17 @@ test('password login method remains enabled for password changes', async () => {
 
   assert.equal(passwordMethod?.disabled, false);
   assert.equal(passwordMethod?.disabledReason, undefined);
+});
+
+test('uploadAccountAvatar posts multipart avatar form data', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  const file = new File(['avatar-bytes'], 'avatar.png', { type: 'image/png' });
+  const result = await account.uploadAccountAvatar(file);
+
+  assert.equal(result.avatar_url, '/uploads/avatars/member.png');
+  assert.equal(globalThis.__authClientCalls.length, 1);
+  assert.equal(globalThis.__authClientCalls[0].method, 'postFormV1');
+  assert.equal(globalThis.__authClientCalls[0].path, '/account/avatar');
+  assert.equal(globalThis.__authClientCalls[0].data.get('avatar'), file);
 });
