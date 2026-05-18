@@ -15,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"goauth/services/identity-service/internal/session"
+	"goauth/services/identity-service/internal/store"
 )
 
 type fakeBrowserSessionManager struct {
@@ -52,6 +53,8 @@ func TestRegisterRoutesRegistersGitHubEndpoints(t *testing.T) {
 		"POST /v1/external/github/exchange",
 		"POST /v1/external/github/bind",
 		"DELETE /v1/external/github/bind",
+		"POST /v1/account/login-methods/:provider/bind/start",
+		"DELETE /v1/account/login-methods/:provider",
 		"GET /v1/me/identities",
 	}
 	for _, route := range expected {
@@ -240,6 +243,62 @@ func TestStartStoresTrustedAbsoluteReturnTo(t *testing.T) {
 	}
 	if payload.ReturnTo != rawReturnTo {
 		t.Fatalf("return_to = %q, want %q", payload.ReturnTo, rawReturnTo)
+	}
+}
+
+func TestCallbackBindsIdentityForBindOAuthState(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	user := createTestUser(t, service, "member@example.com")
+	exchangeStore := newTestExchangeStore(t)
+	if err := exchangeStore.SaveOAuthState(context.Background(), "bind-state", OAuthStatePayload{
+		Flow:     "bind",
+		UserID:   user.ID,
+		ReturnTo: "/account?tab=login",
+	}); err != nil {
+		t.Fatalf("save bind oauth state: %v", err)
+	}
+
+	handler := NewHandler(service, nil, nil, false)
+	handler.SetExchangeStore(exchangeStore)
+	router := gin.New()
+	handler.RegisterRoutes(router)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/external/github/callback?code=oauth-code&state=bind-state", nil)
+	request.AddCookie(&http.Cookie{Name: githubOAuthStateCookieName, Value: "bind-state"})
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("callback status = %d, want %d body=%s", recorder.Code, http.StatusFound, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Location"); got != "/account?external_bind=github&tab=login" {
+		t.Fatalf("Location = %q, want bind success return", got)
+	}
+	if provider.exchangedCode != "oauth-code" || provider.exchangedState != "bind-state" {
+		t.Fatalf("provider exchange = code %q state %q, want oauth-code bind-state", provider.exchangedCode, provider.exchangedState)
+	}
+
+	var identity store.UserIdentity
+	if err := service.db.Where("user_id = ? AND provider = ?", user.ID, "github").First(&identity).Error; err != nil {
+		t.Fatalf("bound identity missing: %v", err)
+	}
+	if identity.ProviderUserID != "42" || identity.Username != "octocat" {
+		t.Fatalf("identity = %+v, want github octocat", identity)
 	}
 }
 

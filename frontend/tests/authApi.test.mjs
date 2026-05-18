@@ -47,6 +47,9 @@ async function importAuthModule(relativePath) {
                 if (path === '/account/2fa/recovery-codes/regenerate') {
                   return { recovery_codes: ['RC-3333', 'RC-4444'] };
                 }
+                if (path === '/account/login-methods/github/bind/start') {
+                  return { start_url: 'https://github.com/login/oauth/authorize?state=bind-state' };
+                }
                 return { ok: true, path, data };
               }
 
@@ -62,6 +65,9 @@ async function importAuthModule(relativePath) {
 
               export async function apiDeleteV1(path) {
                 globalThis.__authClientCalls.push({ method: 'deleteV1', path });
+                if (path === '/account/login-methods/github') {
+                  return { unbound: true };
+                }
                 return { ok: true, path };
               }
 
@@ -250,6 +256,18 @@ test('password login method remains enabled for password changes', async () => {
   assert.equal(passwordMethod?.disabledReason, undefined);
 });
 
+test('github login method is offered for account binding when unbound', async () => {
+  globalThis.__authClientCalls.length = 0;
+  globalThis.__accountLoginMethodsStub = [];
+
+  const result = await account.getAccountLoginMethods();
+  const githubMethod = result.methods.find((method) => method.id === 'github');
+
+  assert.equal(githubMethod?.bound, false);
+  assert.equal(githubMethod?.disabled, false);
+  assert.equal(githubMethod?.disabledReason, undefined);
+});
+
 test('uploadAccountAvatar posts multipart avatar form data', async () => {
   globalThis.__authClientCalls.length = 0;
 
@@ -283,5 +301,27 @@ test('account 2FA API maps lifecycle routes and response fields', async () => {
     { method: 'postV1', path: '/account/2fa/verify', data: { code: '123456' }, options: undefined },
     { method: 'postV1', path: '/account/2fa/disable', data: { code: '654321' }, options: undefined },
     { method: 'postV1', path: '/account/2fa/recovery-codes/regenerate', data: { code: '111222' }, options: undefined },
+  ]);
+});
+
+test('account login method bind and unbind use generic provider routes', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  const bind = await account.bindLoginMethod('github');
+  const unbind = await account.unbindLoginMethod('github');
+
+  assert.deepEqual(bind, {
+    bound: false,
+    redirectUrl: 'https://github.com/login/oauth/authorize?state=bind-state',
+  });
+  assert.deepEqual(unbind, { unbound: true });
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'postV1',
+      path: '/account/login-methods/github/bind/start',
+      data: { return_to: 'http://goauth.test/account' },
+      options: undefined,
+    },
+    { method: 'deleteV1', path: '/account/login-methods/github' },
   ]);
 });

@@ -37,6 +37,8 @@ type ExchangeUser struct {
 
 type OAuthStatePayload struct {
 	ReturnTo string `json:"return_to,omitempty"`
+	Flow     string `json:"flow,omitempty"`
+	UserID   int64  `json:"user_id,omitempty"`
 }
 
 func NewExchangeStore(client *redis.Client) *ExchangeStore {

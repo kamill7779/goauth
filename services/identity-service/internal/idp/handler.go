@@ -19,6 +19,7 @@ import (
 const (
 	githubOAuthStateCookieName    = "goauth_github_oauth_state"
 	githubOAuthStateCookieMaxAgeS = 10 * 60
+	oauthStateFlowBind            = "bind"
 )
 
 type SessionIssuer interface {
@@ -84,6 +85,8 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	}
 	protected.POST("/external/github/bind", h.bind)
 	protected.DELETE("/external/github/bind", h.unbind)
+	protected.POST("/account/login-methods/:provider/bind/start", h.startAccountBind)
+	protected.DELETE("/account/login-methods/:provider", h.unbindAccountProvider)
 	protected.GET("/me/identities", h.listIdentities)
 }
 
@@ -150,9 +153,13 @@ func (h *Handler) callback(c *gin.Context) {
 		return
 	}
 	defer clearGitHubOAuthStateCookie(c, h.browserCookieSecure)
-	returnTo, err := h.consumeReturnTo(c.Request.Context(), state)
+	statePayload, err := h.consumeOAuthState(c.Request.Context(), state)
 	if err != nil {
 		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if statePayload.Flow == oauthStateFlowBind {
+		h.completeBindCallback(c, "github", code, state, statePayload)
 		return
 	}
 
@@ -202,7 +209,7 @@ func (h *Handler) callback(c *gin.Context) {
 			ID:    result.User.ID,
 			Email: result.User.Email,
 		},
-		ReturnTo: returnTo,
+		ReturnTo: statePayload.ReturnTo,
 	})
 	if err != nil {
 		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -236,15 +243,15 @@ func (h *Handler) exchange(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, payload)
 }
 
-func (h *Handler) consumeReturnTo(ctx context.Context, state string) (string, error) {
+func (h *Handler) consumeOAuthState(ctx context.Context, state string) (*OAuthStatePayload, error) {
 	if h.exchangeStore == nil {
-		return "", nil
+		return &OAuthStatePayload{}, nil
 	}
 	payload, err := h.exchangeStore.ConsumeOAuthState(ctx, state)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return payload.ReturnTo, nil
+	return payload, nil
 }
 
 func (h *Handler) frontendExchangeURL(code string) string {
@@ -265,6 +272,100 @@ func (h *Handler) frontendExchangeURL(code string) string {
 
 func (h *Handler) browserExchangeUnavailable() bool {
 	return h.sessions != nil && h.exchangeStore == nil
+}
+
+func (h *Handler) startAccountBind(c *gin.Context) {
+	if h.service == nil {
+		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		return
+	}
+	if h.exchangeStore == nil {
+		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external identity binding unavailable"})
+		return
+	}
+	userID, ok := currentUserID(c)
+	if !ok {
+		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		return
+	}
+
+	var request struct {
+		ReturnTo    string `json:"return_to"`
+		RedirectURI string `json:"redirect_uri"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil && c.Request.ContentLength != 0 {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	state, err := h.newState()
+	if err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	providerSlug := normalizedProviderSlug(c.Param("provider"))
+	authURL, err := h.service.Start(providerSlug, state, AuthCodeOptions{
+		RedirectURI: request.RedirectURI,
+	})
+	if err != nil {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	returnTo := "/account?tab=login"
+	if normalized, ok := h.normalizeExternalReturnTo(request.ReturnTo); ok {
+		returnTo = normalized
+	}
+	if err := h.exchangeStore.SaveOAuthState(c.Request.Context(), state, OAuthStatePayload{
+		Flow:     oauthStateFlowBind,
+		UserID:   userID,
+		ReturnTo: returnTo,
+	}); err != nil {
+		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	setGitHubOAuthStateCookie(c, state, h.browserCookieSecure)
+	httpserver.Success(c, stdhttp.StatusOK, gin.H{
+		"provider":  providerSlug,
+		"start_url": authURL,
+	})
+}
+
+func (h *Handler) unbindAccountProvider(c *gin.Context) {
+	if h.service == nil {
+		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		return
+	}
+	userID, ok := currentUserID(c)
+	if !ok {
+		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		return
+	}
+
+	providerSlug := normalizedProviderSlug(c.Param("provider"))
+	if err := h.service.Unbind(c.Request.Context(), userID, providerSlug); err != nil {
+		status := stdhttp.StatusBadRequest
+		if errors.Is(err, ErrIdentityNotFound) {
+			status = stdhttp.StatusNotFound
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+
+	httpserver.Success(c, stdhttp.StatusOK, gin.H{"unbound": true})
+}
+
+func (h *Handler) completeBindCallback(c *gin.Context, providerSlug, code, state string, payload *OAuthStatePayload) {
+	if payload.UserID <= 0 {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid bind state"})
+		return
+	}
+	_, err := h.service.BindWithState(c.Request.Context(), payload.UserID, providerSlug, code, c.Query("redirect_uri"), state)
+	if err != nil {
+		c.Redirect(stdhttp.StatusFound, externalBindReturnURL(payload.ReturnTo, providerSlug, err))
+		return
+	}
+	c.Redirect(stdhttp.StatusFound, externalBindReturnURL(payload.ReturnTo, providerSlug, nil))
 }
 
 func (h *Handler) bind(c *gin.Context) {
@@ -348,6 +449,30 @@ func (h *Handler) listIdentities(c *gin.Context) {
 	}
 
 	httpserver.Success(c, stdhttp.StatusOK, identities)
+}
+
+func normalizedProviderSlug(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+func externalBindReturnURL(returnTo, provider string, bindErr error) string {
+	returnTo = strings.TrimSpace(returnTo)
+	if returnTo == "" {
+		returnTo = "/account?tab=login"
+	}
+	parsed, err := url.Parse(returnTo)
+	if err != nil {
+		returnTo = "/account?tab=login"
+		parsed, _ = url.Parse(returnTo)
+	}
+	values := parsed.Query()
+	if bindErr != nil {
+		values.Set("external_bind_error", bindErr.Error())
+	} else {
+		values.Set("external_bind", normalizedProviderSlug(provider))
+	}
+	parsed.RawQuery = values.Encode()
+	return parsed.String()
 }
 
 func currentUserID(c *gin.Context) (int64, bool) {

@@ -210,7 +210,11 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 // if the external identity is already linked to a different user or if the
 // user already has a binding for this provider.
 func (s *Service) Bind(ctx context.Context, userID int64, providerSlug, code, redirectURI string) (*store.UserIdentity, error) {
-	provider, profile, _, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, "")
+	return s.BindWithState(ctx, userID, providerSlug, code, redirectURI, "")
+}
+
+func (s *Service) BindWithState(ctx context.Context, userID int64, providerSlug, code, redirectURI, state string) (*store.UserIdentity, error) {
+	provider, profile, _, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, state)
 	if err != nil {
 		return nil, err
 	}

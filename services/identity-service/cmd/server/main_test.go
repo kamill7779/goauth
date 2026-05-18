@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -21,10 +23,12 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/auth"
 	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/idp"
 	"goauth/services/identity-service/internal/oidc"
 	"goauth/services/identity-service/internal/rbac"
 	"goauth/services/identity-service/internal/session"
@@ -850,6 +854,102 @@ func TestAccountLoginMethodsExposeLocalAndGitHubBindings(t *testing.T) {
 	}
 	if got := stringFromAny(githubMethod["identifier"]); got != "octocat" {
 		t.Fatalf("github identifier = %q, want octocat", got)
+	}
+}
+
+func TestAccountLoginMethodBindStartStoresUserScopedOAuthState(t *testing.T) {
+	db, err := store.OpenDB(config.Config{})
+	if err != nil {
+		t.Fatalf("store.OpenDB() error = %v", err)
+	}
+	if err := store.AutoMigrate(db); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() {
+		_ = redisClient.Close()
+	})
+
+	cfg := config.Config{
+		JWTKeyID:            "test-key",
+		AccessTokenTTL:      15 * time.Minute,
+		RefreshTokenTTL:     30 * 24 * time.Hour,
+		GitHubOAuthEnabled:  true,
+		GitHubClientID:      "client-id",
+		GitHubClientSecret:  "client-secret",
+		GitHubRedirectURI:   "https://auth.example.com/v1/external/github/callback",
+		BrowserLoginURL:     "https://auth.example.com/login",
+		PublicIssuerURL:     "https://auth.example.com",
+		BrowserCookieSecure: true,
+	}
+	router := buildRouter(cfg, db, redisClient, privateKey)
+	sessionService := session.NewService(db, cfg, privateKey)
+	user := &store.User{
+		Email:        "member@example.com",
+		DisplayName:  "member",
+		PasswordHash: "hash",
+		Status:       store.UserStatusActive,
+	}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("db.Create(user) error = %v", err)
+	}
+	pair := issueIntegrationTokens(t, sessionService, *user, 0)
+
+	start := performJSON(t, router, http.MethodPost, "/v1/account/login-methods/github/bind/start", `{"return_to":"/account?tab=login"}`, pair.AccessToken)
+	if start.Code != http.StatusOK {
+		t.Fatalf("bind start status = %d, want %d body=%s", start.Code, http.StatusOK, start.Body.String())
+	}
+	data := decodeData(t, start)
+	startURL := stringFromAny(data["start_url"])
+	parsed, err := url.Parse(startURL)
+	if err != nil {
+		t.Fatalf("parse start_url %q: %v", startURL, err)
+	}
+	state := parsed.Query().Get("state")
+	if state == "" {
+		t.Fatalf("start_url = %q, missing state", startURL)
+	}
+	if got := parsed.Query().Get("client_id"); got != "client-id" {
+		t.Fatalf("client_id = %q, want client-id", got)
+	}
+	if got := parsed.Query().Get("redirect_uri"); got != cfg.GitHubRedirectURI {
+		t.Fatalf("redirect_uri = %q, want %q", got, cfg.GitHubRedirectURI)
+	}
+
+	foundCookie := false
+	for _, cookie := range start.Result().Cookies() {
+		if cookie.Name != "goauth_github_oauth_state" {
+			continue
+		}
+		foundCookie = true
+		if cookie.Value != state {
+			t.Fatalf("state cookie = %q, want %q", cookie.Value, state)
+		}
+		if !cookie.HttpOnly || !cookie.Secure {
+			t.Fatalf("state cookie flags = httpOnly:%v secure:%v, want true/true", cookie.HttpOnly, cookie.Secure)
+		}
+	}
+	if !foundCookie {
+		t.Fatal("missing github oauth state cookie")
+	}
+
+	payload, err := idp.NewExchangeStore(redisClient).ConsumeOAuthState(context.Background(), state)
+	if err != nil {
+		t.Fatalf("consume oauth state: %v", err)
+	}
+	if payload.Flow != "bind" {
+		t.Fatalf("flow = %q, want bind", payload.Flow)
+	}
+	if payload.UserID != user.ID {
+		t.Fatalf("user_id = %d, want %d", payload.UserID, user.ID)
+	}
+	if payload.ReturnTo != "/account?tab=login" {
+		t.Fatalf("return_to = %q, want account login tab", payload.ReturnTo)
 	}
 }
 
