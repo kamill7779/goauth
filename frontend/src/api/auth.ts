@@ -35,6 +35,13 @@ export async function exchangeGitHubLogin(code: string): Promise<{
   return apiPostV1('/external/github/exchange', { code });
 }
 
+export async function startGitHubLogin(input: {
+  redirect_uri?: string;
+  return_to?: string;
+}, options?: AuthRequestOptions): Promise<{ authorize_url: string }> {
+  return apiPostV1('/external/github/start', input, options);
+}
+
 export async function me(): Promise<AuthSession> {
   return apiGet<AuthSession>('/me');
 }

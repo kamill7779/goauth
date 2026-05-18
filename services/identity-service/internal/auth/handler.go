@@ -72,7 +72,7 @@ func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
 }
 
 func (h *Handler) captchaActionEnabled(action string) bool {
-	if h.captchaVerifier == nil {
+	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
 		return false
 	}
 	_, ok := h.captchaActions[strings.ToLower(strings.TrimSpace(action))]

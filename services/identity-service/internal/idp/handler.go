@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	stdhttp "net/http"
 	"net/url"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"goauth/services/identity-service/internal/captcha"
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/session"
 )
@@ -31,6 +33,8 @@ type Handler struct {
 	service              *Service
 	sessions             SessionIssuer
 	authMiddleware       gin.HandlerFunc
+	captchaVerifier      *captcha.Verifier
+	captchaActions       map[string]struct{}
 	browserCookieSecure  bool
 	newState             func() (string, error)
 	exchangeStore        *ExchangeStore
@@ -43,6 +47,7 @@ func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.Han
 		service:              service,
 		sessions:             sessions,
 		authMiddleware:       authMiddleware,
+		captchaActions:       captchaActionSet([]string{"login"}),
 		browserCookieSecure:  browserCookieSecure,
 		newState:             randomState,
 		frontendCallbackPath: "/external/callback",
@@ -72,9 +77,52 @@ func (h *Handler) SetTrustedReturnToOrigins(origins ...string) {
 	}
 }
 
+func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
+	h.captchaVerifier = v
+}
+
+func (h *Handler) SetCaptchaActions(actions []string) {
+	h.captchaActions = captchaActionSet(actions)
+}
+
+func (h *Handler) captchaMW() gin.HandlerFunc {
+	if h.captchaVerifier == nil {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return h.captchaVerifier.Middleware()
+}
+
+func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
+	if !h.captchaActionEnabled(action) {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return h.captchaMW()
+}
+
+func (h *Handler) captchaActionEnabled(action string) bool {
+	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
+		return false
+	}
+	_, ok := h.captchaActions[strings.ToLower(strings.TrimSpace(action))]
+	return ok
+}
+
+func captchaActionSet(actions []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if action == "" {
+			continue
+		}
+		result[action] = struct{}{}
+	}
+	return result
+}
+
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	external := router.Group("/v1/external/github")
 	external.GET("/start", h.start)
+	external.POST("/start", h.captchaMWFor("login"), h.start)
 	external.GET("/callback", h.callback)
 	external.POST("/exchange", h.exchange)
 
@@ -96,6 +144,16 @@ func (h *Handler) start(c *gin.Context) {
 		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external login exchange unavailable"})
 		return
 	}
+	if c.Request.Method == stdhttp.MethodGet && h.captchaActionEnabled("login") {
+		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "captcha token required"})
+		return
+	}
+
+	input, err := h.startInput(c)
+	if err != nil {
+		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	state, err := h.newState()
 	if err != nil {
@@ -104,7 +162,7 @@ func (h *Handler) start(c *gin.Context) {
 	}
 
 	authURL, err := h.service.Start("github", state, AuthCodeOptions{
-		RedirectURI: c.Query("redirect_uri"),
+		RedirectURI: input.RedirectURI,
 	})
 	if err != nil {
 		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
@@ -112,7 +170,7 @@ func (h *Handler) start(c *gin.Context) {
 	}
 
 	if h.exchangeStore != nil {
-		returnTo, _ := h.normalizeExternalReturnTo(c.Query("return_to"))
+		returnTo, _ := h.normalizeExternalReturnTo(input.ReturnTo)
 		if err := h.exchangeStore.SaveOAuthState(c.Request.Context(), state, OAuthStatePayload{ReturnTo: returnTo}); err != nil {
 			c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -120,7 +178,30 @@ func (h *Handler) start(c *gin.Context) {
 	}
 
 	setGitHubOAuthStateCookie(c, state, h.browserCookieSecure)
+	if c.Request.Method == stdhttp.MethodPost {
+		httpserver.Success(c, stdhttp.StatusOK, gin.H{"authorize_url": authURL})
+		return
+	}
 	c.Redirect(stdhttp.StatusFound, authURL)
+}
+
+func (h *Handler) startInput(c *gin.Context) (struct {
+	RedirectURI string `json:"redirect_uri"`
+	ReturnTo    string `json:"return_to"`
+}, error) {
+	var input struct {
+		RedirectURI string `json:"redirect_uri"`
+		ReturnTo    string `json:"return_to"`
+	}
+	if c.Request.Method == stdhttp.MethodPost {
+		if err := c.ShouldBindJSON(&input); err != nil && !errors.Is(err, io.EOF) {
+			return input, err
+		}
+		return input, nil
+	}
+	input.RedirectURI = c.Query("redirect_uri")
+	input.ReturnTo = c.Query("return_to")
+	return input, nil
 }
 
 func (h *Handler) callback(c *gin.Context) {

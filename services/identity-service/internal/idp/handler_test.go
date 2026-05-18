@@ -14,6 +14,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	"goauth/services/identity-service/internal/captcha"
 	"goauth/services/identity-service/internal/session"
 )
 
@@ -48,6 +49,7 @@ func TestRegisterRoutesRegistersGitHubEndpoints(t *testing.T) {
 
 	expected := []string{
 		"GET /v1/external/github/start",
+		"POST /v1/external/github/start",
 		"GET /v1/external/github/callback",
 		"POST /v1/external/github/exchange",
 		"POST /v1/external/github/bind",
@@ -107,6 +109,135 @@ func TestStartSetsStateCookieAndRedirectsWithGeneratedState(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected %s cookie to be set", githubOAuthStateCookieName)
+	}
+}
+
+func TestStartPostReturnsAuthorizeURLAndSetsStateCookie(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service := NewService(nil, &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+	})
+	store := newTestExchangeStore(t)
+	handler := NewHandler(service, nil, nil, true)
+	handler.SetExchangeStore(store)
+	handler.newState = func() (string, error) {
+		return "generated-state", nil
+	}
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/external/github/start", bytes.NewBufferString(`{"redirect_uri":"https://app.example.com/callback","return_to":"/oauth2/authorize?client_id=admin"}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			AuthorizeURL string `json:"authorize_url"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if !body.Success {
+		t.Fatalf("response body = %s, want success=true", recorder.Body.String())
+	}
+	location := strings.TrimSpace(body.Data.AuthorizeURL)
+	if location == "" {
+		t.Fatalf("response body = %s, want authorize_url", recorder.Body.String())
+	}
+	parsed, err := url.Parse(location)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+	if parsed.Query().Get("state") != "generated-state" {
+		t.Fatalf("redirect state = %q, want generated-state", parsed.Query().Get("state"))
+	}
+
+	found := false
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.Name != githubOAuthStateCookieName {
+			continue
+		}
+		found = true
+		if cookie.Value != "generated-state" {
+			t.Fatalf("state cookie = %q, want generated-state", cookie.Value)
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s cookie to be set", githubOAuthStateCookieName)
+	}
+
+	payload, err := store.ConsumeOAuthState(context.Background(), "generated-state")
+	if err != nil {
+		t.Fatalf("consume oauth state: %v", err)
+	}
+	if payload.ReturnTo != "/oauth2/authorize?client_id=admin" {
+		t.Fatalf("return_to = %q, want /oauth2/authorize?client_id=admin", payload.ReturnTo)
+	}
+}
+
+func TestStartRequiresCaptchaTokenForProtectedLoginAction(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service := NewService(nil, &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+	})
+	handler := NewHandler(service, nil, nil, false)
+	handler.SetCaptchaVerifier(captcha.NewVerifier(captcha.ProviderTurnstile, "secret"))
+	handler.SetCaptchaActions([]string{"login"})
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/external/github/start", bytes.NewBufferString(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "captcha token required") {
+		t.Fatalf("expected captcha error, got %s", recorder.Body.String())
+	}
+}
+
+func TestStartGetRejectsWhenCaptchaProtected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	service := NewService(nil, &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+	})
+	handler := NewHandler(service, nil, nil, false)
+	handler.SetCaptchaVerifier(captcha.NewVerifier(captcha.ProviderTurnstile, "secret"))
+	handler.SetCaptchaActions([]string{"login"})
+
+	router := gin.New()
+	handler.RegisterRoutes(router)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/v1/external/github/start", nil)
+
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusForbidden, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "captcha token required") {
+		t.Fatalf("expected captcha error, got %s", recorder.Body.String())
 	}
 }
 
