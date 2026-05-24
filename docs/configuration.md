@@ -2,6 +2,15 @@
 
 GoAuth reads runtime configuration from environment variables at startup. This page is the human-readable companion to `services/identity-service/internal/config/schema.go`; keep the code schema, `.env.example`, Docker Compose defaults, and this document in sync.
 
+## Related Guides
+
+- [Quickstart](quickstart.md)
+- [Docker Compose Deployment](deployment/docker-compose.md)
+- [SSO Quickstart](integration/sso-quickstart.md)
+- [SMTP Configuration](config/smtp.md)
+- [Production Checklist](production-checklist.md)
+- [Troubleshooting](troubleshooting.md)
+
 ## Rules
 
 - Local defaults favor a fast open-source trial: registration is open, mail uses `console`, CAPTCHA and GitHub login are disabled.

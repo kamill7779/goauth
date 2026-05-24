@@ -2,6 +2,15 @@
 
 Goauth 的 SSO/身份服务，提供本地账号会话、OIDC 授权码流程、JWKS、用户信息、租户 RBAC 和权限校验能力。
 
+根目录文档面向完整产品体验：
+
+- [快速上手](../../docs/quickstart.md)
+- [业务系统 SSO 接入](../../docs/integration/sso-quickstart.md)
+- [Docker Compose 部署](../../docs/deployment/docker-compose.md)
+- [SMTP 邮件配置](../../docs/config/smtp.md)
+- [生产发布检查](../../docs/production-checklist.md)
+- [故障排查](../../docs/troubleshooting.md)
+
 ## 本地运行
 
 ```powershell
