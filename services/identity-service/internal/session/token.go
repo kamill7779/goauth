@@ -77,20 +77,37 @@ type accessClaims struct {
 	jwt.RegisteredClaims
 }
 
+// Dependencies holds optional collaborators for session.Service.
+// Zero values default to noop implementations where safe.
+type Dependencies struct {
+	Sessions          store.SessionRepository
+	Audit             audit.Recorder
+	LogoutCoordinator *logout.Coordinator
+}
+
 func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Service {
 	var keyring *jwtkey.Keyring
 	if privateKey != nil {
 		keyring, _ = jwtkey.NewKeyring(cfg.JWTKeyID, map[string]*rsa.PrivateKey{cfg.JWTKeyID: privateKey})
 	}
-	return NewServiceWithKeyring(db, cfg, keyring)
+	return NewServiceWithKeyringAndDeps(db, cfg, keyring, Dependencies{})
 }
 
 func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyring) *Service {
+	return NewServiceWithKeyringAndDeps(db, cfg, keyring, Dependencies{})
+}
+
+// NewServiceWithKeyringAndDeps creates a fully-wired session.Service.
+func NewServiceWithKeyringAndDeps(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyring, deps Dependencies) *Service {
 	privateKey := (*rsa.PrivateKey)(nil)
 	keyID := cfg.JWTKeyID
 	if keyring != nil {
 		privateKey = keyring.ActivePrivateKey()
 		keyID = keyring.ActiveKeyID()
+	}
+	auditRecorder := deps.Audit
+	if auditRecorder == nil {
+		auditRecorder = audit.NoopRecorder{}
 	}
 	return &Service{
 		db:                  db,
@@ -101,7 +118,9 @@ func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyri
 		browserSessionTTL:   cfg.BrowserSessionTTL,
 		browserCookieSecure: cfg.BrowserCookieSecure,
 		refreshTokenTTL:     cfg.RefreshTokenTTL,
-		audit:               audit.NoopRecorder{},
+		sessions:            deps.Sessions,
+		audit:               auditRecorder,
+		logoutCoordinator:   deps.LogoutCoordinator,
 		now:                 time.Now,
 	}
 }

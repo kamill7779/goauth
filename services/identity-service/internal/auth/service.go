@@ -66,44 +66,54 @@ type Service struct {
 	db       *gorm.DB // retained for transaction orchestration until provisioning is migrated
 }
 
+// Dependencies bundles required collaborators for auth.Service.
+// All optional fields default to safe noop values when nil/zero.
+type Dependencies struct {
+	Users    store.UserRepository
+	Redis    *redis.Client
+	Mailer   MailSender
+	DB       *gorm.DB // retained for transactional orchestration during migration
+	Audit    audit.Recorder
+	Policy   *provisioning.DefaultMembershipPolicy
+	Lockout  *lockout.Manager
+	Password password.Policy
+}
+
+// Deprecated: NewService is the legacy constructor. Use NewService(deps Dependencies) for new code.
+// Kept for migration: external packages may still use the old 4-arg signature temporarily.
 func NewService(users store.UserRepository, redisClient *redis.Client, mailSender MailSender, db *gorm.DB) *Service {
-	if mailSender == nil {
-		mailSender = mailer.NoopSender{}
+	return NewServiceWithDeps(Dependencies{
+		Users:  users,
+		Redis:  redisClient,
+		Mailer: mailSender,
+		DB:     db,
+	})
+}
+
+// NewServiceWithDeps creates a fully-wired auth.Service.
+func NewServiceWithDeps(deps Dependencies) *Service {
+	if deps.Mailer == nil {
+		deps.Mailer = mailer.NoopSender{}
+	}
+	if deps.Audit == nil {
+		deps.Audit = audit.NoopRecorder{}
 	}
 
 	return &Service{
-		users:  users,
-		db:     db,
-		redis:  redisClient,
-		mailer: mailSender,
-		audit:  audit.NoopRecorder{},
-		now:    time.Now,
+		users:    deps.Users,
+		db:       deps.DB,
+		redis:    deps.Redis,
+		mailer:   deps.Mailer,
+		audit:    deps.Audit,
+		policy:   deps.Policy,
+		lockout:  deps.Lockout,
+		pwPolicy: deps.Password,
+		now:      time.Now,
 	}
 }
 
-func (s *Service) SetLockoutManager(m *lockout.Manager) {
-	s.lockout = m
-}
-
-func (s *Service) SetPasswordPolicy(p password.Policy) {
-	s.pwPolicy = p
-}
-
-// DB exposes the underlying *gorm.DB for transactional orchestration during
-// migration. Prefer UserRepository methods for new code.
+// DB exposes the underlying *gorm.DB for migration-compatible access.
 func (s *Service) DB() *gorm.DB { return s.db }
-
-func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
-	s.policy = policy
-}
-
-func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
-	if recorder == nil {
-		s.audit = audit.NoopRecorder{}
-		return
-	}
-	s.audit = recorder
-}
 
 func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (string, error) {
 	purpose, err := normalizeEmailCodePurpose(purpose)

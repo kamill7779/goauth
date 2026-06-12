@@ -400,7 +400,7 @@ func TestLoginReturnsServerErrorWhenPostAuthWorkFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	service, _, _ := newTestService(t)
-	service.SetAuditRecorder(failingAuditRecorder{})
+	service.audit = failingAuditRecorder{}
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

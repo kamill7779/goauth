@@ -46,7 +46,12 @@ func newTestService(t *testing.T) (*Service, *miniredis.Miniredis, *testMailer) 
 	})
 
 	mailer := &testMailer{}
-	service := NewService(store.NewUserRepository(db), redisClient, mailer, db)
+	service := NewServiceWithDeps(Dependencies{
+		Users:  store.NewUserRepository(db),
+		Redis:  redisClient,
+		Mailer: mailer,
+		DB:     db,
+	})
 	return service, mini, mailer
 }
 
@@ -149,12 +154,12 @@ func TestRegisterNormalizesBlankCodePurpose(t *testing.T) {
 
 func TestRegisterAppliesDefaultMembershipPolicy(t *testing.T) {
 	service, _, _ := newTestService(t)
-	service.SetAuditRecorder(audit.NewService(service.DB()))
+	service.audit = audit.NewService(service.DB())
 	tenantRecord := store.Tenant{Name: "Public App", Slug: "public-app", Status: store.TenantStatusActive}
 	if err := service.db.Create(&tenantRecord).Error; err != nil {
 		t.Fatalf("create tenant: %v", err)
 	}
-	service.SetDefaultMembershipPolicy(provisioning.NewDefaultMembershipPolicy([]string{"public-app"}))
+	service.policy = provisioning.NewDefaultMembershipPolicy([]string{"public-app"})
 
 	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "member@example.com")
 	if err != nil {
@@ -220,7 +225,7 @@ func TestLoginRejectsDisabledUser(t *testing.T) {
 
 func TestLoginWritesAuditLog(t *testing.T) {
 	service, _, _ := newTestService(t)
-	service.SetAuditRecorder(audit.NewService(service.DB()))
+	service.audit = audit.NewService(service.DB())
 
 	hash, err := HashPassword("p@ssw0rd!")
 	if err != nil {
@@ -415,7 +420,7 @@ func TestLoginAcceptsLegacyEmailField(t *testing.T) {
 
 func TestResetPasswordWritesAuditLog(t *testing.T) {
 	service, _, _ := newTestService(t)
-	service.SetAuditRecorder(audit.NewService(service.DB()))
+	service.audit = audit.NewService(service.DB())
 
 	code, err := service.SendEmailCode(context.Background(), EmailCodePurposeRegister, "reset@example.com")
 	if err != nil {

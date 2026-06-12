@@ -192,13 +192,20 @@ type services struct {
 }
 
 func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring) *services {
-	sessionService := session.NewServiceWithKeyring(db, cfg, keyring)
-	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
-	sessionService.SetSessionRepository(store.NewSessionRepository(db))
-	rateLimiter := ratelimit.NewService(redisClient)
-	sessionHandler.SetRateLimiter(rateLimiter)
+	// Pre-create shared dependencies that multiple services need.
 	auditService := audit.NewService(db)
-	sessionService.SetAuditRecorder(auditService)
+	rateLimiter := ratelimit.NewService(redisClient)
+	logoutCoord := logout.NewCoordinatorWithKeyring(db, keyring, cfg.PublicIssuerURL)
+	logoutCoord.SetAuditRecorder(auditService)
+
+	// Session service with all deps via constructor.
+	sessionService := session.NewServiceWithKeyringAndDeps(db, cfg, keyring, session.Dependencies{
+		Sessions:          store.NewSessionRepository(db),
+		Audit:             auditService,
+		LogoutCoordinator: logoutCoord,
+	})
+	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
+	sessionHandler.SetRateLimiter(rateLimiter)
 
 	oidcService := oidc.NewServiceWithKeyring(db, cfg, keyring)
 	oidcService.SetAuditRecorder(auditService)
@@ -209,10 +216,6 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration)
 	pwPolicy := password.LoadFromConfig(cfg)
 	captchaVerifier := captcha.NewVerifier(captcha.Provider(cfg.CaptchaProvider), cfg.CaptchaSecretKey)
-
-	logoutCoord := logout.NewCoordinatorWithKeyring(db, keyring, cfg.PublicIssuerURL)
-	logoutCoord.SetAuditRecorder(auditService)
-	sessionService.SetLogoutCoordinator(logoutCoord)
 
 	tmplEngine := mailer.NewTemplateEngine(cfg.DefaultLocale)
 
@@ -318,11 +321,16 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 	invite.NewHandler(inviteService, svc.authMiddleware, svc.systemMiddleware).RegisterRoutes(router)
 
 	if redisClient != nil {
-		authService := auth.NewService(store.NewUserRepository(db), redisClient, buildMailSender(cfg), db)
-		authService.SetAuditRecorder(svc.audit)
-		authService.SetDefaultMembershipPolicy(svc.provisioning)
-		authService.SetLockoutManager(svc.lockout)
-		authService.SetPasswordPolicy(svc.pwPolicy)
+		authService := auth.NewServiceWithDeps(auth.Dependencies{
+			Users:    store.NewUserRepository(db),
+			Redis:    redisClient,
+			Mailer:   buildMailSender(cfg),
+			DB:       db,
+			Audit:    svc.audit,
+			Policy:   svc.provisioning,
+			Lockout:  svc.lockout,
+			Password: svc.pwPolicy,
+		})
 		authHandler := auth.NewHandler(authService, svc.session)
 		authHandler.SetRateLimiter(svc.rateLimiter)
 		authHandler.SetCaptchaVerifier(svc.captcha)
