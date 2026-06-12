@@ -164,6 +164,7 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 	privateKey := keyring.ActivePrivateKey()
 	sessionService := session.NewServiceWithKeyring(db, cfg, keyring)
 	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
+	sessionService.SetSessionRepository(store.NewSessionRepository(db))
 	rateLimiter := ratelimit.NewService(redisClient)
 	sessionHandler.SetRateLimiter(rateLimiter)
 	authMiddleware := session.AuthMiddlewareWithKeyring(sessionService, keyring)

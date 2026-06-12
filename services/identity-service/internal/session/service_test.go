@@ -46,6 +46,7 @@ func newTestService(t *testing.T) (*Service, *store.User) {
 		RefreshTokenTTL:     30 * 24 * time.Hour,
 		BrowserCookieSecure: true,
 	}, privateKey)
+	service.SetSessionRepository(store.NewSessionRepository(db))
 
 	user := &store.User{
 		Email:        "user@example.com",
@@ -378,7 +379,7 @@ func TestLogoutAllIncrementsUserTokenVersion(t *testing.T) {
 
 func TestLogoutWritesAuditLog(t *testing.T) {
 	service, user := newTestService(t)
-	service.SetAuditRecorder(audit.NewService(service.db))
+	service.SetAuditRecorder(audit.NewService(service.DB()))
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
@@ -430,7 +431,7 @@ func TestLogoutSucceedsWhenAuditFails(t *testing.T) {
 
 func TestLogoutAllWritesAuditLog(t *testing.T) {
 	service, user := newTestService(t)
-	service.SetAuditRecorder(audit.NewService(service.db))
+	service.SetAuditRecorder(audit.NewService(service.DB()))
 
 	if _, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,
@@ -499,7 +500,7 @@ func TestLogoutAllSucceedsWhenAuditFails(t *testing.T) {
 
 func TestRefreshReuseWritesAuditLog(t *testing.T) {
 	service, user := newTestService(t)
-	service.SetAuditRecorder(audit.NewService(service.db))
+	service.SetAuditRecorder(audit.NewService(service.DB()))
 
 	pair, err := service.IssueTokens(context.Background(), IssueTokensInput{
 		User:     *user,

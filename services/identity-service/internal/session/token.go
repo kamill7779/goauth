@@ -36,6 +36,7 @@ const accessTokenUseSession = "session"
 
 type Service struct {
 	db                  *gorm.DB
+	sessions            store.SessionRepository
 	privateKey          *rsa.PrivateKey
 	keyring             *jwtkey.Keyring
 	keyID               string
@@ -103,6 +104,14 @@ func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyri
 		audit:               audit.NoopRecorder{},
 		now:                 time.Now,
 	}
+}
+
+// SetSessionRepository injects the session persistence layer. Prefer constructor
+// injection once Phase 2 (eliminate setters) is complete.
+// DB exposes the underlying *gorm.DB for migration-compatible access.
+func (s *Service) DB() *gorm.DB { return s.db }
+func (s *Service) SetSessionRepository(repo store.SessionRepository) {
+	s.sessions = repo
 }
 
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {

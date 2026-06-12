@@ -17,8 +17,8 @@ import (
 // If a revoked token is presented (e.g., an attacker replays a stolen token after
 // the legitimate client already rotated it), the entire token family is revoked.
 func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, error) {
-	var current store.RefreshToken
-	if err := s.db.WithContext(ctx).Where("token_hash = ?", hashToken(rawToken)).First(&current).Error; err != nil {
+	token, err := s.sessions.FindRefreshTokenByHash(ctx, hashToken(rawToken))
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrInvalidRefreshToken
 		}
@@ -26,24 +26,24 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	}
 
 	// Presenting an already-revoked token signals theft/replay: nuke the family.
-	if current.RevokedAt != nil {
-		return nil, s.rejectRefreshTokenReuse(ctx, current)
+	if token.RevokedAt != nil {
+		return nil, s.rejectRefreshTokenReuse(ctx,  *token)
 	}
-	if current.ExpiresAt.Before(s.now()) {
+	if token.ExpiresAt.Before(s.now()) {
 		return nil, ErrInvalidRefreshToken
 	}
 
-	user, err := s.loadActiveUser(ctx, current.UserID)
+	user, err := s.loadActiveUser(ctx, token.UserID)
 	if err != nil {
 		return nil, ErrInvalidRefreshToken
 	}
 	// TokenVersion mismatch means the user globally invalidated sessions (logout-all,
 	// password change). Reject without family revocation since the token itself was valid.
-	if user.TokenVersion != current.TokenVersion {
+	if user.TokenVersion != token.TokenVersion {
 		return nil, ErrInvalidRefreshToken
 	}
-	if current.TenantID != 0 {
-		if err := s.hasActiveMembership(ctx, current.UserID, current.TenantID); err != nil {
+	if token.TenantID != 0 {
+		if err := s.hasActiveMembership(ctx, token.UserID, token.TenantID); err != nil {
 			return nil, ErrInvalidRefreshToken
 		}
 	}
@@ -51,18 +51,18 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	var pair *TokenPair
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()
-		// SELECT FOR UPDATE on the login session serializes concurrent refresh attempts
+		// SELECT FOR UPDATE on the login session serializes con *token refresh attempts
 		// for the same session, so two simultaneous rotations cannot both succeed.
-		if err := s.lockActiveSessionWithDB(ctx, tx, current.UserID, current.SessionID); err != nil {
+		if err := s.lockActiveSessionWithDB(ctx, tx, token.UserID, token.SessionID); err != nil {
 			// If another transaction already rotated this token, treat as reuse.
-			if s.wasRefreshTokenReplaced(ctx, tx, current.ID) {
+			if s.wasRefreshTokenReplaced(ctx, tx, token.ID) {
 				return ErrRefreshTokenReuse
 			}
 			return ErrInvalidRefreshToken
 		}
 		// Atomic revoke: RowsAffected != 1 means a racing rotation won — treat as reuse.
 		result := tx.Model(&store.RefreshToken{}).
-			Where("id = ? AND revoked_at IS NULL", current.ID).
+			Where("id = ? AND revoked_at IS NULL", token.ID).
 			Update("revoked_at", now)
 		if result.Error != nil {
 			if isSQLiteWriteLock(result.Error) {
@@ -74,7 +74,7 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 			return ErrRefreshTokenReuse
 		}
 
-		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, current.TenantID, current.ClientID, current.SessionID, current.FamilyID)
+		nextPair, err := s.issueTokenPairWithDB(ctx, tx, *user, token.TenantID, token.ClientID, token.SessionID, token.FamilyID)
 		if err != nil {
 			return err
 		}
@@ -84,7 +84,7 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 			return err
 		}
 		if err := tx.Model(&store.RefreshToken{}).
-			Where("id = ?", current.ID).
+			Where("id = ?", token.ID).
 			Update("replaced_by_token_id", replacement.ID).Error; err != nil {
 			return err
 		}
@@ -94,7 +94,7 @@ func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, err
 	})
 	if err != nil {
 		if errors.Is(err, ErrRefreshTokenReuse) {
-			return nil, s.rejectRefreshTokenReuse(ctx, current)
+			return nil, s.rejectRefreshTokenReuse(ctx,  *token)
 		}
 		return nil, err
 	}
