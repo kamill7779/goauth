@@ -20,6 +20,7 @@ const (
 	oidcRefreshRateLimitWindow = 10 * time.Minute
 )
 
+// Deprecated: use SetDependencies.
 func (s *Service) SetRateLimiter(limiter *ratelimit.Service) {
 	s.rateLimiter = limiter
 }

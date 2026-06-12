@@ -208,9 +208,11 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	sessionHandler.SetRateLimiter(rateLimiter)
 
 	oidcService := oidc.NewServiceWithKeyring(db, cfg, keyring)
-	oidcService.SetAuditRecorder(auditService)
-	oidcService.SetRateLimiter(rateLimiter)
-	oidcService.SetBrowserLoginURL(cfg.BrowserLoginURL)
+	oidcService.SetDependencies(oidc.Dependencies{
+		Audit:           auditService,
+		RateLimiter:     rateLimiter,
+		BrowserLoginURL: cfg.BrowserLoginURL,
+	})
 
 	defaultPolicy := provisioning.NewDefaultMembershipPolicy(cfg.DefaultMemberTenantSlugs)
 	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration)
@@ -238,9 +240,11 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 			RedirectURI:  cfg.GitHubRedirectURI,
 		})
 		idpService = idp.NewService(db, githubProvider)
-		idpService.SetAuditRecorder(auditService)
-		idpService.SetDefaultMembershipPolicy(defaultPolicy)
-		idpService.SetRegistrationMode(cfg.RegistrationMode)
+		idpService.SetDependencies(idp.Dependencies{
+			Audit:            auditService,
+			Policy:           defaultPolicy,
+			RegistrationMode: cfg.RegistrationMode,
+		})
 
 		idpHandler = idp.NewHandler(idpService, sessionService,
 			session.AuthMiddlewareWithKeyring(sessionService, keyring),

@@ -57,6 +57,24 @@ type Handler struct {
 	service *Service
 }
 
+// Dependencies holds optional collaborators for oidc.Service.
+type Dependencies struct {
+	Audit           audit.Recorder
+	RateLimiter     *ratelimit.Service
+	BrowserLoginURL string
+}
+
+// SetDependencies injects optional dependencies. Use constructor injection
+// once Phase 2 is complete for all services.
+func (s *Service) SetDependencies(deps Dependencies) {
+	s.audit = deps.Audit
+	if s.audit == nil {
+		s.audit = audit.NoopRecorder{}
+	}
+	s.rateLimiter = deps.RateLimiter
+	s.browserLoginURL = deps.BrowserLoginURL
+}
+
 type accessClaims struct {
 	Email             string `json:"email,omitempty"`
 	EmailVerified     bool   `json:"email_verified,omitempty"`
@@ -129,6 +147,7 @@ func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyri
 	return service
 }
 
+// Deprecated: use SetDependencies.
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	if recorder == nil {
 		s.audit = audit.NoopRecorder{}
@@ -137,6 +156,7 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	s.audit = recorder
 }
 
+// Deprecated: use SetDependencies.
 func (s *Service) SetBrowserLoginURL(loginURL string) {
 	s.browserLoginURL = strings.TrimSpace(loginURL)
 }

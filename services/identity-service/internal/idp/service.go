@@ -47,6 +47,26 @@ type Service struct {
 	registrationMode string
 }
 
+// Dependencies holds optional collaborators for idp.Service.
+type Dependencies struct {
+	Audit            audit.Recorder
+	Policy           *provisioning.DefaultMembershipPolicy
+	RegistrationMode string
+}
+
+// SetDependencies injects optional dependencies. Use constructor injection
+// once Phase 2 is complete for all services.
+func (s *Service) SetDependencies(deps Dependencies) {
+	s.audit = deps.Audit
+	if s.audit == nil {
+		s.audit = audit.NoopRecorder{}
+	}
+	s.policy = deps.Policy
+	if deps.RegistrationMode != "" {
+		s.registrationMode = deps.RegistrationMode
+	}
+}
+
 func NewService(db *gorm.DB, providers ...Provider) *Service {
 	providerMap := make(map[string]Provider, len(providers))
 	for _, provider := range providers {
