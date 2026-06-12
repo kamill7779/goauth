@@ -9,12 +9,16 @@ frontend/prototypes/
 services/identity-service/data/
 node_modules/
 .kiro/
+.codegraph/
+.reasonix/
 
 bin/
 dist/
 coverage/
+test-results/
 
 *.log
 *.err
 *.tmp
 *.tsbuildinfo
+*.pid
