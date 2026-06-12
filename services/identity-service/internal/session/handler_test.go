@@ -25,7 +25,7 @@ func TestMeRouteReturnsClaimsForValidBearerToken(t *testing.T) {
 	}
 
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
 	request.Header.Set("Authorization", "Bearer "+pair.AccessToken)
@@ -67,7 +67,7 @@ func TestMeRouteRejectsMissingBearerToken(t *testing.T) {
 
 	service, _ := newTestService(t)
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
 	recorder := httptest.NewRecorder()
@@ -93,7 +93,7 @@ func TestRefreshSetsOIDCAuthorizeCookie(t *testing.T) {
 	}
 
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", strings.NewReader(`{"refresh_token":"`+pair.RefreshToken+`"}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -136,7 +136,7 @@ func TestRefreshRejectsDisabledUser(t *testing.T) {
 	}
 
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", strings.NewReader(`{"refresh_token":"`+pair.RefreshToken+`"}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -155,7 +155,7 @@ func TestLogoutRouteRequiresBearerToken(t *testing.T) {
 	service, user := newTestService(t)
 	pair := issueSessionPair(t, service, *user, 0)
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(`{"session_id":"`+pair.SessionID+`"}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -175,7 +175,7 @@ func TestLogoutRouteOnlyRevokesAuthenticatedSession(t *testing.T) {
 	currentPair := issueSessionPair(t, service, *user, 0)
 	otherPair := issueSessionPair(t, service, *user, 0)
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(`{"session_id":"`+otherPair.SessionID+`"}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -205,7 +205,7 @@ func TestLogoutRouteCanUseAuthenticatedSessionFromToken(t *testing.T) {
 	service, user := newTestService(t)
 	pair := issueSessionPair(t, service, *user, 0)
 	router := gin.New()
-	NewHandler(service, &service.privateKey.PublicKey).RegisterRoutes(router.Group("/v1/auth"))
+	NewHandler(service, &service.privateKey.PublicKey, nil).RegisterRoutes(router.Group("/v1/auth"))
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")

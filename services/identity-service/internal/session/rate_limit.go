@@ -16,6 +16,7 @@ const (
 	refreshRateLimitWindow = 10 * time.Minute
 )
 
+// Deprecated: use constructor injection.
 func (h *Handler) SetRateLimiter(limiter *ratelimit.Service) {
 	h.rateLimiter = limiter
 }

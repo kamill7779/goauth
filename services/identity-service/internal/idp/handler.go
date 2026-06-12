@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	stdhttp "net/http"
 	"net/url"
@@ -41,6 +42,45 @@ type Handler struct {
 	exchangeStore        *ExchangeStore
 	frontendCallbackPath string
 	trustedReturnOrigins map[string]struct{}
+}
+
+// HandlerDeps bundles optional dependencies for the IDP handler.
+type HandlerDeps struct {
+	CaptchaVerifier        *captcha.Verifier
+	CaptchaActions         []string
+	FrontendCallbackPath   string
+	TrustedReturnToOrigins []string
+	ExchangeStore          *ExchangeStore
+}
+
+// SetDeps injects optional dependencies.
+func (h *Handler) SetDeps(d HandlerDeps) {
+	h.captchaVerifier = d.CaptchaVerifier
+	if len(d.CaptchaActions) > 0 {
+		h.captchaActions = captcha.ActionSet(d.CaptchaActions)
+	}
+	if p := strings.TrimSpace(d.FrontendCallbackPath); p != "" {
+		h.frontendCallbackPath = p
+	}
+	if len(d.TrustedReturnToOrigins) > 0 {
+		h.trustedReturnOrigins = buildTrustedOriginSet(d.TrustedReturnToOrigins)
+	}
+	h.exchangeStore = d.ExchangeStore
+}
+
+func buildTrustedOriginSet(origins []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(origins))
+	for _, o := range origins {
+		if o == "" {
+			continue
+		}
+		u, err := url.Parse(o)
+		if err != nil {
+			continue
+		}
+		set[fmt.Sprintf("%s://%s", u.Scheme, u.Host)] = struct{}{}
+	}
+	return set
 }
 
 func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.HandlerFunc, browserCookieSecure bool) *Handler {

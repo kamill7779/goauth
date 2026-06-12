@@ -18,17 +18,19 @@ type Handler struct {
 	rateLimiter *ratelimit.Service
 }
 
-func NewHandler(service *Service, publicKey *rsa.PublicKey) *Handler {
+func NewHandler(service *Service, publicKey *rsa.PublicKey, rateLimiter *ratelimit.Service) *Handler {
 	return &Handler{
-		service:   service,
-		publicKey: publicKey,
+		service:     service,
+		publicKey:   publicKey,
+		rateLimiter: rateLimiter,
 	}
 }
 
-func NewHandlerWithKeyring(service *Service, keyring *jwtkey.Keyring) *Handler {
+func NewHandlerWithKeyring(service *Service, keyring *jwtkey.Keyring, rateLimiter *ratelimit.Service) *Handler {
 	return &Handler{
-		service: service,
-		keyring: keyring,
+		service:     service,
+		keyring:     keyring,
+		rateLimiter: rateLimiter,
 	}
 }
 

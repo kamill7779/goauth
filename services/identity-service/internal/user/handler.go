@@ -23,16 +23,18 @@ type Handler struct {
 	systemMiddleware gin.HandlerFunc
 }
 
-func NewHandler(service *Service, tenantService *tenant.Service, sessionService *session.Service, authMiddleware, systemMiddleware gin.HandlerFunc) *Handler {
+func NewHandler(service *Service, tenantService *tenant.Service, sessionService *session.Service, authMiddleware, systemMiddleware gin.HandlerFunc, lockoutManager *lockout.Manager) *Handler {
 	return &Handler{
 		service:          service,
 		tenantService:    tenantService,
 		sessionService:   sessionService,
 		authMiddleware:   authMiddleware,
 		systemMiddleware: systemMiddleware,
+		lockoutManager:   lockoutManager,
 	}
 }
 
+// Deprecated: use constructor injection.
 func (h *Handler) SetLockoutManager(m *lockout.Manager) {
 	h.lockoutManager = m
 }

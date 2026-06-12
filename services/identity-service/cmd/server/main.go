@@ -204,8 +204,7 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 		Audit:             auditService,
 		LogoutCoordinator: logoutCoord,
 	})
-	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
-	sessionHandler.SetRateLimiter(rateLimiter)
+	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring, rateLimiter)
 	authMW := session.AuthMiddlewareWithKeyring(sessionService, keyring)
 	sysMW := session.SystemUserMiddleware(sessionService)
 
@@ -230,8 +229,8 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 
 	userHandler := user.NewHandler(userService, tenantService, sessionService,
 		authMW,
-		sysMW)
-	userHandler.SetLockoutManager(lockoutMgr)
+		sysMW,
+		lockoutMgr)
 
 	var idpService *idp.Service
 	var idpHandler *idp.Handler
@@ -251,13 +250,13 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 		idpHandler = idp.NewHandler(idpService, sessionService,
 			authMW,
 			cfg.BrowserCookieSecure)
-		idpHandler.SetCaptchaVerifier(captchaVerifier)
-		idpHandler.SetCaptchaActions(cfg.CaptchaActions)
-		idpHandler.SetFrontendCallbackPath(frontendCallbackURLFromBrowserLoginURL(cfg.BrowserLoginURL))
-		idpHandler.SetTrustedReturnToOrigins(cfg.PublicIssuerURL)
-		if redisClient != nil {
-			idpHandler.SetExchangeStore(idp.NewExchangeStore(redisClient))
-		}
+		idpHandler.SetDeps(idp.HandlerDeps{
+			CaptchaVerifier:        captchaVerifier,
+			CaptchaActions:         cfg.CaptchaActions,
+			FrontendCallbackPath:   frontendCallbackURLFromBrowserLoginURL(cfg.BrowserLoginURL),
+			TrustedReturnToOrigins: []string{cfg.PublicIssuerURL},
+			ExchangeStore:          buildExchangeStore(redisClient),
+		})
 		if redisClient != nil {
 		}
 	}
@@ -340,13 +339,22 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 			Password: svc.pwPolicy,
 		})
 		authHandler := auth.NewHandler(authService, svc.session)
-		authHandler.SetRateLimiter(svc.rateLimiter)
-		authHandler.SetCaptchaVerifier(svc.captcha)
-		authHandler.SetCaptchaActions(cfg.CaptchaActions)
-		authHandler.SetRegistrationMode(cfg.RegistrationMode)
-		authHandler.SetLocalPasswordLoginEnabled(cfg.LocalPasswordLoginEnabled)
+		authHandler.SetDeps(auth.HandlerDeps{
+			RateLimiter:               svc.rateLimiter,
+			CaptchaVerifier:           svc.captcha,
+			CaptchaActions:            cfg.CaptchaActions,
+			RegistrationMode:          cfg.RegistrationMode,
+			LocalPasswordLoginEnabled: &cfg.LocalPasswordLoginEnabled,
+		})
 		authHandler.RegisterRoutes(authGroup)
 	}
+}
+
+func buildExchangeStore(redisClient *redis.Client) *idp.ExchangeStore {
+	if redisClient != nil {
+		return idp.NewExchangeStore(redisClient)
+	}
+	return nil
 }
 
 func buildMailSender(cfg config.Config) mailer.Sender {

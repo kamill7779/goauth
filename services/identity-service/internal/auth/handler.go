@@ -25,6 +25,30 @@ type Handler struct {
 	localPasswordLoginEnabled bool
 }
 
+// HandlerDeps bundles optional dependencies for the auth handler.
+type HandlerDeps struct {
+	RateLimiter               *ratelimit.Service
+	CaptchaVerifier           *captcha.Verifier
+	CaptchaActions            []string
+	RegistrationMode          string
+	LocalPasswordLoginEnabled *bool
+}
+
+// SetDeps injects optional dependencies.
+func (h *Handler) SetDeps(d HandlerDeps) {
+	h.rateLimiter = d.RateLimiter
+	h.captchaVerifier = d.CaptchaVerifier
+	if len(d.CaptchaActions) > 0 {
+		h.captchaActions = captcha.ActionSet(d.CaptchaActions)
+	}
+	if mode := strings.TrimSpace(d.RegistrationMode); mode != "" {
+		h.registrationMode = strings.ToLower(mode)
+	}
+	if d.LocalPasswordLoginEnabled != nil {
+		h.localPasswordLoginEnabled = *d.LocalPasswordLoginEnabled
+	}
+}
+
 var defaultCaptchaActions = []string{"login", "register", "email_code", "password_forgot"}
 
 func NewHandler(service *Service, sessionService *session.Service) *Handler {
