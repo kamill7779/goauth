@@ -4,9 +4,11 @@ package ratelimit
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
 	"goauth/services/identity-service/internal/cache"
 )
@@ -61,4 +63,13 @@ func (s *Service) Allow(ctx context.Context, scope, key string, limit int64, win
 		Count:      count,
 		RetryAfter: retryAfter,
 	}, nil
+}
+
+// SetRetryAfterHeader writes a standard Retry-After header to the response.
+func SetRetryAfterHeader(c *gin.Context, retryAfter time.Duration) {
+	seconds := int(retryAfter.Seconds())
+	if seconds < 1 {
+		seconds = 1
+	}
+	c.Header("Retry-After", strconv.Itoa(seconds))
 }

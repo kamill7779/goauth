@@ -48,7 +48,7 @@ func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.Han
 		service:              service,
 		sessions:             sessions,
 		authMiddleware:       authMiddleware,
-		captchaActions:       captchaActionSet([]string{"login"}),
+		captchaActions:       captcha.ActionSet([]string{"login"}),
 		browserCookieSecure:  browserCookieSecure,
 		newState:             randomState,
 		frontendCallbackPath: "/external/callback",
@@ -83,7 +83,7 @@ func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
 }
 
 func (h *Handler) SetCaptchaActions(actions []string) {
-	h.captchaActions = captchaActionSet(actions)
+	h.captchaActions = captcha.ActionSet(actions)
 }
 
 func (h *Handler) captchaMW() gin.HandlerFunc {
@@ -108,17 +108,6 @@ func (h *Handler) captchaActionEnabled(action string) bool {
 	return ok
 }
 
-func captchaActionSet(actions []string) map[string]struct{} {
-	result := make(map[string]struct{}, len(actions))
-	for _, action := range actions {
-		action = strings.ToLower(strings.TrimSpace(action))
-		if action == "" {
-			continue
-		}
-		result[action] = struct{}{}
-	}
-	return result
-}
 
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	external := router.Group("/v1/external/github")

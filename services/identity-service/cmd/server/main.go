@@ -38,6 +38,7 @@ import (
 	"goauth/services/identity-service/internal/store"
 	"goauth/services/identity-service/internal/tenant"
 	"goauth/services/identity-service/internal/user"
+	"goauth/services/identity-service/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -200,7 +201,7 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 	registrars := []httpserver.Registrar{
 		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
 	}
-	if githubIDPConfigured(cfg) {
+	if cfg.IsGitHubConfigured() {
 		githubProvider := githubidp.New(githubidp.Config{
 			ClientID:     cfg.GitHubClientID,
 			ClientSecret: cfg.GitHubClientSecret,
@@ -254,7 +255,7 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 	)
 
 	// Invite handler.
-	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), tmplEngine, defaultString(cfg.BrandName, "GoAuth"), cfg.PublicIssuerURL)
+	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), tmplEngine, util.DefaultString(cfg.BrandName, "GoAuth"), cfg.PublicIssuerURL)
 	inviteService.SetAuditRecorder(auditService)
 	invite.NewHandler(inviteService, authMiddleware, systemMiddleware).RegisterRoutes(router)
 
@@ -331,12 +332,6 @@ func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.R
 	}
 }
 
-func githubIDPConfigured(cfg config.Config) bool {
-	return cfg.GitHubOAuthEnabled &&
-		strings.TrimSpace(cfg.GitHubClientID) != "" &&
-		strings.TrimSpace(cfg.GitHubClientSecret) != "" &&
-		strings.TrimSpace(cfg.GitHubRedirectURI) != ""
-}
 
 func frontendCallbackURLFromBrowserLoginURL(browserLoginURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(browserLoginURL))
@@ -346,9 +341,3 @@ func frontendCallbackURLFromBrowserLoginURL(browserLoginURL string) string {
 	return parsed.Scheme + "://" + parsed.Host + "/external/callback"
 }
 
-func defaultString(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return strings.TrimSpace(value)
-}

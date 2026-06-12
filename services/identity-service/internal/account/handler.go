@@ -28,6 +28,7 @@ import (
 	"goauth/services/identity-service/internal/password"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/util"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -54,7 +55,7 @@ func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin
 		sessionService: sessionService,
 		authMiddleware: authMiddleware,
 		pwPolicy:       pwPolicy,
-		avatarDir:      defaultString(avatarDir, "data/avatars"),
+		avatarDir:      util.DefaultString(avatarDir, "data/avatars"),
 	}
 }
 
@@ -1700,12 +1701,6 @@ func uniqueAuthorizedAppCount(rows []accountAuthorizedAppRow) int {
 	return len(seen)
 }
 
-func defaultString(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return strings.TrimSpace(value)
-}
 
 func accountOverviewAlerts(user store.User, signInMethodCount int) []gin.H {
 	alerts := make([]gin.H, 0, 2)

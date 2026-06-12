@@ -31,7 +31,7 @@ func NewHandler(service *Service, sessionService *session.Service) *Handler {
 	return &Handler{
 		service:                   service,
 		session:                   sessionService,
-		captchaActions:            captchaActionSet(defaultCaptchaActions),
+		captchaActions:            captcha.ActionSet(defaultCaptchaActions),
 		registrationMode:          "open",
 		localPasswordLoginEnabled: true,
 	}
@@ -54,7 +54,7 @@ func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
 }
 
 func (h *Handler) SetCaptchaActions(actions []string) {
-	h.captchaActions = captchaActionSet(actions)
+	h.captchaActions = captcha.ActionSet(actions)
 }
 
 func (h *Handler) captchaMW() gin.HandlerFunc {
@@ -88,17 +88,6 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/password/reset", h.resetPassword)
 }
 
-func captchaActionSet(actions []string) map[string]struct{} {
-	result := make(map[string]struct{}, len(actions))
-	for _, action := range actions {
-		action = strings.ToLower(strings.TrimSpace(action))
-		if action == "" {
-			continue
-		}
-		result[action] = struct{}{}
-	}
-	return result
-}
 
 func (h *Handler) sendCode(c *gin.Context) {
 	var request struct {

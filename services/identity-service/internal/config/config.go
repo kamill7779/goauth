@@ -87,6 +87,14 @@ type Config struct {
 	ConfiguredEnv map[string]bool `json:"-"`
 }
 
+// IsGitHubConfigured returns true when all required GitHub OAuth settings are present.
+func (c Config) IsGitHubConfigured() bool {
+	return c.GitHubOAuthEnabled &&
+		c.GitHubClientID != "" &&
+		c.GitHubClientSecret != "" &&
+		c.GitHubRedirectURI != ""
+}
+
 // Load reads all configuration from environment variables. Missing variables
 // fall back to safe defaults suitable for local development.
 func Load() (Config, error) {

@@ -3,7 +3,6 @@ package auth
 import (
 	"fmt"
 	stdhttp "net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -42,7 +41,7 @@ func (h *Handler) allowJSONRateLimit(c *gin.Context, scope, key string, limit in
 		return true
 	}
 
-	setRetryAfterHeader(c, result.RetryAfter)
+	ratelimit.SetRetryAfterHeader(c, result.RetryAfter)
 	httpserver.Error(c, stdhttp.StatusTooManyRequests, "rate_limited")
 	return false
 }
@@ -63,13 +62,6 @@ func rateLimitKey(c *gin.Context, identityParts ...string) string {
 	return strings.Join(parts, "|")
 }
 
-func setRetryAfterHeader(c *gin.Context, retryAfter time.Duration) {
-	seconds := int(retryAfter.Seconds())
-	if seconds < 1 {
-		seconds = 1
-	}
-	c.Header("Retry-After", strconv.Itoa(seconds))
-}
 
 func rateLimitEmailCodeKey(c *gin.Context, purpose, email string) string {
 	return fmt.Sprintf("%s|%s", strings.TrimSpace(strings.ToLower(purpose)), rateLimitKey(c, email))

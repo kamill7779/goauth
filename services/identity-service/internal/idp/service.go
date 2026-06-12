@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"goauth/services/identity-service/internal/audit"
+	identitypkg "goauth/services/identity-service/internal/identity"
 	"goauth/services/identity-service/internal/provisioning"
 	"goauth/services/identity-service/internal/store"
 	"gorm.io/gorm"
@@ -127,7 +128,7 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 			return nil, ErrUserDisabled
 		}
 	} else {
-		email := normalizeEmail(profile.Email)
+		email := identitypkg.NormalizeEmail(profile.Email)
 		if email == "" {
 			return nil, ErrEmailRequired
 		}
@@ -495,10 +496,10 @@ func newIdentity(userID int64, providerSlug string, profile *ExternalProfile) *s
 		UserID:         userID,
 		Provider:       providerSlug,
 		ProviderUserID: strings.TrimSpace(profile.ProviderUserID),
-		Email:          normalizeEmail(profile.Email),
+		Email:          identitypkg.NormalizeEmail(profile.Email),
 		EmailVerified:  profile.EmailVerified,
 		Username:       strings.TrimSpace(profile.Username),
-		DisplayName:    chooseDisplayName(profile, normalizeEmail(profile.Email)),
+		DisplayName:    chooseDisplayName(profile, identitypkg.NormalizeEmail(profile.Email)),
 		AvatarURL:      strings.TrimSpace(profile.AvatarURL),
 	}
 }
@@ -516,6 +517,3 @@ func chooseDisplayName(profile *ExternalProfile, fallback string) string {
 	return fallback
 }
 
-func normalizeEmail(email string) string {
-	return strings.ToLower(strings.TrimSpace(email))
-}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/util"
 )
 
 type PublicConfigHandler struct {
@@ -24,7 +25,7 @@ func (h *PublicConfigHandler) get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"issuer_url": strings.TrimSpace(h.cfg.PublicIssuerURL),
 		"registration": gin.H{
-			"mode": defaultString(h.cfg.RegistrationMode, "open"),
+			"mode": util.DefaultString(h.cfg.RegistrationMode, "open"),
 		},
 		"local_login": gin.H{
 			"enabled": h.cfg.LocalPasswordLoginEnabled,
@@ -44,19 +45,19 @@ func (h *PublicConfigHandler) get(c *gin.Context) {
 			"history_count":     h.cfg.PasswordHistoryCount,
 		},
 		"mailer": gin.H{
-			"provider": defaultString(h.cfg.MailerProvider, "console"),
+			"provider": util.DefaultString(h.cfg.MailerProvider, "console"),
 		},
 		"brand": gin.H{
-			"name":      defaultString(h.cfg.BrandName, "GoAuth"),
+			"name":      util.DefaultString(h.cfg.BrandName, "GoAuth"),
 			"tagline":   strings.TrimSpace(h.cfg.BrandTagline),
-			"icon_text": defaultString(h.cfg.BrandIconText, "G"),
+			"icon_text": util.DefaultString(h.cfg.BrandIconText, "G"),
 			"icon_url":  strings.TrimSpace(h.cfg.BrandIconURL),
 		},
 	})
 }
 
 func (h *PublicConfigHandler) externalProviders() []gin.H {
-	if !githubPublicProviderEnabled(h.cfg) {
+	if !h.cfg.IsGitHubConfigured() {
 		return []gin.H{}
 	}
 	return []gin.H{
@@ -68,12 +69,6 @@ func (h *PublicConfigHandler) externalProviders() []gin.H {
 	}
 }
 
-func githubPublicProviderEnabled(cfg config.Config) bool {
-	return cfg.GitHubOAuthEnabled &&
-		strings.TrimSpace(cfg.GitHubClientID) != "" &&
-		strings.TrimSpace(cfg.GitHubClientSecret) != "" &&
-		strings.TrimSpace(cfg.GitHubRedirectURI) != ""
-}
 
 func publicCaptchaProvider(cfg config.Config) string {
 	if !publicCaptchaEnabled(cfg) {
@@ -95,9 +90,3 @@ func publicCaptchaEnabled(cfg config.Config) bool {
 		strings.TrimSpace(cfg.CaptchaSecretKey) != ""
 }
 
-func defaultString(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
-}

@@ -139,3 +139,16 @@ type VerificationError struct {
 func (e *VerificationError) Error() string {
 	return "captcha verification failed for provider: " + e.Provider
 }
+
+// ActionSet builds a lookup set from a list of action names, normalizing to lowercase.
+func ActionSet(actions []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
+		action = strings.ToLower(strings.TrimSpace(action))
+		if action == "" {
+			continue
+		}
+		result[action] = struct{}{}
+	}
+	return result
+}

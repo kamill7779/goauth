@@ -2,7 +2,6 @@ package session
 
 import (
 	stdhttp "net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,11 +34,7 @@ func (h *Handler) allowRefreshRateLimit(c *gin.Context) bool {
 		return true
 	}
 
-	seconds := int(result.RetryAfter.Seconds())
-	if seconds < 1 {
-		seconds = 1
-	}
-	c.Header("Retry-After", strconv.Itoa(seconds))
+	ratelimit.SetRetryAfterHeader(c, result.RetryAfter)
 	httpserver.Error(c, stdhttp.StatusTooManyRequests, "rate_limited")
 	return false
 }
