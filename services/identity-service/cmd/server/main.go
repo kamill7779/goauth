@@ -196,7 +196,7 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	auditService := audit.NewService(db)
 	rateLimiter := ratelimit.NewService(redisClient)
 	logoutCoord := logout.NewCoordinatorWithKeyring(db, keyring, cfg.PublicIssuerURL)
-	logoutCoord.SetAuditRecorder(auditService)
+	logoutCoord.SetDependencies(auditService)
 
 	// Session service with all deps via constructor.
 	sessionService := session.NewServiceWithKeyringAndDeps(db, cfg, keyring, session.Dependencies{
@@ -225,7 +225,7 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 
 	rbacService := rbac.NewService(db, redisClient)
 	tenantService := tenant.NewService(db, rbacService)
-	tenantService.SetAuditRecorder(auditService)
+	tenantService.SetDependencies(auditService)
 	userService := user.NewService(db, auditService)
 
 	userHandler := user.NewHandler(userService, tenantService, sessionService,
@@ -257,6 +257,8 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 		idpHandler.SetTrustedReturnToOrigins(cfg.PublicIssuerURL)
 		if redisClient != nil {
 			idpHandler.SetExchangeStore(idp.NewExchangeStore(redisClient))
+		}
+		if redisClient != nil {
 		}
 	}
 
@@ -323,7 +325,7 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 
 	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), svc.tmplEngine,
 		util.DefaultString(cfg.BrandName, "GoAuth"), cfg.PublicIssuerURL)
-	inviteService.SetAuditRecorder(svc.audit)
+	inviteService.SetDependencies(svc.audit)
 	invite.NewHandler(inviteService, svc.authMiddleware, svc.systemMiddleware).RegisterRoutes(router)
 
 	if redisClient != nil {

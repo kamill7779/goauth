@@ -75,6 +75,16 @@ func NewService(db *gorm.DB, privateKey *rsa.PrivateKey, mailSender mailer.Sende
 	}
 }
 
+// SetDependencies injects optional collaborators.
+func (s *Service) SetDependencies(r audit.Recorder) {
+	s.audit = r
+	if s.audit == nil {
+		s.audit = audit.NoopRecorder{}
+	}
+}
+
+// Deprecated: use SetDependencies.
+
 func (s *Service) SetAuditRecorder(r audit.Recorder) {
 	if r == nil {
 		s.audit = audit.NoopRecorder{}

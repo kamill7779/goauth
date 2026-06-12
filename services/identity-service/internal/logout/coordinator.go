@@ -60,6 +60,15 @@ func NewCoordinatorWithKeyring(db *gorm.DB, keyring *jwtkey.Keyring, issuer stri
 	}
 }
 
+// SetDependencies injects optional collaborators.
+func (c *Coordinator) SetDependencies(r audit.Recorder) {
+	c.audit = r
+	if c.audit == nil {
+		c.audit = audit.NoopRecorder{}
+	}
+}
+
+// Deprecated: use SetDependencies.
 func (c *Coordinator) SetAuditRecorder(r audit.Recorder) {
 	if r == nil {
 		c.audit = audit.NoopRecorder{}
