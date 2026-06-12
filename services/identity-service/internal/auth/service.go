@@ -55,7 +55,7 @@ type ResetPasswordInput struct {
 }
 
 type Service struct {
-	db       *gorm.DB
+	users    store.UserRepository
 	redis    *redis.Client
 	mailer   MailSender
 	audit    audit.Recorder
@@ -63,14 +63,16 @@ type Service struct {
 	lockout  *lockout.Manager
 	pwPolicy password.Policy
 	now      func() time.Time
+	db       *gorm.DB // retained for transaction orchestration until provisioning is migrated
 }
 
-func NewService(db *gorm.DB, redisClient *redis.Client, mailSender MailSender) *Service {
+func NewService(users store.UserRepository, redisClient *redis.Client, mailSender MailSender, db *gorm.DB) *Service {
 	if mailSender == nil {
 		mailSender = mailer.NoopSender{}
 	}
 
 	return &Service{
+		users:  users,
 		db:     db,
 		redis:  redisClient,
 		mailer: mailSender,
@@ -86,6 +88,10 @@ func (s *Service) SetLockoutManager(m *lockout.Manager) {
 func (s *Service) SetPasswordPolicy(p password.Policy) {
 	s.pwPolicy = p
 }
+
+// DB exposes the underlying *gorm.DB for transactional orchestration during
+// migration. Prefer UserRepository methods for new code.
+func (s *Service) DB() *gorm.DB { return s.db }
 
 func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
 	s.policy = policy
@@ -109,11 +115,11 @@ func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (str
 	if err != nil {
 		return "", fmt.Errorf("generate email code: %w", err)
 	}
-	if err := storeEmailCode(ctx, s.redis, purpose, normalizeEmail(email), code); err != nil {
+	if err := storeEmailCode(ctx, s.redis, purpose, identity.NormalizeEmail(email), code); err != nil {
 		return "", fmt.Errorf("store email code: %w", err)
 	}
 	if err := s.mailer.Send(ctx, MailMessage{
-		To:      normalizeEmail(email),
+		To:      identity.NormalizeEmail(email),
 		Subject: "GoAuth verification code",
 		Body:    code,
 	}); err != nil {
@@ -128,7 +134,7 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		return nil, err
 	}
 
-	email := normalizeEmail(input.Email)
+	email := identity.NormalizeEmail(input.Email)
 	if err := s.requireEmailCode(ctx, purpose, email, input.EmailCode); err != nil {
 		return nil, err
 	}
@@ -290,9 +296,11 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, err
 }
 
 func (s *Service) lookupUserByEmail(ctx context.Context, email string) (store.User, error) {
-	var user store.User
-	err := s.db.WithContext(ctx).Where("email = ?", normalizeEmail(email)).First(&user).Error
-	return user, err
+	user, err := s.users.FindByEmail(ctx, email)
+	if err != nil {
+		return store.User{}, err
+	}
+	return *user, nil
 }
 
 func (s *Service) lookupUserByUsername(ctx context.Context, raw string) (store.User, error) {
@@ -300,9 +308,11 @@ func (s *Service) lookupUserByUsername(ctx context.Context, raw string) (store.U
 	if err != nil {
 		return store.User{}, gorm.ErrRecordNotFound
 	}
-	var user store.User
-	dbErr := s.db.WithContext(ctx).Where("username = ?", username).First(&user).Error
-	return user, dbErr
+	user, err := s.users.FindByUsername(ctx, username)
+	if err != nil {
+		return store.User{}, err
+	}
+	return *user, nil
 }
 
 func loginIdentifierType(identifier string) string {
@@ -316,25 +326,25 @@ func loginIdentifierType(identifier string) string {
 // enumerate registered accounts via the response shape. A code is only sent
 // when the email actually exists.
 func (s *Service) ForgotPassword(ctx context.Context, email string) error {
-	var user store.User
-	if err := s.db.WithContext(ctx).Where("email = ?", normalizeEmail(email)).First(&user).Error; err != nil {
+	_, err := s.users.FindByEmail(ctx, email)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		return err
 	}
-	_, err := s.SendEmailCode(ctx, EmailCodePurposePasswordReset, email)
+	_, err = s.SendEmailCode(ctx, EmailCodePurposePasswordReset, email)
 	return err
 }
 
 func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) error {
-	email := normalizeEmail(input.Email)
+	email := identity.NormalizeEmail(input.Email)
 	if err := s.requireEmailCode(ctx, EmailCodePurposePasswordReset, email, input.EmailCode); err != nil {
 		return err
 	}
 
-	var user store.User
-	if err := s.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
+	user, err := s.users.FindByEmail(ctx, email)
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrInvalidCredential
 		}
@@ -421,8 +431,4 @@ func (s *Service) requireEmailCode(ctx context.Context, purpose, email, code str
 
 func emailCodeKey(purpose, email string) string {
 	return fmt.Sprintf("auth:email_code:%s:%s", purpose, email)
-}
-
-func normalizeEmail(email string) string {
-	return identity.NormalizeEmail(email)
 }

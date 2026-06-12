@@ -260,7 +260,7 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 	invite.NewHandler(inviteService, authMiddleware, systemMiddleware).RegisterRoutes(router)
 
 	if redisClient != nil {
-		authService := auth.NewService(db, redisClient, buildMailSender(cfg))
+		authService := auth.NewService(store.NewUserRepository(db), redisClient, buildMailSender(cfg), db)
 		authService.SetAuditRecorder(auditService)
 		authService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
 		authService.SetLockoutManager(lockoutMgr)
