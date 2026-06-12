@@ -62,8 +62,9 @@ func (s *Service) SetDependencies(deps Dependencies) {
 		s.audit = audit.NoopRecorder{}
 	}
 	s.policy = deps.Policy
-	if deps.RegistrationMode != "" {
-		s.registrationMode = deps.RegistrationMode
+	mode := strings.TrimSpace(deps.RegistrationMode)
+	if mode != "" {
+		s.registrationMode = strings.ToLower(mode)
 	}
 }
 
@@ -85,6 +86,7 @@ func NewService(db *gorm.DB, providers ...Provider) *Service {
 	}
 }
 
+// Deprecated: use SetDependencies.
 func (s *Service) SetRegistrationMode(mode string) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
@@ -93,10 +95,12 @@ func (s *Service) SetRegistrationMode(mode string) {
 	s.registrationMode = mode
 }
 
+// Deprecated: use SetDependencies.
 func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
 	s.policy = policy
 }
 
+// Deprecated: use SetDependencies.
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	if recorder == nil {
 		s.audit = audit.NoopRecorder{}

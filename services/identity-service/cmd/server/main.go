@@ -206,6 +206,8 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	})
 	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
 	sessionHandler.SetRateLimiter(rateLimiter)
+	authMW := session.AuthMiddlewareWithKeyring(sessionService, keyring)
+	sysMW := session.SystemUserMiddleware(sessionService)
 
 	oidcService := oidc.NewServiceWithKeyring(db, cfg, keyring)
 	oidcService.SetDependencies(oidc.Dependencies{
@@ -227,8 +229,8 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	userService := user.NewService(db, auditService)
 
 	userHandler := user.NewHandler(userService, tenantService, sessionService,
-		session.AuthMiddlewareWithKeyring(sessionService, keyring),
-		session.SystemUserMiddleware(sessionService))
+		authMW,
+		sysMW)
 	userHandler.SetLockoutManager(lockoutMgr)
 
 	var idpService *idp.Service
@@ -247,7 +249,7 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 		})
 
 		idpHandler = idp.NewHandler(idpService, sessionService,
-			session.AuthMiddlewareWithKeyring(sessionService, keyring),
+			authMW,
 			cfg.BrowserCookieSecure)
 		idpHandler.SetCaptchaVerifier(captchaVerifier)
 		idpHandler.SetCaptchaActions(cfg.CaptchaActions)
@@ -276,8 +278,8 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 		provisioning:   defaultPolicy,
 		idp:            idpService,
 		idpH:           idpHandler,
-		authMiddleware:  session.AuthMiddlewareWithKeyring(sessionService, keyring),
-		systemMiddleware: session.SystemUserMiddleware(sessionService),
+		authMiddleware:  authMW,
+		systemMiddleware: sysMW,
 	}
 }
 

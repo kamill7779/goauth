@@ -125,10 +125,10 @@ func NewServiceWithKeyringAndDeps(db *gorm.DB, cfg config.Config, keyring *jwtke
 	}
 }
 
-// SetSessionRepository injects the session persistence layer. Prefer constructor
-// injection once Phase 2 (eliminate setters) is complete.
 // DB exposes the underlying *gorm.DB for migration-compatible access.
 func (s *Service) DB() *gorm.DB { return s.db }
+
+// Deprecated: use constructor injection via NewServiceWithKeyringAndDeps.
 func (s *Service) SetSessionRepository(repo store.SessionRepository) {
 	s.sessions = repo
 }
