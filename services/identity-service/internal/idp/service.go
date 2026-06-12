@@ -93,9 +93,9 @@ func (s *Service) Start(providerSlug, state string, opts AuthCodeOptions) (strin
 }
 
 // Authenticate exchanges an authorization code for a user profile and either
-// finds the existing linked account or creates a new user+identity in a single
-// transaction. If the email already belongs to a local account, it returns
-// ErrLocalLoginRequired to prevent silent account takeover.
+// finds the existing linked account, safely auto-binds a verified email match
+// to an existing local user, or creates a new user+identity in a single
+// transaction.
 func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirectURI string) (*AuthenticateResult, error) {
 	return s.authenticate(ctx, providerSlug, code, redirectURI, "")
 }
@@ -117,6 +117,7 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 	var user *store.User
 	var createdIdentity *store.UserIdentity
 	created := false
+	autoBound := false
 	if identity != nil {
 		user, err = s.findUserByID(ctx, identity.UserID)
 		if err != nil {
@@ -135,48 +136,87 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 		if err != nil {
 			return nil, err
 		}
-		// If the email already belongs to a local account, require an explicit bind
-		// flow instead of silently linking an external identity to that user.
 		if user != nil {
-			return nil, ErrLocalLoginRequired
-		}
-		if s.registrationMode != "open" {
-			return nil, ErrRegistrationDisabled
-		}
-
-		var provisionedMembers []store.TenantMember
-		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			now := s.now()
-			user = &store.User{
-				Email:           email,
-				PasswordHash:    "!external:" + provider.Slug(),
-				DisplayName:     chooseDisplayName(profile, email),
-				AvatarURL:       strings.TrimSpace(profile.AvatarURL),
-				Status:          store.UserStatusActive,
-				EmailVerifiedAt: nil,
+			if !profile.EmailVerified {
+				return nil, ErrLocalLoginRequired
 			}
-			if profile.EmailVerified {
-				user.EmailVerifiedAt = &now
+			if user.Status == store.UserStatusDisabled {
+				return nil, ErrUserDisabled
 			}
-			if err := tx.Create(user).Error; err != nil {
-				return err
-			}
-			members, err := s.policy.Apply(ctx, tx, user.ID)
+			err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				existingIdentity, err := s.findIdentityForUserAndProvider(ctx, tx, user.ID, provider.Slug())
+				if err != nil {
+					return err
+				}
+				if existingIdentity != nil {
+					if existingIdentity.ProviderUserID == strings.TrimSpace(profile.ProviderUserID) {
+						createdIdentity = existingIdentity
+						return nil
+					}
+					return ErrLocalLoginRequired
+				}
+				createdIdentity = newIdentity(user.ID, provider.Slug(), profile)
+				return tx.Create(createdIdentity).Error
+			})
 			if err != nil {
-				return err
+				return nil, err
 			}
-			provisionedMembers = members
+			autoBound = true
+		} else {
+			if s.registrationMode != "open" {
+				return nil, ErrRegistrationDisabled
+			}
 
-			createdIdentity = newIdentity(user.ID, provider.Slug(), profile)
-			return tx.Create(createdIdentity).Error
+			var provisionedMembers []store.TenantMember
+			err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				now := s.now()
+				user = &store.User{
+					Email:           email,
+					PasswordHash:    "!external:" + provider.Slug(),
+					DisplayName:     chooseDisplayName(profile, email),
+					AvatarURL:       strings.TrimSpace(profile.AvatarURL),
+					Status:          store.UserStatusActive,
+					EmailVerifiedAt: nil,
+				}
+				if profile.EmailVerified {
+					user.EmailVerifiedAt = &now
+				}
+				if err := tx.Create(user).Error; err != nil {
+					return err
+				}
+				members, err := s.policy.Apply(ctx, tx, user.ID)
+				if err != nil {
+					return err
+				}
+				provisionedMembers = members
+
+				createdIdentity = newIdentity(user.ID, provider.Slug(), profile)
+				return tx.Create(createdIdentity).Error
+			})
+			if err != nil {
+				return nil, err
+			}
+			if err := provisioning.RecordMembershipAudits(ctx, s.audit, provisionedMembers); err != nil {
+				return nil, err
+			}
+			created = true
+		}
+	}
+
+	if autoBound && createdIdentity != nil {
+		_ = s.audit.Record(ctx, audit.Entry{
+			ActorUserID: user.ID,
+			TargetType:  audit.TargetTypeIdentity,
+			TargetID:    strconv.FormatInt(createdIdentity.ID, 10),
+			Action:      audit.ActionExternalIdentityChanged,
+			Metadata: map[string]any{
+				"change":            "auto_bound",
+				"provider":          createdIdentity.Provider,
+				"provider_user_id":  createdIdentity.ProviderUserID,
+				"identity_user_id":  createdIdentity.UserID,
+				"identity_username": createdIdentity.Username,
+			},
 		})
-		if err != nil {
-			return nil, err
-		}
-		if err := provisioning.RecordMembershipAudits(ctx, s.audit, provisionedMembers); err != nil {
-			return nil, err
-		}
-		created = true
 	}
 
 	if err := s.audit.Record(ctx, audit.Entry{
@@ -203,7 +243,7 @@ func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirect
 		result.Identity = identity
 	} else {
 		result.Identity = createdIdentity
-		result.Created = true
+		result.Created = created
 	}
 	return result, nil
 }
@@ -235,16 +275,15 @@ func (s *Service) BindWithState(ctx context.Context, userID int64, providerSlug,
 		return nil, ErrExternalIdentityInUse
 	}
 
-	var existing store.UserIdentity
-	if err := s.db.WithContext(ctx).
-		Where("user_id = ? AND provider = ?", userID, provider.Slug()).
-		First(&existing).Error; err == nil {
+	existing, err := s.findIdentityForUserAndProvider(ctx, s.db.WithContext(ctx), userID, provider.Slug())
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
 		if existing.ProviderUserID == profile.ProviderUserID {
-			return &existing, nil
+			return existing, nil
 		}
 		return nil, ErrProviderAlreadyBound
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
 	}
 
 	identity = newIdentity(userID, provider.Slug(), profile)
@@ -407,6 +446,20 @@ func (s *Service) findIdentity(ctx context.Context, providerSlug, providerUserID
 	var identity store.UserIdentity
 	err := s.db.WithContext(ctx).
 		Where("provider = ? AND provider_user_id = ?", providerSlug, providerUserID).
+		First(&identity).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &identity, nil
+}
+
+func (s *Service) findIdentityForUserAndProvider(ctx context.Context, db *gorm.DB, userID int64, providerSlug string) (*store.UserIdentity, error) {
+	var identity store.UserIdentity
+	err := db.WithContext(ctx).
+		Where("user_id = ? AND provider = ?", userID, providerSlug).
 		First(&identity).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil

@@ -48,10 +48,14 @@ func NewVerifier(provider Provider, secretKey string) *Verifier {
 	}
 }
 
+func (v *Verifier) Enabled() bool {
+	return v != nil && v.provider != ProviderNone
+}
+
 // Middleware returns a Gin middleware that validates CAPTCHA tokens.
 // If provider is empty, returns a noop middleware.
 func (v *Verifier) Middleware() gin.HandlerFunc {
-	if v == nil || v.provider == ProviderNone {
+	if !v.Enabled() {
 		return func(c *gin.Context) { c.Next() }
 	}
 

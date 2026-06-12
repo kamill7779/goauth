@@ -219,6 +219,8 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 		idpService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
 		idpService.SetRegistrationMode(cfg.RegistrationMode)
 		idpHandler := idp.NewHandler(idpService, sessionService, authMiddleware, cfg.BrowserCookieSecure)
+		idpHandler.SetCaptchaVerifier(captchaVerifier)
+		idpHandler.SetCaptchaActions(cfg.CaptchaActions)
 		idpHandler.SetFrontendCallbackPath(frontendCallbackURLFromBrowserLoginURL(cfg.BrowserLoginURL))
 		idpHandler.SetTrustedReturnToOrigins(cfg.PublicIssuerURL)
 		if redisClient != nil {

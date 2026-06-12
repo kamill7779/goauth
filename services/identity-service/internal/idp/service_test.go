@@ -172,7 +172,7 @@ func TestAuthenticateRejectsDisabledLinkedUser(t *testing.T) {
 	}
 }
 
-func TestAuthenticateRequiresLocalLoginWhenEmailExistsWithoutIdentity(t *testing.T) {
+func TestAuthenticateAutoBindsExistingUserWhenEmailVerified(t *testing.T) {
 	provider := &fakeProvider{
 		slug:        "github",
 		displayName: "GitHub",
@@ -182,6 +182,52 @@ func TestAuthenticateRequiresLocalLoginWhenEmailExistsWithoutIdentity(t *testing
 			ProviderUserID: "42",
 			Email:          "octocat@example.com",
 			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	user := createTestUser(t, service, "octocat@example.com")
+
+	result, err := service.Authenticate(context.Background(), "github", "oauth-code", "")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if result.User.ID != user.ID {
+		t.Fatalf("result.User.ID = %d, want %d", result.User.ID, user.ID)
+	}
+	if result.Identity == nil {
+		t.Fatal("result.Identity = nil, want linked identity")
+	}
+	if result.Identity.ProviderUserID != "42" {
+		t.Fatalf("result.Identity.ProviderUserID = %q, want 42", result.Identity.ProviderUserID)
+	}
+	if result.Created {
+		t.Fatal("result.Created = true, want false for existing user auto-bind")
+	}
+	if result.WasLinked {
+		t.Fatal("result.WasLinked = true, want false for newly created identity")
+	}
+
+	var stored store.UserIdentity
+	if err := service.db.Where("user_id = ? AND provider = ?", user.ID, "github").First(&stored).Error; err != nil {
+		t.Fatalf("reload identity: %v", err)
+	}
+	if stored.ProviderUserID != "42" {
+		t.Fatalf("stored.ProviderUserID = %q, want 42", stored.ProviderUserID)
+	}
+}
+
+func TestAuthenticateRequiresLocalLoginWhenEmailUnverified(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  false,
 			Username:       "octocat",
 			DisplayName:    "The Octocat",
 		},
@@ -200,6 +246,80 @@ func TestAuthenticateRequiresLocalLoginWhenEmailExistsWithoutIdentity(t *testing
 	}
 	if count != 0 {
 		t.Fatalf("identity count = %d, want 0", count)
+	}
+}
+
+func TestAuthenticateRejectsDisabledExistingUserDuringAutoBind(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	createTestUserWithStatus(t, service, "octocat@example.com", store.UserStatusDisabled)
+
+	_, err := service.Authenticate(context.Background(), "github", "oauth-code", "")
+	if !errors.Is(err, ErrUserDisabled) {
+		t.Fatalf("Authenticate() error = %v, want %v", err, ErrUserDisabled)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.UserIdentity{}).Count(&count).Error; err != nil {
+		t.Fatalf("count identities: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("identity count = %d, want 0", count)
+	}
+}
+
+func TestAuthenticateRequiresLocalLoginWhenUserAlreadyBoundToDifferentGitHubIdentity(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	user := createTestUser(t, service, "octocat@example.com")
+	existing := &store.UserIdentity{
+		UserID:         user.ID,
+		Provider:       "github",
+		ProviderUserID: "99",
+		Email:          "octocat@example.com",
+		EmailVerified:  true,
+		Username:       "other-octocat",
+		DisplayName:    "Other Octocat",
+	}
+	if err := service.db.Create(existing).Error; err != nil {
+		t.Fatalf("service.db.Create(existing) error = %v", err)
+	}
+
+	_, err := service.Authenticate(context.Background(), "github", "oauth-code", "")
+	if !errors.Is(err, ErrLocalLoginRequired) {
+		t.Fatalf("Authenticate() error = %v, want %v", err, ErrLocalLoginRequired)
+	}
+
+	var count int64
+	if err := service.db.Model(&store.UserIdentity{}).Where("user_id = ?", user.ID).Count(&count).Error; err != nil {
+		t.Fatalf("count identities: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("identity count = %d, want 1", count)
 	}
 }
 
@@ -326,6 +446,52 @@ func TestAuthenticateRecordsAuditLogForCreatedUser(t *testing.T) {
 	}
 	if metadata["created"] != true {
 		t.Fatalf("metadata created = %v, want true", metadata["created"])
+	}
+}
+
+func TestAuthenticateRecordsAuditLogForAutoBoundUser(t *testing.T) {
+	provider := &fakeProvider{
+		slug:        "github",
+		displayName: "GitHub",
+		token:       &TokenSet{AccessToken: "token-123"},
+		profile: &ExternalProfile{
+			Provider:       "github",
+			ProviderUserID: "42",
+			Email:          "octocat@example.com",
+			EmailVerified:  true,
+			Username:       "octocat",
+			DisplayName:    "The Octocat",
+		},
+	}
+	service := newTestService(t, provider)
+	service.SetAuditRecorder(audit.NewService(service.db))
+	user := createTestUser(t, service, "octocat@example.com")
+
+	result, err := service.Authenticate(context.Background(), "github", "oauth-code", "https://app.example.com/callback")
+	if err != nil {
+		t.Fatalf("Authenticate() error = %v", err)
+	}
+	if result.User.ID != user.ID {
+		t.Fatalf("result.User.ID = %d, want %d", result.User.ID, user.ID)
+	}
+
+	var log store.AuditLog
+	if err := service.db.Where("action = ?", audit.ActionExternalIdentityChanged).First(&log).Error; err != nil {
+		t.Fatalf("load external identity audit log: %v", err)
+	}
+	if log.TargetType != audit.TargetTypeIdentity {
+		t.Fatalf("log.TargetType = %q, want %q", log.TargetType, audit.TargetTypeIdentity)
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(log.Metadata, &metadata); err != nil {
+		t.Fatalf("json.Unmarshal(metadata) error = %v", err)
+	}
+	if metadata["change"] != "auto_bound" {
+		t.Fatalf("metadata change = %v, want auto_bound", metadata["change"])
+	}
+	if metadata["provider"] != "github" {
+		t.Fatalf("metadata provider = %v, want github", metadata["provider"])
 	}
 }
 

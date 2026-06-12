@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { forgotPassword, login, register, resetPassword, sendEmailCode, verifyLogin2FA } from '../api/auth'
+import { forgotPassword, login, register, resetPassword, sendEmailCode, startGitHubLogin, verifyLogin2FA } from '../api/auth'
 import { API_BASE_URL } from '../api/client'
 import { captchaEnabledForAction, defaultPublicConfig, getPublicConfig, normalizePublicConfig } from '../api/publicConfig'
 import ThemeToggle from '../components/admin/ThemeToggle'
@@ -493,12 +493,34 @@ export default function LoginPage() {
     }
   }, [form.email, form.emailCode, form.password, navigate, returnTo])
 
-  const handleGitHubLogin = useCallback(() => {
+  const handleGitHubLogin = useCallback(async () => {
+    if (!authConfig) {
+      setError('认证运行配置不可用，请稍后重试')
+      return
+    }
     if (!githubProvider) {
       return
     }
-    window.location.assign(buildExternalProviderStartURL(githubProvider, returnTo))
-  }, [githubProvider, returnTo])
+    setLoading(true)
+    setError('')
+    setSuccess('')
+
+    try {
+      const captchaToken = await getCaptchaToken(authConfig, 'login')
+      const result = await startGitHubLogin({
+        return_to: returnTo || undefined,
+      }, { captchaToken })
+      const authorizeURL = result.authorize_url?.trim() ?? ''
+      if (!authorizeURL) {
+        throw new Error('GitHub 登录跳转地址无效')
+      }
+      window.location.assign(authorizeURL)
+      return
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'GitHub 登录启动失败')
+    }
+    setLoading(false)
+  }, [authConfig, githubProvider, returnTo])
 
   const switchTab = useCallback((nextTab: 'login' | 'register') => {
     setTab(nextTab)
