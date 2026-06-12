@@ -140,27 +140,27 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 
 func (h *Handler) start(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 	if h.browserExchangeUnavailable() {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external login exchange unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "external login exchange unavailable")
 		return
 	}
 	if c.Request.Method == stdhttp.MethodGet && h.captchaActionEnabled("login") {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "captcha token required"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "captcha token required")
 		return
 	}
 
 	input, err := h.startInput(c)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	state, err := h.newState()
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -168,14 +168,14 @@ func (h *Handler) start(c *gin.Context) {
 		RedirectURI: input.RedirectURI,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	if h.exchangeStore != nil {
 		returnTo, _ := h.normalizeExternalReturnTo(input.ReturnTo)
 		if err := h.exchangeStore.SaveOAuthState(c.Request.Context(), state, OAuthStatePayload{ReturnTo: returnTo}); err != nil {
-			c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+			httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 			return
 		}
 	}
@@ -209,34 +209,34 @@ func (h *Handler) startInput(c *gin.Context) (struct {
 
 func (h *Handler) callback(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 	if h.browserExchangeUnavailable() {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external login exchange unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "external login exchange unavailable")
 		return
 	}
 
 	code := c.Query("code")
 	if code == "" {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "missing code"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "missing code")
 		return
 	}
 
 	stateCookie, err := c.Cookie(githubOAuthStateCookieName)
 	if err != nil || strings.TrimSpace(stateCookie) == "" {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid state"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid state")
 		return
 	}
 	state := strings.TrimSpace(c.Query("state"))
 	if state == "" || state != strings.TrimSpace(stateCookie) {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid state"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid state")
 		return
 	}
 	defer clearGitHubOAuthStateCookie(c, h.browserCookieSecure)
 	statePayload, err := h.consumeOAuthState(c.Request.Context(), state)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	if statePayload.Flow == oauthStateFlowBind {
@@ -250,7 +250,7 @@ func (h *Handler) callback(c *gin.Context) {
 		if errors.Is(err, ErrLocalLoginRequired) {
 			status = stdhttp.StatusConflict
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -269,18 +269,18 @@ func (h *Handler) callback(c *gin.Context) {
 		ClientID: "github-oauth",
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	cookieValue, err := h.sessions.IssueOIDCAuthorizeCookieBySessionID(c.Request.Context(), pair.SessionID)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.sessions.OIDCAuthorizeCookieTTL().Seconds()), h.browserCookieSecure)
 
 	if h.exchangeStore == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external login exchange unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "external login exchange unavailable")
 		return
 	}
 	code, err = h.exchangeStore.Save(c.Request.Context(), ExchangePayload{
@@ -293,7 +293,7 @@ func (h *Handler) callback(c *gin.Context) {
 		ReturnTo: statePayload.ReturnTo,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	c.Redirect(stdhttp.StatusFound, h.frontendExchangeURL(code))
@@ -301,7 +301,7 @@ func (h *Handler) callback(c *gin.Context) {
 
 func (h *Handler) exchange(c *gin.Context) {
 	if h.exchangeStore == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external login exchange unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "external login exchange unavailable")
 		return
 	}
 
@@ -309,16 +309,16 @@ func (h *Handler) exchange(c *gin.Context) {
 		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	payload, err := h.exchangeStore.Consume(c.Request.Context(), request.Code)
 	if errors.Is(err, ErrExchangeCodeInvalid) {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, payload)
@@ -357,16 +357,16 @@ func (h *Handler) browserExchangeUnavailable() bool {
 
 func (h *Handler) startAccountBind(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 	if h.exchangeStore == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "external identity binding unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "external identity binding unavailable")
 		return
 	}
 	userID, ok := currentUserID(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 
@@ -375,13 +375,13 @@ func (h *Handler) startAccountBind(c *gin.Context) {
 		RedirectURI string `json:"redirect_uri"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil && c.Request.ContentLength != 0 {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	state, err := h.newState()
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	providerSlug := normalizedProviderSlug(c.Param("provider"))
@@ -389,7 +389,7 @@ func (h *Handler) startAccountBind(c *gin.Context) {
 		RedirectURI: request.RedirectURI,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	returnTo := "/account?tab=login"
@@ -401,7 +401,7 @@ func (h *Handler) startAccountBind(c *gin.Context) {
 		UserID:   userID,
 		ReturnTo: returnTo,
 	}); err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -414,12 +414,12 @@ func (h *Handler) startAccountBind(c *gin.Context) {
 
 func (h *Handler) unbindAccountProvider(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 	userID, ok := currentUserID(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 
@@ -431,7 +431,7 @@ func (h *Handler) unbindAccountProvider(c *gin.Context) {
 		} else if errors.Is(err, ErrOnlyLoginMethod) {
 			status = stdhttp.StatusConflict
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -440,7 +440,7 @@ func (h *Handler) unbindAccountProvider(c *gin.Context) {
 
 func (h *Handler) completeBindCallback(c *gin.Context, providerSlug, code, state string, payload *OAuthStatePayload) {
 	if payload.UserID <= 0 {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid bind state"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid bind state")
 		return
 	}
 	_, err := h.service.BindWithState(c.Request.Context(), payload.UserID, providerSlug, code, c.Query("redirect_uri"), state)
@@ -453,13 +453,13 @@ func (h *Handler) completeBindCallback(c *gin.Context, providerSlug, code, state
 
 func (h *Handler) bind(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 
 	userID, ok := currentUserID(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 
@@ -468,11 +468,11 @@ func (h *Handler) bind(c *gin.Context) {
 		RedirectURI string `json:"redirect_uri"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	if request.Code == "" {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "missing code"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "missing code")
 		return
 	}
 
@@ -482,7 +482,7 @@ func (h *Handler) bind(c *gin.Context) {
 		if errors.Is(err, ErrExternalIdentityInUse) || errors.Is(err, ErrProviderAlreadyBound) {
 			status = stdhttp.StatusConflict
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -491,13 +491,13 @@ func (h *Handler) bind(c *gin.Context) {
 
 func (h *Handler) unbind(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 
 	userID, ok := currentUserID(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 
@@ -508,7 +508,7 @@ func (h *Handler) unbind(c *gin.Context) {
 		} else if errors.Is(err, ErrOnlyLoginMethod) {
 			status = stdhttp.StatusConflict
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -517,19 +517,19 @@ func (h *Handler) unbind(c *gin.Context) {
 
 func (h *Handler) listIdentities(c *gin.Context) {
 	if h.service == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "identity provider service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
 		return
 	}
 
 	userID, ok := currentUserID(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 
 	identities, err := h.service.ListIdentities(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 

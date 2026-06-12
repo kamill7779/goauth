@@ -106,23 +106,23 @@ func (h *Handler) sendCode(c *gin.Context) {
 		Email   string `json:"email"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	purpose, err := normalizeEmailCodePurpose(request.Purpose)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	if purpose == EmailCodePurposeRegister && h.registrationMode != "open" {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "registration disabled"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "registration disabled")
 		return
 	}
 	if !h.allowJSONRateLimit(c, emailCodeRateLimitScope, rateLimitEmailCodeKey(c, purpose, request.Email), emailCodeRateLimitLimit, emailCodeRateLimitWindow) {
 		return
 	}
 	if _, err := h.service.SendEmailCode(c.Request.Context(), purpose, request.Email); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"sent": true})
@@ -130,7 +130,7 @@ func (h *Handler) sendCode(c *gin.Context) {
 
 func (h *Handler) register(c *gin.Context) {
 	if h.registrationMode != "open" {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "registration disabled"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "registration disabled")
 		return
 	}
 
@@ -143,7 +143,7 @@ func (h *Handler) register(c *gin.Context) {
 		EmailCode   string `json:"email_code"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -157,7 +157,7 @@ func (h *Handler) register(c *gin.Context) {
 		CodePurpose: EmailCodePurposeRegister,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -169,7 +169,7 @@ func (h *Handler) register(c *gin.Context) {
 
 func (h *Handler) login(c *gin.Context) {
 	if !h.localPasswordLoginEnabled {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "local password login disabled"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "local password login disabled")
 		return
 	}
 
@@ -179,7 +179,7 @@ func (h *Handler) login(c *gin.Context) {
 		Password   string `json:"password"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	rlKey := request.Identifier
@@ -197,7 +197,7 @@ func (h *Handler) login(c *gin.Context) {
 	})
 	if err != nil {
 		statusCode, message := loginErrorResponse(err)
-		c.JSON(statusCode, gin.H{"error": message})
+		httpserver.Error(c, statusCode, message)
 		return
 	}
 
@@ -239,14 +239,14 @@ func (h *Handler) forgotPassword(c *gin.Context) {
 		Email string `json:"email"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.allowJSONRateLimit(c, passwordResetRateLimitScope, rateLimitKey(c, request.Email), passwordResetRateLimitLimit, passwordResetRateLimitWindow) {
 		return
 	}
 	if err := h.service.ForgotPassword(c.Request.Context(), request.Email); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"sent": true})
@@ -259,7 +259,7 @@ func (h *Handler) resetPassword(c *gin.Context) {
 		EmailCode   string `json:"email_code"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.allowJSONRateLimit(c, passwordResetRateLimitScope, rateLimitKey(c, request.Email), passwordResetRateLimitLimit, passwordResetRateLimitWindow) {
@@ -270,7 +270,7 @@ func (h *Handler) resetPassword(c *gin.Context) {
 		NewPassword: request.NewPassword,
 		EmailCode:   request.EmailCode,
 	}); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"reset": true})

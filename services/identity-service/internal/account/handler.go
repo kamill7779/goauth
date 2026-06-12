@@ -100,13 +100,13 @@ func (h *Handler) me(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
 	isAdmin, err := h.sessionService.IsSystemUser(c.Request.Context(), userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -144,7 +144,7 @@ func (h *Handler) overview(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -153,25 +153,25 @@ func (h *Handler) overview(c *gin.Context) {
 		Where("user_id = ?", userID).
 		Order("created_at ASC, id ASC").
 		Find(&identities).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	activeSessions, err := h.activeSessionCount(c, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	authorizedApps, err := h.authorizedAppRows(c, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	recentActivity, err := h.activityItems(c, userID, 5)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -214,7 +214,7 @@ func (h *Handler) profile(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -238,11 +238,11 @@ func (h *Handler) updateProfile(c *gin.Context) {
 		Locale      *string `json:"locale"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if request.Email != nil && strings.TrimSpace(*request.Email) != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "email change is not yet supported"})
+		httpserver.Error(c, http.StatusBadRequest, "email change is not yet supported")
 		return
 	}
 
@@ -252,7 +252,7 @@ func (h *Handler) updateProfile(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -261,11 +261,11 @@ func (h *Handler) updateProfile(c *gin.Context) {
 	if request.Username != nil {
 		username, err := identity.NormalizeUsername(*request.Username)
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			httpserver.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
 		if username != currentUserRecord.Username {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "username cannot be changed"})
+			httpserver.Error(c, http.StatusBadRequest, "username cannot be changed")
 			return
 		}
 	}
@@ -292,7 +292,7 @@ func (h *Handler) updateProfile(c *gin.Context) {
 			Model(&store.User{}).
 			Where("id = ? AND deleted_at IS NULL", userID).
 			Updates(updates).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			httpserver.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		_ = audit.NewService(h.db).Record(c.Request.Context(), audit.Entry{
@@ -313,7 +313,7 @@ func (h *Handler) updateProfile(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -330,50 +330,50 @@ func (h *Handler) uploadAvatar(c *gin.Context) {
 
 	header, err := c.FormFile("avatar")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "avatar file is required"})
+		httpserver.Error(c, http.StatusBadRequest, "avatar file is required")
 		return
 	}
 	if header.Size > maxAvatarUploadBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "avatar file is too large"})
+		httpserver.Error(c, http.StatusRequestEntityTooLarge, "avatar file is too large")
 		return
 	}
 
 	file, err := header.Open()
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	defer file.Close()
 
 	payload, err := io.ReadAll(io.LimitReader(file, maxAvatarUploadBytes+1))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if int64(len(payload)) > maxAvatarUploadBytes {
-		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "avatar file is too large"})
+		httpserver.Error(c, http.StatusRequestEntityTooLarge, "avatar file is too large")
 		return
 	}
 
 	ext, ok := avatarFileExtension(http.DetectContentType(payload))
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "avatar must be png, jpeg, gif, or webp"})
+		httpserver.Error(c, http.StatusBadRequest, "avatar must be png, jpeg, gif, or webp")
 		return
 	}
 
 	if err := os.MkdirAll(h.avatarDir, 0o755); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	filename, err := avatarFilename(userID, ext)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	path := filepath.Join(h.avatarDir, filename)
 	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -387,7 +387,7 @@ func (h *Handler) uploadAvatar(c *gin.Context) {
 			"updated_at": now,
 		}).Error; err != nil {
 		_ = os.Remove(path)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -419,7 +419,7 @@ func (h *Handler) loginMethods(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -428,7 +428,7 @@ func (h *Handler) loginMethods(c *gin.Context) {
 		Where("user_id = ?", userID).
 		Order("created_at ASC, id ASC").
 		Find(&identities).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -480,11 +480,11 @@ func (h *Handler) changePassword(c *gin.Context) {
 		NewPassword     string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	if request.CurrentPassword == "" || request.NewPassword == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "current_password and new_password are required"})
+		httpserver.Error(c, http.StatusBadRequest, "current_password and new_password are required")
 		return
 	}
 
@@ -494,19 +494,19 @@ func (h *Handler) changePassword(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	if !accountHasLocalPassword(*user) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "local password is not set"})
+		httpserver.Error(c, http.StatusBadRequest, "local password is not set")
 		return
 	}
 	if err := auth.CheckPassword(user.PasswordHash, request.CurrentPassword); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "current password is incorrect"})
+		httpserver.Error(c, http.StatusUnauthorized, "current password is incorrect")
 		return
 	}
 	if err := h.pwPolicy.Validate(request.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -518,19 +518,19 @@ func (h *Handler) changePassword(c *gin.Context) {
 			Order("created_at DESC").
 			Limit(h.pwPolicy.HistoryCount).
 			Pluck("password_hash", &historyHashes).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			httpserver.Error(c, http.StatusInternalServerError, err.Error())
 			return
 		}
 		historyHashes = append([]string{user.PasswordHash}, historyHashes...)
 		if err := h.pwPolicy.CheckHistory(request.NewPassword, historyHashes); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			httpserver.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
 
 	newHash, err := auth.HashPassword(request.NewPassword)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "hash password: " + err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, "hash password: " + err.Error())
 		return
 	}
 
@@ -572,7 +572,7 @@ func (h *Handler) changePassword(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -591,7 +591,7 @@ func (h *Handler) twoFactorStatus(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -606,7 +606,7 @@ func (h *Handler) twoFactorStatus(c *gin.Context) {
 			})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -638,23 +638,23 @@ func (h *Handler) startTwoFactorSetup(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	existing, err := h.loadTwoFactorRecord(c, userID)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err == nil && existing.Enabled {
-		c.JSON(http.StatusConflict, gin.H{"error": "two-factor authentication is already enabled"})
+		httpserver.Error(c, http.StatusConflict, "two-factor authentication is already enabled")
 		return
 	}
 
 	setupMissing := errors.Is(err, gorm.ErrRecordNotFound)
 	secret, err := generateTOTPSecret()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate two-factor secret: " + err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, "generate two-factor secret: " + err.Error())
 		return
 	}
 	now := time.Now().UTC()
@@ -683,7 +683,7 @@ func (h *Handler) startTwoFactorSetup(c *gin.Context) {
 				"updated_at":           now,
 			}).Error
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -705,7 +705,7 @@ func (h *Handler) verifyTwoFactorSetup(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	code, ok := twoFactorCodeFromRequest(c)
@@ -719,30 +719,30 @@ func (h *Handler) verifyTwoFactorSetup(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": "two-factor setup has not been started"})
+		httpserver.Error(c, status, "two-factor setup has not been started")
 		return
 	}
 	if record.Enabled {
-		c.JSON(http.StatusConflict, gin.H{"error": "two-factor authentication is already enabled"})
+		httpserver.Error(c, http.StatusConflict, "two-factor authentication is already enabled")
 		return
 	}
 	if strings.TrimSpace(record.Secret) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "two-factor setup has not been started"})
+		httpserver.Error(c, http.StatusBadRequest, "two-factor setup has not been started")
 		return
 	}
 	if !verifyTOTPCode(record.Secret, code, time.Now().UTC()) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid two-factor code"})
+		httpserver.Error(c, http.StatusUnauthorized, "invalid two-factor code")
 		return
 	}
 
 	recoveryCodes, recoveryCodeHashes, err := generateRecoveryCodes(twoFactorRecoveryCodeSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate recovery codes: " + err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, "generate recovery codes: " + err.Error())
 		return
 	}
 	recoveryHashPayload, err := encodingjson.Marshal(recoveryCodeHashes)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode recovery codes: " + err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, "encode recovery codes: " + err.Error())
 		return
 	}
 
@@ -772,7 +772,7 @@ func (h *Handler) verifyTwoFactorSetup(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -792,7 +792,7 @@ func (h *Handler) disableTwoFactor(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	code, ok := twoFactorCodeFromRequest(c)
@@ -804,7 +804,7 @@ func (h *Handler) disableTwoFactor(c *gin.Context) {
 		return
 	}
 	if !verifyTOTPCode(record.Secret, code, time.Now().UTC()) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid two-factor code"})
+		httpserver.Error(c, http.StatusUnauthorized, "invalid two-factor code")
 		return
 	}
 
@@ -835,7 +835,7 @@ func (h *Handler) disableTwoFactor(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -852,7 +852,7 @@ func (h *Handler) regenerateTwoFactorRecoveryCodes(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusUnauthorized
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	code, ok := twoFactorCodeFromRequest(c)
@@ -864,18 +864,18 @@ func (h *Handler) regenerateTwoFactorRecoveryCodes(c *gin.Context) {
 		return
 	}
 	if !verifyTOTPCode(record.Secret, code, time.Now().UTC()) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid two-factor code"})
+		httpserver.Error(c, http.StatusUnauthorized, "invalid two-factor code")
 		return
 	}
 
 	recoveryCodes, recoveryCodeHashes, err := generateRecoveryCodes(twoFactorRecoveryCodeSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "generate recovery codes: " + err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, "generate recovery codes: " + err.Error())
 		return
 	}
 	recoveryHashPayload, err := encodingjson.Marshal(recoveryCodeHashes)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "encode recovery codes: " + err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, "encode recovery codes: " + err.Error())
 		return
 	}
 
@@ -903,7 +903,7 @@ func (h *Handler) regenerateTwoFactorRecoveryCodes(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -918,7 +918,7 @@ func (h *Handler) authorizedApps(c *gin.Context) {
 
 	rows, err := h.authorizedAppRows(c, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -970,7 +970,7 @@ func (h *Handler) activity(c *gin.Context) {
 	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
 		value, err := strconv.Atoi(raw)
 		if err != nil || value < 1 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a positive integer"})
+			httpserver.Error(c, http.StatusBadRequest, "limit must be a positive integer")
 			return
 		}
 		if value > 100 {
@@ -981,7 +981,7 @@ func (h *Handler) activity(c *gin.Context) {
 
 	items, err := h.activityItems(c, userID, limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -998,7 +998,7 @@ func (h *Handler) revokeAuthorizedApp(c *gin.Context) {
 
 	clientID := strings.TrimSpace(c.Param("client_id"))
 	if clientID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "client_id is required"})
+		httpserver.Error(c, http.StatusBadRequest, "client_id is required")
 		return
 	}
 
@@ -1016,7 +1016,7 @@ func (h *Handler) revokeAuthorizedApp(c *gin.Context) {
 		}
 		return nil
 	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -1050,13 +1050,13 @@ func (h *Handler) listSessions(c *gin.Context) {
 		Order("created_at DESC, id DESC").
 		Limit(100).
 		Find(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	tokens, err := latestRefreshTokensBySession(c, h.db, rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -1089,11 +1089,11 @@ func (h *Handler) revokeSession(c *gin.Context) {
 	}
 	sessionID := strings.TrimSpace(c.Param("session_id"))
 	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		httpserver.Error(c, http.StatusBadRequest, "session_id is required")
 		return
 	}
 	if h.sessionService == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "session service not configured"})
+		httpserver.Error(c, http.StatusInternalServerError, "session service not configured")
 		return
 	}
 
@@ -1105,12 +1105,12 @@ func (h *Handler) revokeSession(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
 	if err := h.sessionService.Logout(c.Request.Context(), sessionID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
@@ -1122,11 +1122,11 @@ func (h *Handler) logoutAll(c *gin.Context) {
 		return
 	}
 	if h.sessionService == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "session service not configured"})
+		httpserver.Error(c, http.StatusInternalServerError, "session service not configured")
 		return
 	}
 	if err := h.sessionService.LogoutAll(c.Request.Context(), userID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
@@ -1169,12 +1169,12 @@ func avatarFilename(userID int64, ext string) (string, error) {
 func currentUser(c *gin.Context) (int64, string, int64, bool) {
 	claims, ok := session.ClaimsFromContext(c)
 	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, http.StatusUnauthorized, "missing auth claims")
 		return 0, "", 0, false
 	}
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+		httpserver.Error(c, http.StatusUnauthorized, "invalid token")
 		return 0, "", 0, false
 	}
 	return userID, claims.SessionID, claims.TenantID, true
@@ -1268,11 +1268,11 @@ func (h *Handler) requireEnabledTwoFactor(c *gin.Context, userID int64) (*store.
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": "two-factor authentication is not enabled"})
+		httpserver.Error(c, status, "two-factor authentication is not enabled")
 		return nil, false
 	}
 	if !record.Enabled || strings.TrimSpace(record.Secret) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "two-factor authentication is not enabled"})
+		httpserver.Error(c, http.StatusBadRequest, "two-factor authentication is not enabled")
 		return nil, false
 	}
 	return record, true
@@ -1283,12 +1283,12 @@ func twoFactorCodeFromRequest(c *gin.Context) (string, bool) {
 		Code string `json:"code"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return "", false
 	}
 	code, ok := normalizeTOTPCode(request.Code)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "code must be a 6-digit TOTP code"})
+		httpserver.Error(c, http.StatusBadRequest, "code must be a 6-digit TOTP code")
 		return "", false
 	}
 	return code, true

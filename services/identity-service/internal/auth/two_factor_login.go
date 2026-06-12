@@ -97,7 +97,7 @@ func (h *Handler) createLoginTwoFactorChallenge(ctx context.Context, userID int6
 
 func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 	if h.session == nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "session service unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "session service unavailable")
 		return
 	}
 
@@ -107,22 +107,22 @@ func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 		RecoveryCode string `json:"recovery_code"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	challengeID := strings.TrimSpace(request.ChallengeID)
 	if challengeID == "" {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "challenge_id is required"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "challenge_id is required")
 		return
 	}
 	lockToken, locked, err := h.acquireLoginTwoFactorChallengeLock(c.Request.Context(), challengeID)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	if !locked {
-		c.JSON(stdhttp.StatusConflict, gin.H{"error": errLoginTwoFactorChallengeBusy.Error()})
+		httpserver.Error(c, stdhttp.StatusConflict, errLoginTwoFactorChallengeBusy.Error())
 		return
 	}
 	defer h.releaseLoginTwoFactorChallengeLock(c.Request.Context(), challengeID, lockToken)
@@ -133,7 +133,7 @@ func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 		if errors.Is(err, errLoginTwoFactorChallengeInvalid) {
 			status = stdhttp.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -144,7 +144,7 @@ func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 		if errors.Is(err, errLoginTwoFactorChallengeInvalid) || errors.Is(err, ErrUserDisabled) {
 			status = stdhttp.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -154,22 +154,22 @@ func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 		if errors.Is(err, errLoginTwoFactorCodeRequired) || errors.Is(err, errLoginTwoFactorCodeMalformed) {
 			status = stdhttp.StatusBadRequest
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	if !verified {
 		_ = h.recordFailedLoginTwoFactorChallenge(c.Request.Context(), challengeID, challenge)
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": errLoginTwoFactorCodeInvalid.Error()})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, errLoginTwoFactorCodeInvalid.Error())
 		return
 	}
 
 	if err := h.deleteLoginTwoFactorChallenge(c.Request.Context(), challengeID); err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	pair, cookieValue, err := h.issueLoginTokens(c.Request.Context(), user)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	h.session.SetOIDCAuthorizeCookie(c, cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))

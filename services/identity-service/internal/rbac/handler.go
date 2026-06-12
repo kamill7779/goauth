@@ -46,13 +46,13 @@ func (h *Handler) check(c *gin.Context) {
 		Permission string `json:"permission"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	allowed, err := h.service.Can(c.Request.Context(), request.UserID, request.TenantID, request.Permission)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"allowed": allowed})
@@ -65,7 +65,7 @@ func (h *Handler) checkBatch(c *gin.Context) {
 		Permissions []string `json:"permissions"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -73,7 +73,7 @@ func (h *Handler) checkBatch(c *gin.Context) {
 	for _, permission := range request.Permissions {
 		allowed, err := h.service.Can(c.Request.Context(), request.UserID, request.TenantID, permission)
 		if err != nil {
-			c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+			httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 			return
 		}
 		results[permission] = allowed
@@ -84,33 +84,33 @@ func (h *Handler) checkBatch(c *gin.Context) {
 func (h *Handler) myPermissions(c *gin.Context) {
 	claims, ok := session.ClaimsFromContext(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "invalid token")
 		return
 	}
 
 	tenantID, err := strconv.ParseInt(c.Param("tenant_id"), 10, 64)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid tenant_id"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 	if claims.TenantID == 0 {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "forbidden")
 		return
 	}
 	if claims.TenantID != tenantID {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "forbidden")
 		return
 	}
 
 	permissions, err := h.service.ListPermissions(c.Request.Context(), userID, tenantID)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"permissions": permissions})

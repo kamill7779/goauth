@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/ratelimit"
 )
 
@@ -34,7 +35,7 @@ func (h *Handler) allowJSONRateLimit(c *gin.Context, scope, key string, limit in
 
 	result, err := h.rateLimiter.Allow(c.Request.Context(), scope, key, limit, window)
 	if err != nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "rate_limit_unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "rate_limit_unavailable")
 		return false
 	}
 	if result.Allowed {
@@ -42,7 +43,7 @@ func (h *Handler) allowJSONRateLimit(c *gin.Context, scope, key string, limit in
 	}
 
 	setRetryAfterHeader(c, result.RetryAfter)
-	c.JSON(stdhttp.StatusTooManyRequests, gin.H{"error": "rate_limited"})
+	httpserver.Error(c, stdhttp.StatusTooManyRequests, "rate_limited")
 	return false
 }
 

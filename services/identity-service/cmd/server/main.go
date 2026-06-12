@@ -112,14 +112,6 @@ func requireRedis(cfg config.Config) (*redis.Client, error) {
 	return client, nil
 }
 
-func loadSigningKey(cfg config.Config) (*rsa.PrivateKey, error) {
-	keyring, err := loadSigningKeyring(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return keyring.ActivePrivateKey(), nil
-}
-
 func loadSigningKeyring(cfg config.Config) (*jwtkey.Keyring, error) {
 	if strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
 		log.Printf("JWT signing key path is empty, generating ephemeral RSA key for local development")

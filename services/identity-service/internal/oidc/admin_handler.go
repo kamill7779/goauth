@@ -42,7 +42,7 @@ func (h *AdminHandler) RegisterRoutes(router *gin.Engine) {
 func (h *AdminHandler) listClients(c *gin.Context) {
 	clients, err := h.service.ListClients(c.Request.Context())
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -50,7 +50,7 @@ func (h *AdminHandler) listClients(c *gin.Context) {
 	for _, client := range clients {
 		payload, err := oauthClientPayload(client)
 		if err != nil {
-			c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "invalid oauth client data"})
+			httpserver.Error(c, stdhttp.StatusInternalServerError, "invalid oauth client data")
 			return
 		}
 		items = append(items, payload)
@@ -61,19 +61,19 @@ func (h *AdminHandler) listClients(c *gin.Context) {
 func (h *AdminHandler) createClient(c *gin.Context) {
 	var request CreateClientInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	client, err := h.service.CreateClient(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	payload, err := oauthClientPayload(*client)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "invalid oauth client data"})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, "invalid oauth client data")
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusCreated, payload)
@@ -84,7 +84,7 @@ func (h *AdminHandler) updateClientStatus(c *gin.Context) {
 		Status string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -94,13 +94,13 @@ func (h *AdminHandler) updateClientStatus(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = stdhttp.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
 	payload, err := oauthClientPayload(*client)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "invalid oauth client data"})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, "invalid oauth client data")
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, payload)
@@ -113,13 +113,13 @@ func (h *AdminHandler) rotateClientSecret(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = stdhttp.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
 	payload, err := oauthClientPayload(*client)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "invalid oauth client data"})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, "invalid oauth client data")
 		return
 	}
 	payload["client_secret"] = secret

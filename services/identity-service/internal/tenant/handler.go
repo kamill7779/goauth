@@ -62,7 +62,7 @@ func (h *Handler) listTenants(c *gin.Context) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -72,13 +72,13 @@ func (h *Handler) listTenants(c *gin.Context) {
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&tenants).Error; err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	items, err := h.tenantPayloads(c, tenants)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{
@@ -92,18 +92,18 @@ func (h *Handler) listTenants(c *gin.Context) {
 func (h *Handler) createTenant(c *gin.Context) {
 	var request CreateTenantInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	record, err := h.service.CreateTenant(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	item, err := h.singleTenantPayload(c, *record)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusCreated, item)
@@ -117,18 +117,18 @@ func (h *Handler) updateTenant(c *gin.Context) {
 
 	var request UpdateTenantInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	record, err := h.service.UpdateTenant(c.Request.Context(), id, request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	item, err := h.singleTenantPayload(c, *record)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, item)
@@ -145,7 +145,7 @@ func (h *Handler) addMember(c *gin.Context) {
 		Status string `json:"status"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -155,7 +155,7 @@ func (h *Handler) addMember(c *gin.Context) {
 		Status:   request.Status,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusCreated, member)
@@ -172,7 +172,7 @@ func (h *Handler) removeMember(c *gin.Context) {
 	}
 
 	if err := h.service.RemoveMember(c.Request.Context(), tenantID, userID); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"removed": true})
@@ -183,7 +183,7 @@ func (h *Handler) listRoles(c *gin.Context) {
 	if raw := c.Query("tenant_id"); raw != "" {
 		parsed, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid tenant_id"})
+			httpserver.Error(c, stdhttp.StatusBadRequest, "invalid tenant_id")
 			return
 		}
 		tenantID = parsed
@@ -200,7 +200,7 @@ func (h *Handler) listRoles(c *gin.Context) {
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -210,12 +210,12 @@ func (h *Handler) listRoles(c *gin.Context) {
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&roles).Error; err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	items, err := h.rolePayloads(c, roles)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{
@@ -229,18 +229,18 @@ func (h *Handler) listRoles(c *gin.Context) {
 func (h *Handler) createRole(c *gin.Context) {
 	var request CreateRoleInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	role, err := h.service.CreateRole(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	item, err := h.singleRolePayload(c, *role)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusCreated, item)
@@ -254,18 +254,18 @@ func (h *Handler) updateRole(c *gin.Context) {
 
 	var request UpdateRoleInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	role, err := h.service.UpdateRole(c.Request.Context(), roleID, request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	item, err := h.singleRolePayload(c, *role)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, item)
@@ -278,7 +278,7 @@ func (h *Handler) deleteRole(c *gin.Context) {
 	}
 
 	if err := h.service.DeleteRole(c.Request.Context(), roleID); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"deleted": true})
@@ -294,12 +294,12 @@ func (h *Handler) grantPermissions(c *gin.Context) {
 		PermissionIDs []int64 `json:"permission_ids"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.service.GrantPermissions(c.Request.Context(), roleID, request.PermissionIDs); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
@@ -316,7 +316,7 @@ func (h *Handler) revokePermission(c *gin.Context) {
 	}
 
 	if err := h.service.RevokePermission(c.Request.Context(), roleID, permissionID); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
@@ -332,12 +332,12 @@ func (h *Handler) assignRoles(c *gin.Context) {
 		RoleIDs []int64 `json:"role_ids"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.service.AssignRoles(c.Request.Context(), memberID, request.RoleIDs); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
@@ -354,7 +354,7 @@ func (h *Handler) removeRole(c *gin.Context) {
 	}
 
 	if err := h.service.RemoveRole(c.Request.Context(), memberID, roleID); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
@@ -363,7 +363,7 @@ func (h *Handler) removeRole(c *gin.Context) {
 func parseInt64Param(c *gin.Context, name string) (int64, error) {
 	value, err := strconv.ParseInt(c.Param(name), 10, 64)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid " + name})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid " + name)
 		return 0, err
 	}
 	return value, nil

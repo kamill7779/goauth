@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/auth"
 	"goauth/services/identity-service/internal/store"
@@ -385,7 +386,7 @@ func decodeStringSlice(value datatypes.JSON) ([]string, error) {
 }
 
 func oauthError(c *gin.Context, status int, code string) {
-	c.JSON(status, gin.H{"error": code})
+	httpserver.Error(c, status, code)
 }
 
 func noContentOrJSON(c *gin.Context) {

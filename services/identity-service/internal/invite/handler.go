@@ -60,7 +60,7 @@ func (h *Handler) createInvite(c *gin.Context) {
 		RoleID      int64  `json:"role_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -78,7 +78,7 @@ func (h *Handler) createInvite(c *gin.Context) {
 		InviterID:   inviterID,
 	})
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, http.StatusCreated, invitePayload(inv))
@@ -95,7 +95,7 @@ func (h *Handler) listInvites(c *gin.Context) {
 
 	invites, total, err := h.service.List(c.Request.Context(), tenantID, page, pageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -114,7 +114,7 @@ func (h *Handler) listInvites(c *gin.Context) {
 func (h *Handler) revokeInvite(c *gin.Context) {
 	inviteID, err := strconv.ParseInt(c.Param("invite_id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid invite_id"})
+		httpserver.Error(c, http.StatusBadRequest, "invalid invite_id")
 		return
 	}
 
@@ -123,7 +123,7 @@ func (h *Handler) revokeInvite(c *gin.Context) {
 		if errors.Is(err, ErrInviteNotFound) {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
@@ -134,7 +134,7 @@ func (h *Handler) redeemInvite(c *gin.Context) {
 		Token string `json:"token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -145,7 +145,7 @@ func (h *Handler) redeemInvite(c *gin.Context) {
 		}
 	}
 	if userID == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		httpserver.Error(c, http.StatusUnauthorized, "authentication required")
 		return
 	}
 
@@ -162,7 +162,7 @@ func (h *Handler) redeemInvite(c *gin.Context) {
 		case errors.Is(err, ErrInvalidToken):
 			status = http.StatusUnprocessableEntity
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	httpserver.Success(c, http.StatusOK, gin.H{"redeemed": true})
@@ -171,7 +171,7 @@ func (h *Handler) redeemInvite(c *gin.Context) {
 func parseTenantID(c *gin.Context) (int64, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		httpserver.Error(c, http.StatusBadRequest, "invalid tenant id")
 		return 0, err
 	}
 	return id, nil

@@ -58,33 +58,33 @@ func (h *Handler) accessOverview(c *gin.Context) {
 	ctx := c.Request.Context()
 	var tenants []store.Tenant
 	if err := h.db.WithContext(ctx).Order("id ASC").Find(&tenants).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	var members []store.TenantMember
 	if err := h.db.WithContext(ctx).Where("status = ?", store.MemberStatusActive).Find(&members).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	var roles []store.Role
 	if err := h.db.WithContext(ctx).Order("id ASC").Find(&roles).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	var rolePermissions []store.RolePermission
 	if err := h.db.WithContext(ctx).Find(&rolePermissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	var clients []store.OAuthClient
 	if err := h.db.WithContext(ctx).Order("id ASC").Find(&clients).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	var permissions int64
 	if err := h.db.WithContext(ctx).Model(&store.Permission{}).Count(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 

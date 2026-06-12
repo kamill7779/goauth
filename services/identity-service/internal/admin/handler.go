@@ -71,33 +71,33 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 func (h *Handler) dashboard(c *gin.Context) {
 	var totalUsers, activeSessions, totalTenants, totalOAuthClients int64
 	if err := h.db.WithContext(c.Request.Context()).Model(&store.User{}).Count(&totalUsers).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := h.db.WithContext(c.Request.Context()).Model(&store.RefreshToken{}).
 		Distinct("session_id").
 		Where("revoked_at IS NULL AND expires_at > ?", time.Now()).
 		Count(&activeSessions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := h.db.WithContext(c.Request.Context()).Model(&store.Tenant{}).Where("deleted_at IS NULL").Count(&totalTenants).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if err := h.db.WithContext(c.Request.Context()).Model(&store.OAuthClient{}).Count(&totalOAuthClients).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	recentLogins, err := h.recentLogins(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	permissionChanges, err := h.permissionChanges(c)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -121,7 +121,7 @@ func (h *Handler) dashboard(c *gin.Context) {
 func (h *Handler) listPermissions(c *gin.Context) {
 	var permissions []store.Permission
 	if err := h.db.WithContext(c.Request.Context()).Order("resource ASC, action ASC, id ASC").Find(&permissions).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, http.StatusOK, gin.H{"permissions": permissions})
@@ -130,7 +130,7 @@ func (h *Handler) listPermissions(c *gin.Context) {
 func (h *Handler) createPermission(c *gin.Context) {
 	var request permissionRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	record := store.Permission{
@@ -143,11 +143,11 @@ func (h *Handler) createPermission(c *gin.Context) {
 		record.Code = record.Resource + ":" + record.Action
 	}
 	if record.Resource == "" || record.Action == "" || record.Code == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "resource, action and code are required"})
+		httpserver.Error(c, http.StatusBadRequest, "resource, action and code are required")
 		return
 	}
 	if err := h.db.WithContext(c.Request.Context()).Create(&record).Error; err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	_ = h.recordAudit(c, "permission_created", "permission", strconv.FormatInt(record.ID, 10), map[string]any{
@@ -163,7 +163,7 @@ func (h *Handler) updatePermission(c *gin.Context) {
 	}
 	var request permissionPatchRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	updates := map[string]any{}
@@ -187,7 +187,7 @@ func (h *Handler) updatePermission(c *gin.Context) {
 			}
 			return bumpAllPermissionVersions(tx)
 		}); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			httpserver.Error(c, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -198,7 +198,7 @@ func (h *Handler) updatePermission(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 	if len(updates) > 0 {
@@ -221,7 +221,7 @@ func (h *Handler) deletePermission(c *gin.Context) {
 		}
 		return bumpAllPermissionVersions(tx)
 	}); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	_ = h.recordAudit(c, "permission_deleted", "permission", strconv.FormatInt(id, 10), nil)
@@ -238,7 +238,7 @@ func (h *Handler) listSessions(c *gin.Context) {
 	}
 	var total int64
 	if err := countQuery.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -253,13 +253,13 @@ func (h *Handler) listSessions(c *gin.Context) {
 		Offset((page - 1) * pageSize).
 		Limit(pageSize).
 		Find(&rows).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	tokens, err := h.latestRefreshTokensBySession(c, rows)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -293,11 +293,11 @@ func (h *Handler) listSessions(c *gin.Context) {
 func (h *Handler) revokeSession(c *gin.Context) {
 	sessionID := strings.TrimSpace(c.Param("session_id"))
 	if sessionID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "session_id is required"})
+		httpserver.Error(c, http.StatusBadRequest, "session_id is required")
 		return
 	}
 	if h.sessionService == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "session service not configured"})
+		httpserver.Error(c, http.StatusInternalServerError, "session service not configured")
 		return
 	}
 
@@ -307,12 +307,12 @@ func (h *Handler) revokeSession(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
 	if err := h.sessionService.Logout(c.Request.Context(), sessionID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	_ = h.recordAudit(c, "admin_session_revoked", audit.TargetTypeSession, sessionID, map[string]any{
@@ -334,7 +334,7 @@ func (h *Handler) listUserSessions(c *gin.Context) {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusNotFound
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -343,7 +343,7 @@ func (h *Handler) listUserSessions(c *gin.Context) {
 		Where("user_id = ? AND revoked_at IS NULL AND expires_at > ?", userID, time.Now()).
 		Order("created_at DESC").
 		Find(&tokens).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -373,11 +373,11 @@ func (h *Handler) logoutUserSessions(c *gin.Context) {
 		return
 	}
 	if h.sessionService == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "session service not configured"})
+		httpserver.Error(c, http.StatusInternalServerError, "session service not configured")
 		return
 	}
 	if err := h.sessionService.LogoutAll(c.Request.Context(), userID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	_ = h.recordAudit(c, "admin_user_logout_all", audit.TargetTypeUser, strconv.FormatInt(userID, 10), nil)
@@ -393,19 +393,19 @@ func (h *Handler) listAuditLogs(c *gin.Context) {
 
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	var logs []store.AuditLog
 	if err := query.Order("id DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	actorEmails, err := h.actorEmails(c, logs)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -463,7 +463,7 @@ func (h *Handler) sessionListQuery(c *gin.Context, now time.Time) (*gorm.DB, err
 	if value := strings.TrimSpace(c.Query("user_id")); value != "" {
 		userID, err := strconv.ParseInt(value, 10, 64)
 		if err != nil || userID <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+			httpserver.Error(c, http.StatusBadRequest, "invalid user_id")
 			return nil, errors.New("invalid user_id")
 		}
 		query = query.Where("login_sessions.user_id = ?", userID)
@@ -492,7 +492,7 @@ func (h *Handler) sessionListQuery(c *gin.Context, now time.Time) (*gorm.DB, err
 	case "expired":
 		query = query.Where("login_sessions.revoked_at IS NULL AND NOT "+activeRefreshTokenExists, now)
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+		httpserver.Error(c, http.StatusBadRequest, "invalid status")
 		return nil, errors.New("invalid status")
 	}
 
@@ -567,7 +567,7 @@ func sessionRowStatus(row adminSessionRow, token store.RefreshToken, hasToken, a
 func parseInt64Param(c *gin.Context, name string) (int64, error) {
 	value, err := strconv.ParseInt(c.Param(name), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid " + name})
+		httpserver.Error(c, http.StatusBadRequest, "invalid " + name)
 		return 0, err
 	}
 	return value, nil

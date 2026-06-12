@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/ratelimit"
 )
 
@@ -27,7 +28,7 @@ func (h *Handler) allowRefreshRateLimit(c *gin.Context) bool {
 
 	result, err := h.rateLimiter.Allow(c.Request.Context(), refreshRateLimitScope, refreshRateLimitKey(c), refreshRateLimitLimit, refreshRateLimitWindow)
 	if err != nil {
-		c.JSON(stdhttp.StatusServiceUnavailable, gin.H{"error": "rate_limit_unavailable"})
+		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "rate_limit_unavailable")
 		return false
 	}
 	if result.Allowed {
@@ -39,7 +40,7 @@ func (h *Handler) allowRefreshRateLimit(c *gin.Context) bool {
 		seconds = 1
 	}
 	c.Header("Retry-After", strconv.Itoa(seconds))
-	c.JSON(stdhttp.StatusTooManyRequests, gin.H{"error": "rate_limited"})
+	httpserver.Error(c, stdhttp.StatusTooManyRequests, "rate_limited")
 	return false
 }
 

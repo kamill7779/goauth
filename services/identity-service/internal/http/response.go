@@ -15,3 +15,7 @@ func Success(c *gin.Context, status int, data any) {
 		Data:    data,
 	})
 }
+
+func Error(c *gin.Context, status int, message string) {
+	c.JSON(status, gin.H{"error": message})
+}

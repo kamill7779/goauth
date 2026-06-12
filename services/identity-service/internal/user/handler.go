@@ -80,13 +80,13 @@ func (h *Handler) listUsers(c *gin.Context) {
 		PageSize: pageSize,
 	})
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	items, err := h.userListPayloads(c, result.Users)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{
@@ -100,13 +100,13 @@ func (h *Handler) listUsers(c *gin.Context) {
 func (h *Handler) createUser(c *gin.Context) {
 	var request CreateUserInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	user, err := h.service.CreateUser(c.Request.Context(), request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -121,13 +121,13 @@ func (h *Handler) updateUser(c *gin.Context) {
 
 	var request UpdateUserInput
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	user, err := h.service.UpdateUser(c.Request.Context(), id, request)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -145,7 +145,7 @@ func (h *Handler) disableUser(c *gin.Context) {
 		if err == ErrProtectedUser {
 			status = stdhttp.StatusForbidden
 		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		httpserver.Error(c, status, err.Error())
 		return
 	}
 
@@ -159,7 +159,7 @@ func (h *Handler) enableUser(c *gin.Context) {
 	}
 
 	if err := h.service.EnableUser(c.Request.Context(), id); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -176,12 +176,12 @@ func (h *Handler) resetPassword(c *gin.Context) {
 		NewPassword string `json:"new_password"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	if err := h.service.ResetPassword(c.Request.Context(), id, request.NewPassword); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -198,7 +198,7 @@ func (h *Handler) unlockUser(c *gin.Context) {
 		return
 	}
 	if err := h.lockoutManager.Unlock(c.Request.Context(), id); err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"unlocked": true})
@@ -253,7 +253,7 @@ func (h *Handler) bulkLogoutUsers(c *gin.Context) {
 		return
 	}
 	if h.sessionService == nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "session service not configured"})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, "session service not configured")
 		return
 	}
 	for _, userID := range userIDs {
@@ -271,7 +271,7 @@ func (h *Handler) bulkAddUsersToTenant(c *gin.Context) {
 		return
 	}
 	if h.tenantService == nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "tenant service not configured"})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, "tenant service not configured")
 		return
 	}
 	status := strings.TrimSpace(request.Status)
@@ -297,7 +297,7 @@ func (h *Handler) bulkRemoveUsersFromTenant(c *gin.Context) {
 		return
 	}
 	if h.tenantService == nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": "tenant service not configured"})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, "tenant service not configured")
 		return
 	}
 	for _, userID := range request.UserIDs {
@@ -312,7 +312,7 @@ func (h *Handler) bulkRemoveUsersFromTenant(c *gin.Context) {
 func parseUserID(c *gin.Context) (int64, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid id"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid id")
 		return 0, err
 	}
 	return id, nil
@@ -498,7 +498,7 @@ func (h *Handler) userLastLogins(c *gin.Context, userIDs []int64) (map[int64]str
 func (h *Handler) bulkUserIDs(c *gin.Context) ([]int64, bool) {
 	var request bulkUserRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return nil, false
 	}
 	userIDs, ok := normalizeUserIDs(c, request.UserIDs)
@@ -508,11 +508,11 @@ func (h *Handler) bulkUserIDs(c *gin.Context) ([]int64, bool) {
 func (h *Handler) bulkTenantRequest(c *gin.Context) (bulkTenantUserRequest, bool) {
 	var request bulkTenantUserRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return request, false
 	}
 	if request.TenantID <= 0 {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "tenant_id is required"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "tenant_id is required")
 		return request, false
 	}
 	userIDs, ok := normalizeUserIDs(c, request.UserIDs)
@@ -528,7 +528,7 @@ func normalizeUserIDs(c *gin.Context, raw []int64) ([]int64, bool) {
 	userIDs := make([]int64, 0, len(raw))
 	for _, userID := range raw {
 		if userID <= 0 {
-			c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "user_ids must be positive"})
+			httpserver.Error(c, stdhttp.StatusBadRequest, "user_ids must be positive")
 			return nil, false
 		}
 		if _, ok := seen[userID]; ok {
@@ -538,11 +538,11 @@ func normalizeUserIDs(c *gin.Context, raw []int64) ([]int64, bool) {
 		userIDs = append(userIDs, userID)
 	}
 	if len(userIDs) == 0 {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "user_ids is required"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "user_ids is required")
 		return nil, false
 	}
 	if len(userIDs) > 100 {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "user_ids cannot exceed 100"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "user_ids cannot exceed 100")
 		return nil, false
 	}
 	return userIDs, true
@@ -555,7 +555,7 @@ func optionalInt64Query(c *gin.Context, name string) (int64, error) {
 	}
 	value, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "invalid " + name})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid " + name)
 		return 0, err
 	}
 	return value, nil

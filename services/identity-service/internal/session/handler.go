@@ -53,7 +53,7 @@ func (h *Handler) refresh(c *gin.Context) {
 		RefreshToken string `json:"refresh_token"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.allowRefreshRateLimit(c) {
@@ -62,12 +62,12 @@ func (h *Handler) refresh(c *gin.Context) {
 
 	pair, err := h.service.Refresh(c.Request.Context(), request.RefreshToken)
 	if err != nil {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, err.Error())
 		return
 	}
 	cookieValue, err := h.service.IssueOIDCAuthorizeCookieBySessionID(c.Request.Context(), pair.SessionID)
 	if err != nil {
-		c.JSON(stdhttp.StatusInternalServerError, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusInternalServerError, err.Error())
 		return
 	}
 	h.service.SetOIDCAuthorizeCookie(c, cookieValue, int(h.service.OIDCAuthorizeCookieTTL().Seconds()))
@@ -79,7 +79,7 @@ func (h *Handler) logout(c *gin.Context) {
 		SessionID string `json:"session_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -89,17 +89,17 @@ func (h *Handler) logout(c *gin.Context) {
 			request.SessionID = claims.SessionID
 		}
 		if request.SessionID != claims.SessionID {
-			c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+			httpserver.Error(c, stdhttp.StatusForbidden, "forbidden")
 			return
 		}
 	}
 	if request.SessionID == "" {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": "missing session_id"})
+		httpserver.Error(c, stdhttp.StatusBadRequest, "missing session_id")
 		return
 	}
 
 	if err := h.service.Logout(c.Request.Context(), request.SessionID); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"revoked": true})
@@ -110,27 +110,27 @@ func (h *Handler) logoutAll(c *gin.Context) {
 		UserID *int64 `json:"user_id"`
 	}
 	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 
 	claims, ok := ClaimsFromContext(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 	userID, err := strconv.ParseInt(claims.Subject, 10, 64)
 	if err != nil {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "invalid token"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "invalid token")
 		return
 	}
 	if request.UserID != nil && *request.UserID != userID {
-		c.JSON(stdhttp.StatusForbidden, gin.H{"error": "forbidden"})
+		httpserver.Error(c, stdhttp.StatusForbidden, "forbidden")
 		return
 	}
 
 	if err := h.service.LogoutAll(c.Request.Context(), userID); err != nil {
-		c.JSON(stdhttp.StatusBadRequest, gin.H{"error": err.Error()})
+		httpserver.Error(c, stdhttp.StatusBadRequest, err.Error())
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"revoked": true})
@@ -139,7 +139,7 @@ func (h *Handler) logoutAll(c *gin.Context) {
 func (h *Handler) me(c *gin.Context) {
 	claims, ok := ClaimsFromContext(c)
 	if !ok {
-		c.JSON(stdhttp.StatusUnauthorized, gin.H{"error": "missing auth claims"})
+		httpserver.Error(c, stdhttp.StatusUnauthorized, "missing auth claims")
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{
