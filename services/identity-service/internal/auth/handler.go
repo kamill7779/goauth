@@ -186,6 +186,10 @@ func (h *Handler) login(c *gin.Context) {
 	})
 	if err != nil {
 		statusCode, message := loginErrorResponse(err)
+		var lockoutErr *LockoutError
+		if errors.As(err, &lockoutErr) {
+			ratelimit.SetRetryAfterHeader(c, lockoutErr.RetryAfter)
+		}
 		httpserver.Error(c, statusCode, message)
 		return
 	}
@@ -214,6 +218,10 @@ func (h *Handler) login(c *gin.Context) {
 }
 
 func loginErrorResponse(err error) (int, string) {
+	var lockoutErr *LockoutError
+	if errors.As(err, &lockoutErr) {
+		return stdhttp.StatusLocked, lockoutErr.Error()
+	}
 	if errors.Is(err, ErrAccountLocked) {
 		return stdhttp.StatusLocked, err.Error()
 	}
