@@ -7,6 +7,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// userInfo returns OIDC claims about the authenticated user.
+//
+// @Summary      OIDC UserInfo
+// @Description  Returns standard OIDC claims for the authenticated user.
+// @Tags         oidc
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200  {object}  object
+// @Failure      401  {object}  object
+// @Router       /oauth2/userinfo [get]
 func (h *Handler) userInfo(c *gin.Context) {
 	header := strings.TrimSpace(c.GetHeader("Authorization"))
 	rawToken, ok := strings.CutPrefix(header, "Bearer ")

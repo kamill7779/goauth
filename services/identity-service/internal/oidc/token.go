@@ -35,6 +35,20 @@ var errInvalidGrant = errors.New("invalid grant")
 // client (basic or post body) and dispatches by grant_type. Per-grant rate
 // limiting only kicks in for refresh — auth code exchange is single-use and
 // already self-limited by the code's short TTL.
+// token exchanges an authorization code or refresh token for tokens.
+//
+// @Summary      OAuth2 Token
+// @Description  Issues access/id/refresh tokens for valid authorization codes and refresh tokens.
+// @Tags         oidc
+// @Accept       x-www-form-urlencoded
+// @Produce      json
+// @Param        grant_type    formData  string  true   "grant_type (authorization_code or refresh_token)"
+// @Param        code          formData  string  false  "Authorization code"
+// @Param        redirect_uri  formData  string  false  "Redirect URI"
+// @Param        refresh_token formData  string  false  "Refresh token"
+// @Success      200  {object}  object
+// @Failure      400  {object}  object
+// @Router       /oauth2/token [post]
 func (h *Handler) token(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		oauthError(c, http.StatusBadRequest, "invalid_request")

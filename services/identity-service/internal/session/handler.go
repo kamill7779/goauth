@@ -50,6 +50,18 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	}
 }
 
+// refresh exchanges a valid refresh token for a new token pair.
+//
+// @Summary      Refresh token
+// @Description  Returns a new access token and refresh token.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{refresh_token=string}  true  "Refresh token"
+// @Success      200   {object}  object{access_token=string,refresh_token=string,sid=string}
+// @Failure      400   {object}  object
+// @Failure      401   {object}  object
+// @Router       /v1/auth/refresh [post]
 func (h *Handler) refresh(c *gin.Context) {
 	var request struct {
 		RefreshToken string `json:"refresh_token"`
@@ -76,6 +88,20 @@ func (h *Handler) refresh(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, pair)
 }
 
+// logout revokes a single session.
+
+//
+
+// @Summary      Logout
+// @Description  Revokes the specified session. Requires authentication.
+// @Tags         auth
+// @Security     BearerAuth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{session_id=string}  true  "Session ID to revoke"
+// @Success      200   {object}  object
+// @Failure      401   {object}  object
+// @Router       /v1/auth/logout [post]
 func (h *Handler) logout(c *gin.Context) {
 	var request struct {
 		SessionID string `json:"session_id"`
@@ -138,6 +164,18 @@ func (h *Handler) logoutAll(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"revoked": true})
 }
 
+// me returns the current authenticated user.
+
+//
+
+// @Summary      Current user
+// @Description  Returns the authenticated user profile.
+// @Tags         auth
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200   {object}  object{user_id=string,email=string,sid=string}
+// @Failure      401   {object}  object
+// @Router       /v1/auth/me [get]
 func (h *Handler) me(c *gin.Context) {
 	claims, ok := ClaimsFromContext(c)
 	if !ok {

@@ -1,3 +1,26 @@
+// Package main is the entry point for the identity-service.
+// It wires together configuration, database, Redis, and HTTP router,
+// then starts the Gin server with graceful shutdown.
+//
+// @title           GoAuth Identity Service
+// @version         1.0
+// @description     OAuth2 / OpenID Connect identity provider with self-service auth flows.
+// @termsOfService  https://goauth.dev/terms
+//
+// @contact.name   GoAuth Team
+// @contact.url    https://goauth.dev
+// @contact.email  dev@goauth.dev
+//
+// @license.name   MIT
+// @license.url    https://opensource.org/licenses/MIT
+//
+// @host           localhost:8080
+// @BasePath       /
+//
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Type "Bearer" followed by a space and the access token.
 package main
 
 import (
@@ -12,6 +35,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	_ "goauth/services/identity-service/cmd/server/docs"
 	"goauth/services/identity-service/internal/account"
 	adminconsole "goauth/services/identity-service/internal/admin"
 	"goauth/services/identity-service/internal/audit"
@@ -348,6 +374,9 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 		})
 		authHandler.RegisterRoutes(authGroup)
 	}
+
+	// Swagger UI
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 }
 
 func buildExchangeStore(redisClient *redis.Client) *idp.ExchangeStore {

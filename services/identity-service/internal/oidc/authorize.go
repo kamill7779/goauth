@@ -18,6 +18,20 @@ import (
 // type is "code", grant type permitted, redirect URI registered, scopes allowed,
 // PKCE challenge present, SSO cookie valid, user session live, tenant membership
 // active. Any miss short-circuits before persisting the authorization code.
+// authorize starts the OAuth2 authorization code flow.
+//
+// @Summary      OAuth2 Authorize
+// @Description  Authenticates user and issues authorization code.
+// @Tags         oidc
+// @Produce      json
+// @Param        client_id      query  string  true   "OAuth2 client ID"
+// @Param        redirect_uri   query  string  true   "Redirect URI"
+// @Param        response_type  query  string  true   "response_type (code)"
+// @Param        scope          query  string  false  "Requested scopes"
+// @Param        state          query  string  false  "Opaque state"
+// @Success      302  {string}  string  "Redirect with code"
+// @Failure      400  {object}  object
+// @Router       /oauth2/authorize [get]
 func (h *Handler) authorize(c *gin.Context) {
 	ctx := c.Request.Context()
 	clientID := strings.TrimSpace(c.Query("client_id"))

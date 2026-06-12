@@ -113,6 +113,19 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 }
 
 
+// sendCode sends a one-time verification code to the specified email address.
+//
+// @Summary      Send verification code
+// @Description  Sends a 6-digit verification code for registration or password reset.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{purpose=string,email=string}  true  "Request body"
+// @Success      200   {object}  object{sent=bool}
+// @Failure      400   {object}  object
+// @Failure      403   {object}  object  "registration disabled"
+// @Failure      429   {object}  object  "rate limited"
+// @Router       /v1/auth/email/send-code [post]
 func (h *Handler) sendCode(c *gin.Context) {
 	var request struct {
 		Purpose string `json:"purpose"`
@@ -141,6 +154,18 @@ func (h *Handler) sendCode(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"sent": true})
 }
 
+// register creates a new user account after email verification.
+//
+// @Summary      Register new user
+// @Description  Creates a new user account. Requires a valid email verification code obtained via /email/send-code.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{username=string,email=string,password=string,email_code=string,display_name=string}  true  "Registration data"
+// @Success      200   {object}  object{id=int,email=string}
+// @Failure      400   {object}  object  "invalid input or email code"
+// @Failure      403   {object}  object  "registration disabled"
+// @Router       /v1/auth/register [post]
 func (h *Handler) register(c *gin.Context) {
 	if h.registrationMode != "open" {
 		httpserver.Error(c, stdhttp.StatusForbidden, "registration disabled")
@@ -180,6 +205,19 @@ func (h *Handler) register(c *gin.Context) {
 	})
 }
 
+// login authenticates a user with email and password.
+//
+// @Summary      Login
+// @Description  Authenticates with email/password. Returns access token, refresh token, and session info. May require 2FA verification.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{email=string,password=string}  true  "Login credentials"
+// @Success      200   {object}  object{access_token=string,refresh_token=string,sid=string,user_id=int64,email=string}
+// @Failure      400   {object}  object
+// @Failure      401   {object}  object  "invalid credentials"
+// @Failure      423   {object}  object  "account locked"
+// @Router       /v1/auth/login [post]
 func (h *Handler) login(c *gin.Context) {
 	if !h.localPasswordLoginEnabled {
 		httpserver.Error(c, stdhttp.StatusForbidden, "local password login disabled")
@@ -255,6 +293,17 @@ func loginErrorResponse(err error) (int, string) {
 	return stdhttp.StatusInternalServerError, "login unavailable"
 }
 
+// forgotPassword sends a password reset code to the user's email.
+//
+// @Summary      Forgot password
+// @Description  Sends a password reset verification code.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{email=string}  true  "User email"
+// @Success      200   {object}  object
+// @Failure      400   {object}  object
+// @Router       /v1/auth/password/forgot [post]
 func (h *Handler) forgotPassword(c *gin.Context) {
 	var request struct {
 		Email string `json:"email"`
@@ -273,6 +322,17 @@ func (h *Handler) forgotPassword(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"sent": true})
 }
 
+// resetPassword resets the user's password using a verification code.
+//
+// @Summary      Reset password
+// @Description  Resets password with a valid email verification code.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  object{email=string,email_code=string,password=string}  true  "Reset data"
+// @Success      200   {object}  object
+// @Failure      400   {object}  object
+// @Router       /v1/auth/password/reset [post]
 func (h *Handler) resetPassword(c *gin.Context) {
 	var request struct {
 		Email       string `json:"email"`

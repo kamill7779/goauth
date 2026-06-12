@@ -115,6 +115,9 @@ func NewServiceWithDeps(deps Dependencies) *Service {
 // DB exposes the underlying *gorm.DB for migration-compatible access.
 func (s *Service) DB() *gorm.DB { return s.db }
 
+// SendEmailCode generates a 6-digit code, stores it in Redis with a TTL,
+// and dispatches it via the configured mailer. Returns the code for test
+// convenience; callers must not expose it beyond the mailer.
 func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (string, error) {
 	purpose, err := normalizeEmailCodePurpose(purpose)
 	if err != nil {
@@ -138,6 +141,9 @@ func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (str
 	return code, nil
 }
 
+// Register creates a new user after verifying the email code. It normalises
+// the email, derives a username when none is given, hashes the password, and
+// applies the default membership policy.
 func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.User, error) {
 	purpose, err := normalizeEmailCodePurpose(input.CodePurpose)
 	if err != nil {
@@ -215,6 +221,9 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 	return user, nil
 }
 
+// Login authenticates a user by email (or username) and password. It enforces
+// lockout, password policy, and returns the user on success. Callers are
+// responsible for issuing tokens.
 func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, error) {
 	identifier := strings.TrimSpace(input.Identifier)
 	identifierType := "unknown"

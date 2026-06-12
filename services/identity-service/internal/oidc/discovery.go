@@ -6,6 +6,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// discovery serves the OIDC Discovery document (RFC 8414).
+//
+// @Summary      OIDC Discovery
+// @Description  Returns the OpenID Connect discovery document.
+// @Tags         oidc
+// @Produce      json
+// @Success      200  {object}  object
+// @Router       /.well-known/openid-configuration [get]
 func (h *Handler) discovery(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"issuer":                                h.service.issuer,
