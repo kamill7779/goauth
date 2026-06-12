@@ -161,58 +161,87 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 }
 
 func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring) *gin.Engine {
-	privateKey := keyring.ActivePrivateKey()
+	svc := buildServices(cfg, db, redisClient, keyring)
+	router := buildRouterWithServices(cfg, db, redisClient, svc)
+	registerRoutes(router, cfg, db, redisClient, keyring, svc)
+	return router
+}
+
+// services holds all shared dependencies wired at startup.
+type services struct {
+	session     *session.Service
+	sessionH    *session.Handler
+	oidc        *oidc.Service
+	audit       *audit.Service
+	rateLimiter *ratelimit.Service
+	lockout     *lockout.Manager
+	pwPolicy    password.Policy
+	captcha     *captcha.Verifier
+	logoutCoord *logout.Coordinator
+	tmplEngine  *mailer.TemplateEngine
+	rbac        *rbac.Service
+	tenant      *tenant.Service
+	user        *user.Service
+	userH       *user.Handler
+	provisioning *provisioning.DefaultMembershipPolicy
+	idp         *idp.Service
+	idpH        *idp.Handler
+
+	authMiddleware  gin.HandlerFunc
+	systemMiddleware gin.HandlerFunc
+}
+
+func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring) *services {
 	sessionService := session.NewServiceWithKeyring(db, cfg, keyring)
 	sessionHandler := session.NewHandlerWithKeyring(sessionService, keyring)
 	sessionService.SetSessionRepository(store.NewSessionRepository(db))
 	rateLimiter := ratelimit.NewService(redisClient)
 	sessionHandler.SetRateLimiter(rateLimiter)
-	authMiddleware := session.AuthMiddlewareWithKeyring(sessionService, keyring)
-	systemMiddleware := session.SystemUserMiddleware(sessionService)
 	auditService := audit.NewService(db)
 	sessionService.SetAuditRecorder(auditService)
+
 	oidcService := oidc.NewServiceWithKeyring(db, cfg, keyring)
 	oidcService.SetAuditRecorder(auditService)
 	oidcService.SetRateLimiter(rateLimiter)
 	oidcService.SetBrowserLoginURL(cfg.BrowserLoginURL)
-	defaultMembershipPolicy := provisioning.NewDefaultMembershipPolicy(cfg.DefaultMemberTenantSlugs)
 
-	// Lockout manager.
+	defaultPolicy := provisioning.NewDefaultMembershipPolicy(cfg.DefaultMemberTenantSlugs)
 	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration)
-
-	// Password policy.
 	pwPolicy := password.LoadFromConfig(cfg)
-
-	// CAPTCHA verifier.
 	captchaVerifier := captcha.NewVerifier(captcha.Provider(cfg.CaptchaProvider), cfg.CaptchaSecretKey)
 
-	// Back-channel logout coordinator.
 	logoutCoord := logout.NewCoordinatorWithKeyring(db, keyring, cfg.PublicIssuerURL)
 	logoutCoord.SetAuditRecorder(auditService)
 	sessionService.SetLogoutCoordinator(logoutCoord)
 
-	// Email template engine.
 	tmplEngine := mailer.NewTemplateEngine(cfg.DefaultLocale)
 
-	// Metrics.
-	if cfg.MetricsEnabled {
-		metrics.Register()
-	}
+	rbacService := rbac.NewService(db, redisClient)
+	tenantService := tenant.NewService(db, rbacService)
+	tenantService.SetAuditRecorder(auditService)
+	userService := user.NewService(db, auditService)
 
-	registrars := []httpserver.Registrar{
-		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
-	}
+	userHandler := user.NewHandler(userService, tenantService, sessionService,
+		session.AuthMiddlewareWithKeyring(sessionService, keyring),
+		session.SystemUserMiddleware(sessionService))
+	userHandler.SetLockoutManager(lockoutMgr)
+
+	var idpService *idp.Service
+	var idpHandler *idp.Handler
 	if cfg.IsGitHubConfigured() {
 		githubProvider := githubidp.New(githubidp.Config{
 			ClientID:     cfg.GitHubClientID,
 			ClientSecret: cfg.GitHubClientSecret,
 			RedirectURI:  cfg.GitHubRedirectURI,
 		})
-		idpService := idp.NewService(db, githubProvider)
+		idpService = idp.NewService(db, githubProvider)
 		idpService.SetAuditRecorder(auditService)
-		idpService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
+		idpService.SetDefaultMembershipPolicy(defaultPolicy)
 		idpService.SetRegistrationMode(cfg.RegistrationMode)
-		idpHandler := idp.NewHandler(idpService, sessionService, authMiddleware, cfg.BrowserCookieSecure)
+
+		idpHandler = idp.NewHandler(idpService, sessionService,
+			session.AuthMiddlewareWithKeyring(sessionService, keyring),
+			cfg.BrowserCookieSecure)
 		idpHandler.SetCaptchaVerifier(captchaVerifier)
 		idpHandler.SetCaptchaActions(cfg.CaptchaActions)
 		idpHandler.SetFrontendCallbackPath(frontendCallbackURLFromBrowserLoginURL(cfg.BrowserLoginURL))
@@ -220,62 +249,88 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 		if redisClient != nil {
 			idpHandler.SetExchangeStore(idp.NewExchangeStore(redisClient))
 		}
-		registrars = append(registrars, idpHandler)
+	}
+
+	return &services{
+		session:        sessionService,
+		sessionH:       sessionHandler,
+		oidc:           oidcService,
+		audit:          auditService,
+		rateLimiter:    rateLimiter,
+		lockout:        lockoutMgr,
+		pwPolicy:       pwPolicy,
+		captcha:        captchaVerifier,
+		logoutCoord:    logoutCoord,
+		tmplEngine:     tmplEngine,
+		rbac:           rbacService,
+		tenant:         tenantService,
+		user:           userService,
+		userH:          userHandler,
+		provisioning:   defaultPolicy,
+		idp:            idpService,
+		idpH:           idpHandler,
+		authMiddleware:  session.AuthMiddlewareWithKeyring(sessionService, keyring),
+		systemMiddleware: session.SystemUserMiddleware(sessionService),
+	}
+}
+
+func buildRouterWithServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, svc *services) *gin.Engine {
+	if cfg.MetricsEnabled {
+		metrics.Register()
+	}
+
+	registrars := []httpserver.Registrar{
+		httpserver.NewReadinessRegistrar(buildReadinessChecks(db, redisClient)...),
+	}
+	if svc.idpH != nil {
+		registrars = append(registrars, svc.idpH)
 	}
 
 	router := httpserver.NewRouter(cfg, registrars...)
-
-	// Replace default Gin logger with structured middleware.
 	router.Use(middleware.RequestID(), middleware.StructuredLogger())
 
-	// Metrics endpoint.
 	if cfg.MetricsEnabled {
 		router.GET("/metrics", gin.WrapH(metrics.Handler()))
 	}
+	return router
+}
 
-	rbacService := rbac.NewService(db, redisClient)
-	tenantService := tenant.NewService(db, rbacService)
-	tenantService.SetAuditRecorder(auditService)
-	userService := user.NewService(db, auditService)
-
-	userHandler := user.NewHandler(userService, tenantService, sessionService, authMiddleware, systemMiddleware)
-	userHandler.SetLockoutManager(lockoutMgr)
-
+func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring, svc *services) {
+	privateKey := keyring.ActivePrivateKey()
 	authGroup := router.Group("/v1/auth")
 	auth.NewPublicConfigHandler(cfg).RegisterRoutes(authGroup)
-	sessionHandler.RegisterRoutes(authGroup)
-	oidc.RegisterRoutes(router, oidcService)
-	httpserver.RegisterRoutes(
-		router,
-		rbac.NewHandler(rbacService, authMiddleware, systemMiddleware),
-		tenant.NewHandler(tenantService, authMiddleware, systemMiddleware),
-		userHandler,
-		oidc.NewAdminHandler(oidcService, authMiddleware, systemMiddleware),
-		account.NewHandler(db, sessionService, authMiddleware, pwPolicy, cfg.AvatarStorageDir),
-		adminconsole.NewHandler(db, sessionService, auditService, authMiddleware, systemMiddleware, cfg),
+	svc.sessionH.RegisterRoutes(authGroup)
+
+	oidc.RegisterRoutes(router, svc.oidc)
+
+	httpserver.RegisterRoutes(router,
+		rbac.NewHandler(svc.rbac, svc.authMiddleware, svc.systemMiddleware),
+		tenant.NewHandler(svc.tenant, svc.authMiddleware, svc.systemMiddleware),
+		svc.userH,
+		oidc.NewAdminHandler(svc.oidc, svc.authMiddleware, svc.systemMiddleware),
+		account.NewHandler(db, svc.session, svc.authMiddleware, svc.pwPolicy, cfg.AvatarStorageDir),
+		adminconsole.NewHandler(db, svc.session, svc.audit, svc.authMiddleware, svc.systemMiddleware, cfg),
 	)
 
-	// Invite handler.
-	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), tmplEngine, util.DefaultString(cfg.BrandName, "GoAuth"), cfg.PublicIssuerURL)
-	inviteService.SetAuditRecorder(auditService)
-	invite.NewHandler(inviteService, authMiddleware, systemMiddleware).RegisterRoutes(router)
+	inviteService := invite.NewService(db, privateKey, buildMailSender(cfg), svc.tmplEngine,
+		util.DefaultString(cfg.BrandName, "GoAuth"), cfg.PublicIssuerURL)
+	inviteService.SetAuditRecorder(svc.audit)
+	invite.NewHandler(inviteService, svc.authMiddleware, svc.systemMiddleware).RegisterRoutes(router)
 
 	if redisClient != nil {
 		authService := auth.NewService(store.NewUserRepository(db), redisClient, buildMailSender(cfg), db)
-		authService.SetAuditRecorder(auditService)
-		authService.SetDefaultMembershipPolicy(defaultMembershipPolicy)
-		authService.SetLockoutManager(lockoutMgr)
-		authService.SetPasswordPolicy(pwPolicy)
-		authHandler := auth.NewHandler(authService, sessionService)
-		authHandler.SetRateLimiter(rateLimiter)
-		authHandler.SetCaptchaVerifier(captchaVerifier)
+		authService.SetAuditRecorder(svc.audit)
+		authService.SetDefaultMembershipPolicy(svc.provisioning)
+		authService.SetLockoutManager(svc.lockout)
+		authService.SetPasswordPolicy(svc.pwPolicy)
+		authHandler := auth.NewHandler(authService, svc.session)
+		authHandler.SetRateLimiter(svc.rateLimiter)
+		authHandler.SetCaptchaVerifier(svc.captcha)
 		authHandler.SetCaptchaActions(cfg.CaptchaActions)
 		authHandler.SetRegistrationMode(cfg.RegistrationMode)
 		authHandler.SetLocalPasswordLoginEnabled(cfg.LocalPasswordLoginEnabled)
 		authHandler.RegisterRoutes(authGroup)
 	}
-
-	return router
 }
 
 func buildMailSender(cfg config.Config) mailer.Sender {
