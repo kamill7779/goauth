@@ -3,6 +3,7 @@ package store
 import (
 	"time"
 
+	"goauth/services/identity-service/internal/domain"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
@@ -34,6 +35,20 @@ type User struct {
 	CreatedAt    time.Time      `gorm:"not null"`
 	UpdatedAt    time.Time      `gorm:"not null"`
 	DeletedAt    gorm.DeletedAt `gorm:"index"`
+}
+
+// ToDomain converts a store.User to a pure domain.User, stripping all
+// persistence annotations and sensitive fields.
+func (u *User) ToDomain() domain.User {
+	return domain.User{
+		ID:          u.ID,
+		Email:       u.Email,
+		Username:    u.Username,
+		DisplayName: u.DisplayName,
+		Status:      domain.Status(u.Status),
+		CreatedAt:   u.CreatedAt,
+		UpdatedAt:   u.UpdatedAt,
+	}
 }
 
 // BeforeCreate fills derived identity fields so callers that have not yet been

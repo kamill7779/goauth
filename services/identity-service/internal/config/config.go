@@ -87,6 +87,139 @@ type Config struct {
 	ConfiguredEnv map[string]bool `json:"-"`
 }
 
+// ── Sub-config types — extracted for dependency narrowing in Phase 3 ──
+
+// TokenConfig groups JWT signing and token lifetime settings.
+type TokenConfig struct {
+	KeyID              string
+	ActiveKeyID        string
+	KeysetDir          string
+	PrivateKeyPath     string
+	AccessTokenTTL     time.Duration
+	RefreshTokenTTL    time.Duration
+	BrowserSessionTTL  time.Duration
+	BrowserCookieSecure bool
+}
+
+// MailerConfig groups SMTP and email provider settings.
+type MailerConfig struct {
+	Provider string
+	SMTP     SMTPConfig
+	From     string
+}
+
+// SMTPConfig holds raw SMTP connection parameters.
+type SMTPConfig struct {
+	Host      string
+	Port      int
+	Username  string
+	Password  string
+	SSL       bool
+	AuthLogin bool
+}
+
+// BrandConfig groups UI branding settings.
+type BrandConfig struct {
+	Name     string
+	Tagline  string
+	IconText string
+	IconURL  string
+}
+
+// PasswordConfig groups password policy parameters.
+type PasswordConfig struct {
+	MinLength      int
+	RequireUpper   bool
+	RequireLower   bool
+	RequireDigit   bool
+	RequireSpecial bool
+	HistoryCount   int
+}
+
+// LockoutConfig groups account lockout thresholds.
+type LockoutConfig struct {
+	Threshold int64
+	Duration  time.Duration
+}
+
+// GitHubOAuthConfig groups GitHub OAuth provider settings.
+type GitHubOAuthConfig struct {
+	Enabled     bool
+	ClientID    string
+	ClientSecret string
+	RedirectURI string
+}
+
+// Token returns the token-related sub-config.
+func (c Config) Token() TokenConfig {
+	return TokenConfig{
+		KeyID:              c.JWTKeyID,
+		ActiveKeyID:        c.JWTActiveKeyID,
+		KeysetDir:          c.JWTKeysetDir,
+		PrivateKeyPath:     c.JWTPrivateKeyPath,
+		AccessTokenTTL:     c.AccessTokenTTL,
+		RefreshTokenTTL:    c.RefreshTokenTTL,
+		BrowserSessionTTL:  c.BrowserSessionTTL,
+		BrowserCookieSecure: c.BrowserCookieSecure,
+	}
+}
+
+// Mailer returns the mailer sub-config.
+func (c Config) Mailer() MailerConfig {
+	return MailerConfig{
+		Provider: c.MailerProvider,
+		SMTP: SMTPConfig{
+			Host:      c.SMTPHost,
+			Port:      c.SMTPPort,
+			Username:  c.SMTPUsername,
+			Password:  c.SMTPPassword,
+			SSL:       c.SMTPSSLEnabled,
+			AuthLogin: c.SMTPAuthLogin,
+		},
+		From: c.SMTPFrom,
+	}
+}
+
+// Brand returns the branding sub-config.
+func (c Config) Brand() BrandConfig {
+	return BrandConfig{
+		Name:     c.BrandName,
+		Tagline:  c.BrandTagline,
+		IconText: c.BrandIconText,
+		IconURL:  c.BrandIconURL,
+	}
+}
+
+// PasswordPolicy returns the password policy sub-config.
+func (c Config) PasswordPolicy() PasswordConfig {
+	return PasswordConfig{
+		MinLength:      c.PasswordMinLength,
+		RequireUpper:   c.PasswordRequireUpper,
+		RequireLower:   c.PasswordRequireLower,
+		RequireDigit:   c.PasswordRequireDigit,
+		RequireSpecial: c.PasswordRequireSpecial,
+		HistoryCount:   c.PasswordHistoryCount,
+	}
+}
+
+// Lockout returns the lockout sub-config.
+func (c Config) Lockout() LockoutConfig {
+	return LockoutConfig{
+		Threshold: c.LockoutThreshold,
+		Duration:  c.LockoutDuration,
+	}
+}
+
+// GitHubOAuth returns the GitHub OAuth sub-config.
+func (c Config) GitHubOAuth() GitHubOAuthConfig {
+	return GitHubOAuthConfig{
+		Enabled:      c.GitHubOAuthEnabled,
+		ClientID:     c.GitHubClientID,
+		ClientSecret: c.GitHubClientSecret,
+		RedirectURI:  c.GitHubRedirectURI,
+	}
+}
+
 // IsGitHubConfigured returns true when all required GitHub OAuth settings are present.
 func (c Config) IsGitHubConfigured() bool {
 	return c.GitHubOAuthEnabled &&
