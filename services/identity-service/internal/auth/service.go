@@ -15,12 +15,15 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
 	"goauth/services/identity-service/internal/audit"
+	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/identity"
 	"goauth/services/identity-service/internal/lockout"
 	"goauth/services/identity-service/internal/mailer"
@@ -29,6 +32,7 @@ import (
 	"goauth/services/identity-service/internal/store"
 
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -494,4 +498,70 @@ func (s *Service) requireEmailCode(ctx context.Context, purpose, email, code str
 // emailCodeKey builds the Redis key for an email verification code.
 func emailCodeKey(purpose, email string) string {
 	return fmt.Sprintf("auth:email_code:%s:%s", purpose, email)
+}
+
+// LockoutError signals a temporary account lockout and carries the
+// remaining duration so handlers can write a Retry-After header.
+type LockoutError struct {
+	RetryAfter time.Duration
+}
+
+func (e *LockoutError) Error() string {
+	return fmt.Sprintf("account locked, retry after %s", e.RetryAfter)
+}
+
+// RateLimitError signals that a rate limit was exceeded.
+type RateLimitError struct {
+	RetryAfter time.Duration
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("rate limited, retry after %s", e.RetryAfter)
+}
+
+func HashPassword(password string) (string, error) {
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
+}
+
+func CheckPassword(hash, password string) error {
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+}
+
+const (
+	EmailCodePurposeRegister      = "register"
+	EmailCodePurposePasswordReset = "password_reset"
+	emailCodeTTL                  = 10 * time.Minute
+)
+
+func generateEmailCode() (string, error) {
+	limit := big.NewInt(1000000)
+	value, err := rand.Int(rand.Reader, limit)
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("%06d", value.Int64()), nil
+}
+
+func normalizeEmailCodePurpose(purpose string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(purpose)) {
+	case "", EmailCodePurposeRegister:
+		return EmailCodePurposeRegister, nil
+	case EmailCodePurposePasswordReset:
+		return EmailCodePurposePasswordReset, nil
+	default:
+		return "", errors.New("unsupported email code purpose")
+	}
+}
+
+func storeEmailCode(ctx context.Context, client *redis.Client, purpose, email, code string) error {
+	return client.Set(ctx, cache.EmailCodeKey(purpose, email), code, emailCodeTTL).Err()
+}
+
+func loadEmailCode(ctx context.Context, client *redis.Client, purpose, email string) (string, error) {
+	return client.Get(ctx, cache.EmailCodeKey(purpose, email)).Result()
 }
