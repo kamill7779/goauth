@@ -26,7 +26,7 @@ func TestEnvExampleMatchesEnvDefinitions(t *testing.T) {
 }
 
 func TestConfigurationMatrixMatchesEnvDefinitions(t *testing.T) {
-	assertSameEnvKeys(t, "docs/configuration.md", readConfigurationMatrixKeys(t), envDefinitionKeys())
+	assertSameEnvKeys(t, "docs/deployment/configuration.md", readConfigurationMatrixKeys(t), envDefinitionKeys())
 }
 
 func TestDockerComposePassesAllRuntimeEnvDefinitions(t *testing.T) {
@@ -148,7 +148,7 @@ func readEnvExampleKeys(t *testing.T) []string {
 func readConfigurationMatrixKeys(t *testing.T) []string {
 	t.Helper()
 
-	path := filepath.Join("..", "..", "..", "..", "docs", "configuration.md")
+	path := filepath.Join("..", "..", "..", "..", "docs", "deployment", "configuration.md")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
