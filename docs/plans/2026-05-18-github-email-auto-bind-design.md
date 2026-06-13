@@ -8,7 +8,7 @@
 - GitHub App 权限已能返回 `/user` 与 `/user/emails`。
 - 回调后端可以拿到 `ExternalProfile.Email` 与 `ExternalProfile.EmailVerified`。
 
-当前阻塞点在 [services/identity-service/internal/idp/service.go](E:/Project/goauth/.worktrees/github-auto-bind-email/services/identity-service/internal/idp/service.go)：
+当前阻塞点在 [services/identity-service/internal/idp/service.go](../../services/identity-service/internal/idp/service.go)：
 
 - 如果外部身份尚未绑定。
 - 且外部邮箱命中现有本地 `users.email`。
