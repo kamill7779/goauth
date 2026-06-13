@@ -16,6 +16,11 @@ import (
 // Refresh rotates a refresh token following RFC 6749 §10.4 with reuse detection.
 // If a revoked token is presented (e.g., an attacker replays a stolen token after
 // the legitimate client already rotated it), the entire token family is revoked.
+// Refresh validates a refresh token, rotates it (old one revoked, new one
+// issued), and returns a fresh token pair. Implements refresh token rotation
+// to detect token reuse (RFC 6819 §5.2.2).
+//
+// Call chain: handler.refresh → service.Refresh → validateRefreshToken → IssueTokens
 func (s *Service) Refresh(ctx context.Context, rawToken string) (*TokenPair, error) {
 	token, err := s.sessions.FindRefreshTokenByHash(ctx, hashToken(rawToken))
 	if err != nil {
@@ -195,6 +200,10 @@ func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user st
 	}, nil
 }
 
+// Logout revokes a single session by marking it as revoked in the repository
+// and notifying the logout coordinator for back-channel propagation.
+//
+// Call chain: handler.logout → service.Logout → repo.RevokeSession + coordinator.Notify
 func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	var loginSession store.LoginSession
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -241,6 +250,10 @@ func (s *Service) Logout(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// LogoutAll revokes every active session for a user (used after password change
+// or force-logout by admin).
+//
+// Call chain: handler.logoutAll / admin → service.LogoutAll → repo.RevokeAllSessions
 func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		now := s.now()

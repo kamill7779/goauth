@@ -1,6 +1,10 @@
 // Package invite implements JWT-signed tenant membership invitations with
 // email delivery, expiry, and idempotent redemption (SELECT FOR UPDATE + atomic
 // status transition).
+//
+// Call chain: handler.createInvite → service.Create → signJWT → mailer
+//
+//	handler.redeemInvite → service.Redeem → verifyJWT → repo.Redeem
 package invite
 
 import (

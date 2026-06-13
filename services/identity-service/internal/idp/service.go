@@ -1,3 +1,11 @@
+// Package idp integrates third-party identity providers (currently GitHub)
+// for external login, identity binding, and code exchange.
+//
+// Call chain:
+//
+//	handler.startGitHubLogin → GitHub OAuth redirect
+//	handler.handleGitHubCallback → service.Authenticate → provider.ExchangeCode
+//	handler.exchangeGitHubCode   → service.ExchangeCode → provider.ExchangeCode
 package idp
 
 import (

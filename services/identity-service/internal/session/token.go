@@ -178,6 +178,11 @@ func LoadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {
 // IssueTokens starts a brand-new login: it creates a LoginSession row plus the
 // first refresh token of a new family. Subsequent refreshes reuse the same
 // session/family IDs so that reuse detection can revoke the entire chain.
+// IssueTokens creates a new session, signs an access JWT, generates a refresh
+// token, and persists both. The caller (handler.login or handler.refresh) is
+// responsible for setting cookies and returning the pair to the client.
+//
+// Call chain: handler.login → IssueTokens → repo.CreateSession + sign JWT
 func (s *Service) IssueTokens(ctx context.Context, input IssueTokensInput) (*TokenPair, error) {
 	sessionID, err := randomID(16)
 	if err != nil {

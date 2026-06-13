@@ -1,6 +1,14 @@
 // Package oidc implements an OAuth 2.0 / OpenID Connect provider: authorization
 // endpoint, token endpoint (authorization_code + refresh_token grants), PKCE,
 // introspection (RFC 7662), revocation, JWKS, discovery, and RP-initiated logout.
+//
+// Call chain (inbound → handler → service → persistence):
+//
+//	authorize.go  →  service.authorize  →  validateClient + createAuthCode
+//	token.go      →  service.token      →  validateAuthCode / validateRefreshToken
+//	userinfo.go   →  service.userInfo   →  validateAccessToken + loadUser
+//	jwks.go       →  service.jwksPublicKeys
+//	discovery.go  →  (static config)
 package oidc
 
 import (

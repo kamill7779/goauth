@@ -1,3 +1,16 @@
+// Package auth implements self-service authentication flows.
+//
+// Call chain (inbound HTTP → service → persistence):
+//
+//	handler.go          service.go            store
+//	──────────          ──────────            ─────
+//	sendCode      ──→  SendEmailCode  ──→  Redis (email_code:{purpose}:{email})
+//	register      ──→  Register       ──→  UserRepository.Create + policy.Apply
+//	login         ──→  Login          ──→  UserRepository.FindBy* + lockout + audit
+//	forgotPassword──→  ForgotPassword ──→  SendEmailCode(password_forgot)
+//	resetPassword ──→  ResetPassword  ──→  requireEmailCode + UpdatePassword
+//
+// Dependencies are injected via Dependencies struct at construction time.
 package auth
 
 import (
@@ -142,8 +155,11 @@ func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (str
 }
 
 // Register creates a new user after verifying the email code. It normalises
-// the email, derives a username when none is given, hashes the password, and
-// applies the default membership policy.
+// the email, derives a username when none is given, hashes the password with
+// bcrypt, persists via UserRepository, and applies the default membership
+// policy. Returns the created user on success.
+//
+// Call chain: handler.register → service.Register → repo.Create + policy.Apply
 func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.User, error) {
 	purpose, err := normalizeEmailCodePurpose(input.CodePurpose)
 	if err != nil {
@@ -221,9 +237,12 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 	return user, nil
 }
 
-// Login authenticates a user by email (or username) and password. It enforces
-// lockout, password policy, and returns the user on success. Callers are
-// responsible for issuing tokens.
+// Login authenticates a user by email (or username) and password.
+//
+// Flow: lookup user → check lockout → verify password → reset lockout → audit.
+// Callers (handler.login) are responsible for issuing tokens and setting cookies.
+//
+// Call chain: handler.login → service.Login → repo.FindByEmail + lockout.Check + audit.Record
 func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, error) {
 	identifier := strings.TrimSpace(input.Identifier)
 	identifierType := "unknown"
@@ -344,6 +363,10 @@ func loginIdentifierType(identifier string) string {
 // ForgotPassword silently returns nil for unknown emails so attackers cannot
 // enumerate registered accounts via the response shape. A code is only sent
 // when the email actually exists.
+// ForgotPassword sends a password-reset code via email. It does not reveal
+// whether the email exists (constant-time-like response).
+//
+// Call chain: handler.forgotPassword → service.ForgotPassword → SendEmailCode(password_forgot)
 func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	_, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
@@ -356,6 +379,9 @@ func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	return err
 }
 
+// ResetPassword validates the email code and updates the password hash.
+//
+// Call chain: handler.resetPassword → service.ResetPassword → requireEmailCode → repo.UpdatePassword
 func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) error {
 	email := identity.NormalizeEmail(input.Email)
 	if err := s.requireEmailCode(ctx, EmailCodePurposePasswordReset, email, input.EmailCode); err != nil {
@@ -434,6 +460,9 @@ func (s *Service) ResetPassword(ctx context.Context, input ResetPasswordInput) e
 	return nil
 }
 
+// requireEmailCode looks up a stored code in Redis, verifies it matches, and
+// deletes it on success. Used by Register and ResetPassword as a shared
+// verification gate.
 func (s *Service) requireEmailCode(ctx context.Context, purpose, email, code string) error {
 	storedCode, err := loadEmailCode(ctx, s.redis, purpose, email)
 	if err != nil {
