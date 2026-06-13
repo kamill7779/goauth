@@ -47,6 +47,12 @@ type AuthenticateResult struct {
 	WasLinked bool
 }
 
+// Service integrates third-party identity providers (currently GitHub) for
+// external login, account binding, and OAuth code exchange. It orchestrates
+// the full flow from provider redirect through profile resolution to user
+// creation or lookup, then delegates token issuance to the session service.
+//
+// Key methods: Authenticate → ExchangeCode → BindIdentity → UnbindIdentity
 type Service struct {
 	db               *gorm.DB
 	providers        map[string]Provider

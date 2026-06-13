@@ -9,26 +9,18 @@
   "editor.hover.delay": 300,
   "editor.hover.sticky": true,
 
-  // gopls: enable hover with structured/signature info
+  // gopls: max documentation on hover
   "gopls": {
-    "hoverKind": "FullDocumentation",
+    "hoverKind": "Structured",
     "usePlaceholders": true,
     "completionDocumentation": true,
     "deepCompletion": true,
     "staticcheck": true,
-
-    // Show call hierarchy and references
     "symbolMatcher": "FastFuzzy",
     "symbolStyle": "Full",
-
-    // Formatting
+    "semanticTokens": true,
     "formatting.gofumpt": false,
     "formatting.local": "goauth/services",
-
-    // Semantic tokens for richer highlighting
-    "semanticTokens": true,
-
-    // Code lens: show references above functions
     "codelenses": {
       "gc_details": false,
       "generate": true,

@@ -11,6 +11,11 @@ import (
 	"goauth/services/identity-service/internal/ratelimit"
 )
 
+// Handler exposes session-management endpoints: token refresh, logout,
+// logout-all, and the current-user (me) endpoint. All write endpoints
+// require authentication via AuthMiddleware.
+//
+// Routes: POST /refresh, /logout, /logout-all; GET /me
 type Handler struct {
 	service     *Service
 	publicKey   *rsa.PublicKey

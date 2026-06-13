@@ -31,6 +31,12 @@ type SessionIssuer interface {
 	OIDCAuthorizeCookieTTL() time.Duration
 }
 
+// Handler exposes the external-IDP OAuth flow: GitHub login redirect,
+// callback processing, code exchange, identity binding/unbinding, and
+// identity listing. It coordinates the idp Service with the session issuer
+// and CAPTCHA verification.
+//
+// Routes: GET /start, /callback; POST /exchange, /bind, /unbind, /identities
 type Handler struct {
 	service              *Service
 	sessions             SessionIssuer

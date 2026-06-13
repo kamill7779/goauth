@@ -14,6 +14,11 @@ import (
 	"goauth/services/identity-service/internal/session"
 )
 
+// Handler exposes HTTP endpoints for self-service auth: send-code, register,
+// login, 2FA verification, forgot-password, and reset-password. It wires the
+// auth Service with session management, rate limiting, and CAPTCHA.
+//
+// Routes: POST /email/send-code, /register, /login, /password/forgot, /password/reset
 type Handler struct {
 	service         *Service
 	session         *session.Service

@@ -42,6 +42,11 @@ var (
 // opposed to OAuth2 client_credentials or other token-use values.
 const accessTokenUseSession = "session"
 
+// Service manages JWT access/refresh token issuance, rotation, revocation,
+// and validation. It is the single authority for signing and verifying tokens
+// across the entire system — auth, OIDC, and session middleware all depend on it.
+//
+// Key methods: IssueTokens → Refresh → Logout → LogoutAll → AuthMiddleware
 type Service struct {
 	db                  *gorm.DB
 	sessions            store.SessionRepository

@@ -44,6 +44,12 @@ const (
 
 var errInvalidClientCredentials = errors.New("invalid client credentials")
 
+// Service implements the OAuth 2.0 / OpenID Connect provider: authorization
+// code flow (with PKCE), token endpoint (authorization_code + refresh_token
+// grants), introspection (RFC 7662), revocation, JWKS, discovery, and
+// RP-initiated logout.
+//
+// Key methods: authorize → token → userInfo → introspect → revoke
 type Service struct {
 	db                   *gorm.DB
 	privateKey           *rsa.PrivateKey
@@ -61,6 +67,14 @@ type Service struct {
 	now                  func() time.Time
 }
 
+// Handler holds a reference to the oidc Service and implements the OAuth2
+// endpoints: discovery, JWKS, authorize, token, userinfo, introspect,
+// revoke, and RP-initiated logout.
+//
+// Routes: GET /.well-known/openid-configuration, /oauth2/jwks, /oauth2/authorize,
+//
+//	POST /oauth2/token, /oauth2/introspect, /oauth2/revoke,
+//	GET|POST /oauth2/logout, GET /oauth2/userinfo
 type Handler struct {
 	service *Service
 }

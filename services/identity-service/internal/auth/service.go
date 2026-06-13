@@ -67,6 +67,12 @@ type ResetPasswordInput struct {
 	EmailCode   string
 }
 
+// Service orchestrates self-service authentication: email code dispatch,
+// registration, login (with lockout + password policy), password reset, and
+// 2FA challenge verification. All persistence goes through the UserRepository
+// interface; transient state (codes, lockout counters) lives in Redis.
+//
+// Key methods: SendEmailCode → Register → Login → ForgotPassword → ResetPassword
 type Service struct {
 	users    store.UserRepository
 	redis    *redis.Client
