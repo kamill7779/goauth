@@ -4,14 +4,14 @@
   "go.docsTool": "gopls",
   "go.useLanguageServer": true,
 
-  // Hover: show function signature + doc comment (Javadoc-style)
+  // hover: clean readable popup
   "editor.hover.enabled": true,
   "editor.hover.delay": 300,
-  "editor.hover.sticky": true,
+  "editor.hover.sticky": false,
 
-  // gopls: max documentation on hover
+  // gopls: plain readable documentation (not Structured table)
   "gopls": {
-    "hoverKind": "Structured",
+    "hoverKind": "FullDocumentation",
     "usePlaceholders": true,
     "completionDocumentation": true,
     "deepCompletion": true,
