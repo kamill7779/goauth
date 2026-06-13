@@ -1,230 +1,206 @@
-# SSO Quickstart
+# OIDC 集成细节
 
-This guide shows how a business application connects to GoAuth through OpenID Connect Authorization Code + PKCE.
+本文记录 identity-service 当前支持的 OIDC 能力和限制，便于本机联调和业务系统接入。
 
-## Integration Model
+## 端点
 
-GoAuth is the OIDC Provider. Your application is an OAuth Client.
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| `GET` | `/.well-known/openid-configuration` | OIDC discovery。 |
+| `GET` | `/oauth2/jwks` | RS256 公钥集合。 |
+| `GET` | `/oauth2/authorize` | Authorization Code 授权端点。 |
+| `POST` | `/oauth2/token` | code 换 token。 |
+| `GET` | `/oauth2/userinfo` | 根据 access token 返回用户信息。 |
+| `POST` | `/oauth2/introspect` | token introspection，需 client 凭证。 |
+| `POST` | `/oauth2/revoke` | 撤销 refresh token，需 client 凭证。 |
+| `GET` | `/oauth2/logout` | 没有活动浏览器 SSO cookie 时可幂等退出；带活动 cookie 时只用于拿确认页。 |
+| `POST` | `/oauth2/logout` | 提交浏览器退出确认表单，校验 CSRF 后撤销当前 OIDC session。 |
 
-```text
-Browser -> Business App -> GoAuth /oauth2/authorize
-Browser -> GoAuth Login Page
-GoAuth -> Business App callback with code
-Business App backend -> GoAuth /oauth2/token
-Business App backend -> GoAuth JWKS / UserInfo
-```
+Discovery 中声明：
 
-Use this flow for web apps, admin tools, SaaS consoles, and backend-rendered apps. Do not use implicit flow.
+- `response_types_supported`: `code`
+- `grant_types_supported`: `authorization_code`, `refresh_token`
+- `id_token_signing_alg_values_supported`: `RS256`
+- `token_endpoint_auth_methods_supported`: `client_secret_basic`, `client_secret_post`
+- `code_challenge_methods_supported`: `plain`, `S256`
 
-## 1. Create An OAuth Client
+推荐业务系统只使用 `S256` PKCE。
 
-In GoAuth Admin Console:
+## Scope
 
-1. Create or choose a tenant.
-2. Open `OAuth Clients`.
-3. Create a client:
-
-```text
-Client ID: demo-web
-Redirect URI: http://localhost:3000/auth/callback
-Scopes: openid profile email offline_access
-Grant Types: authorization_code, refresh_token
-Token Endpoint Auth Method: client_secret_post
-Auto Provision Members: enabled for public demo apps
-```
-
-Store the one-time client secret. GoAuth stores only a hash and cannot show it again.
-
-## 2. Configure Your App
-
-```env
-OIDC_ISSUER=http://localhost:8080
-OIDC_CLIENT_ID=demo-web
-OIDC_CLIENT_SECRET=<client-secret>
-OIDC_REDIRECT_URI=http://localhost:3000/auth/callback
-OIDC_SCOPES=openid profile email offline_access
-```
-
-In production, `OIDC_ISSUER` must be the HTTPS `PUBLIC_ISSUER_URL`, for example `https://auth.example.com`.
-
-## 3. Read Discovery
-
-At startup, read:
-
-```http
-GET {OIDC_ISSUER}/.well-known/openid-configuration
-```
-
-Important fields:
-
-| Field | Use |
+| Scope | 说明 |
 | --- | --- |
-| `issuer` | Must match token `iss`. |
-| `authorization_endpoint` | Browser redirect target. |
-| `token_endpoint` | Backend code exchange target. |
-| `userinfo_endpoint` | Fetch profile with access token. |
-| `jwks_uri` | Fetch public keys for JWT verification. |
+| `openid` | 必填，用于 OIDC 登录。 |
+| `profile` | 在 ID Token/access token/userinfo 中返回展示名。 |
+| `email` | 返回邮箱和邮箱验证状态。 |
+| `offline_access` | 表示业务希望获得长期会话能力。 |
 
-Cache discovery and JWKS, but refresh JWKS when token verification sees an unknown `kid`.
+当前 token endpoint 只会在两个条件都满足时返回 refresh token：
 
-## 4. Start Login
+- 授权请求包含 `offline_access` scope。
+- 对应 OAuth client 的 `grant_types` 显式包含 `refresh_token`。
 
-Generate:
+业务系统仍应只在需要长期会话时申请 `offline_access`，并把 refresh token 放在服务端安全存储。
 
-- `state`: random value stored in the user browser session.
-- `nonce`: random value stored in the user browser session.
-- `code_verifier`: random PKCE verifier.
-- `code_challenge`: `BASE64URL(SHA256(code_verifier))`.
+## Client 注册
 
-Redirect the browser:
+当前没有公开动态注册端点。创建 client 时需要保证：
+
+- `client_id` 全局唯一。
+- `client_secret` 只保存 hash，明文只在创建时交付给业务系统。
+- `redirect_uris` 精确保存允许回调地址，授权时完全匹配。
+- `allowed_scopes` 覆盖业务需要的 scope，至少包含 `openid`。
+- `grant_types` 包含 `authorization_code`。
+- `token_endpoint_auth_method` 只能是 `client_secret_basic` 或 `client_secret_post`。
+- 公共业务系统可开启 `auto_provision_members`，让活跃用户首次访问该 client 时自动加入 client 所属租户；内部系统建议关闭。
+- 若需要“注册后默认入组”，在 GoAuth 运行配置中设置 `DEFAULT_MEMBER_TENANT_SLUGS`，由身份服务按租户 slug 对新用户执行通用 membership 初始化；下游业务系统不需要写 GoAuth 业务规则。
+
+服务端会拒绝未知 client、禁用 client、不匹配 redirect URI、不允许的 scope 和未启用的 grant type。
+
+## Authorization Endpoint
+
+请求参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `response_type` | 是 | 只能是 `code`。 |
+| `client_id` | 是 | 已注册 client。 |
+| `redirect_uri` | 是 | 必须和注册值完全一致。 |
+| `scope` | 是 | 空格分隔，必须包含 `openid`。 |
+| `state` | 建议 | 防 CSRF，业务回调时校验。 |
+| `nonce` | 建议 | 绑定 ID Token，业务回调时校验。 |
+| `code_challenge` | 是 | PKCE challenge。 |
+| `code_challenge_method` | 是 | 推荐 `S256`。未传时按 `plain` 处理。 |
+
+授权端点要求浏览器有有效的 `goauth_oidc_session` cookie，并且用户属于 client 所属租户。若 GoAuth 配置了 `DEFAULT_MEMBER_TENANT_SLUGS`，新用户创建时会先加入这些默认租户。若 client 开启 `auto_provision_members`，活跃用户首次授权时会被自动加入该 client 租户；被显式禁用或删除的租户成员不会被自动恢复。
+
+- 浏览器导航请求如果缺少或持有失效 cookie，会被 `302` 跳到 `BROWSER_LOGIN_URL?return_to=...`，默认是 `/login?return_to=...`。
+- `return_to` 只允许本地 `/oauth2/authorize?...` 路径，避免开放重定向。
+- 非浏览器调用方仍会收到 JSON `login_required`，无租户权限返回 `access_denied`。
+
+GoAuth 后端不托管登录/注册 UI。独立前端应调用 `POST /v1/auth/login` 完成登录；该接口返回 token pair，并设置 `goauth_oidc_session` cookie。前端登录成功后把浏览器跳回 `return_to`，继续原始 `/oauth2/authorize` 流程。
+
+## Token Endpoint
+
+支持 `authorization_code` 与 `refresh_token`：
 
 ```http
-GET {authorization_endpoint}?response_type=code
-  &client_id=demo-web
-  &redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fcallback
-  &scope=openid%20profile%20email%20offline_access
-  &state=<state>
-  &nonce=<nonce>
-  &code_challenge=<challenge>
-  &code_challenge_method=S256
-```
-
-GoAuth requires:
-
-- Exact redirect URI match.
-- Scope includes `openid`.
-- PKCE challenge.
-- Active browser SSO session.
-- Active tenant membership, unless the client allows auto provisioning.
-
-If the user is not logged in, GoAuth redirects the browser to `BROWSER_LOGIN_URL`, normally `/login?return_to=...`.
-
-## 5. Handle Callback
-
-Your callback receives:
-
-```text
-http://localhost:3000/auth/callback?code=<code>&state=<state>
-```
-
-Validate `state` before exchanging the code. Reject the callback if it does not match the value stored before redirect.
-
-## 6. Exchange Code For Tokens
-
-Use your backend, not browser JavaScript, to call:
-
-```http
-POST {token_endpoint}
+POST /oauth2/token
 Content-Type: application/x-www-form-urlencoded
 
-grant_type=authorization_code&
-client_id=demo-web&
-client_secret=<client-secret>&
-code=<authorization-code>&
-redirect_uri=http%3A%2F%2Flocalhost%3A3000%2Fauth%2Fcallback&
-code_verifier=<raw-code-verifier>
+grant_type=authorization_code&code=<code>&redirect_uri=<redirect_uri>&code_verifier=<verifier>
 ```
 
-Expected response:
+Client 认证方式：
 
-```json
-{
-  "access_token": "...",
-  "id_token": "...",
-  "refresh_token": "...",
-  "token_type": "Bearer",
-  "expires_in": 900,
-  "scope": "openid profile email offline_access"
-}
-```
+- `client_secret_post`: 表单传 `client_id` 和 `client_secret`。
+- `client_secret_basic`: `Authorization: Basic base64(client_id:client_secret)`，表单里不要再传 client 凭证。
 
-`refresh_token` is returned only when both conditions are true:
+授权码成功响应至少包含 `access_token`、`id_token`、`token_type=Bearer`、`expires_in` 和 `scope`；只有在请求了 `offline_access` 且 client 支持 `refresh_token` 时，才会额外返回 `refresh_token`。授权码只能使用一次，过期或 PKCE 校验失败会返回 `invalid_grant`。
 
-- The authorization request included `offline_access`.
-- The OAuth Client allows the `refresh_token` grant.
-
-## 7. Verify ID Token
-
-Verify:
-
-- Signature algorithm is `RS256`.
-- JWT `kid` exists in `jwks_uri`.
-- `iss` equals discovery `issuer`.
-- `aud` contains your `client_id`.
-- `exp`, `nbf`, and `iat` are valid.
-- `nonce` equals the original login nonce.
-
-Then create your own application session. Do not use the ID Token as a browser session cookie.
-
-## 8. Fetch UserInfo
+Refresh Token 轮换：
 
 ```http
-GET {userinfo_endpoint}
+POST /oauth2/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=refresh_token&refresh_token=<refresh_token>
+```
+
+如果 refresh token 已被撤销、复用检测击中，或对应登录 session 已失效，也会返回 `invalid_grant`。
+
+## JWKS 与 Token 校验
+
+`/oauth2/jwks` 返回 RSA 公钥集合，`alg=RS256`。单 key 模式下 `kid` 来自 `JWT_KEY_ID`；轮换模式下 `JWT_KEYSET_DIR` 内所有 `<kid>.pem` 都会发布为可验证 key，`JWT_ACTIVE_KEY_ID` 指定新 token 使用的 active key。调用方应按 JWT header 的 `kid` 选择 JWKS key，并缓存/刷新 JWKS。如果本地开发未配置持久 key，服务重启会换 key，调用方需要重新拉取 JWKS。
+
+校验 ID Token：
+
+- `iss` 等于 `PUBLIC_ISSUER_URL` 去掉末尾斜杠后的值。
+- `aud` 包含 `client_id`。
+- `exp`、`nbf`、`iat` 在有效窗口内。
+- `nonce` 等于授权请求中的 nonce。
+
+校验 access token 时，还要关注 `scope`、`client_id`、`tid`、`sid`、`ver`。identity-service 自己在受保护接口中还会实时校验用户状态、session 状态和租户成员状态，因此 logout、禁用用户、移除租户成员会立即生效。
+
+## UserInfo
+
+```http
+GET /oauth2/userinfo
 Authorization: Bearer <access_token>
 ```
 
-Scopes control returned fields:
+返回示例：
 
-- `openid`: `sub`
-- `email`: `email`, `email_verified`
-- `profile`: `name`, `picture` when available
-
-## 9. Refresh Tokens
-
-```http
-POST {token_endpoint}
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=refresh_token&
-client_id=demo-web&
-client_secret=<client-secret>&
-refresh_token=<refresh-token>
-```
-
-GoAuth rotates refresh tokens. Always replace the stored refresh token with the new one. If an old refresh token is reused, GoAuth revokes the family.
-
-## 10. Logout
-
-Clear your application session first. Then redirect the browser to GoAuth logout if you also want to end the GoAuth browser SSO session:
-
-```http
-GET {OIDC_ISSUER}/oauth2/logout?client_id=demo-web&post_logout_redirect_uri=<registered-uri>
-```
-
-If the request has an active GoAuth SSO cookie, GoAuth returns a confirmation page before revoking the browser session.
-
-## 11. Permission Checks
-
-For service-side authorization, call GoAuth from a trusted backend with a system-capable token:
-
-```http
-POST /v1/authz/check
-Authorization: Bearer <system-access-token>
-Content-Type: application/json
-
+```json
 {
-  "user_id": 123,
-  "tenant_id": 1,
-  "permission": "project:read"
+  "sub": "123",
+  "email": "user@example.com",
+  "email_verified": true,
+  "name": "User"
 }
 ```
 
-For a user checking their own permissions:
+缺少 `email` 或 `profile` scope 时，对应字段不会返回。
+
+## Introspect
 
 ```http
-GET /v1/tenants/{tenant_id}/my-permissions
-Authorization: Bearer <user-access-token>
+POST /oauth2/introspect
+Content-Type: application/x-www-form-urlencoded
+
+client_id=<client_id>&client_secret=<secret>&token=<token>
 ```
 
-## Common Integration Failures
+可用于服务端校验 access token 或 refresh token 是否仍然有效。返回 `active=false` 表示 token 无效、过期、client 不匹配或实时状态校验失败。
 
-| Symptom | Likely cause |
-| --- | --- |
-| `invalid_request` at authorize | Redirect URI mismatch or missing PKCE. |
-| `invalid_scope` | Client allowed scopes do not include the requested scope. |
-| `login_required` JSON | Non-browser request or missing GoAuth SSO cookie. |
-| `access_denied` | User is not a tenant member and auto provisioning is disabled. |
-| `invalid_grant` at token endpoint | Code expired, reused, wrong redirect URI, or wrong PKCE verifier. |
-| ID Token verification fails | Wrong issuer, stale JWKS cache, or wrong client ID. |
+## Revoke
 
-For endpoint-level details, read [OIDC Integration Details](../../services/identity-service/docs/oidc-integration.md).
+```http
+POST /oauth2/revoke
+Content-Type: application/x-www-form-urlencoded
+
+client_id=<client_id>&client_secret=<secret>&token=<refresh_token>
+```
+
+当前撤销逻辑主要作用于 refresh token。接口对空 token 或不存在 token 也返回成功，便于客户端做幂等退出。
+
+## Logout
+
+```http
+GET /oauth2/logout?client_id=<client_id>&post_logout_redirect_uri=<redirect_uri>
+```
+
+行为：
+
+- 如果请求携带当前 `goauth_oidc_session` cookie，且看起来像浏览器文档导航（例如 `Accept: text/html`、`Sec-Fetch-Mode: navigate` 或 `Sec-Fetch-Dest: document`），服务会先返回确认页，再通过 `POST /oauth2/logout` + CSRF token 完成退出。
+- 其他仍然携带当前 `goauth_oidc_session` cookie 的 `GET /oauth2/logout` 请求会返回 `invalid_request`；这样同站非文档请求也不能直接触发登出。
+- 清理 `goauth_oidc_session` cookie。
+- 如果能从 cookie 或 `session_id` 参数解析出会话，会撤销该 session 下未撤销的 refresh token。
+- 传 `session_id` 时必须和 cookie 中 session 一致。
+- 传 `post_logout_redirect_uri` 时必须提供 `client_id`，并且 redirect URI 必须属于该 client 的已注册 redirect URI。
+
+业务系统自己的 session 也要同步清理，不能只依赖 Goauth logout。
+
+## 发布前端到端回归
+
+仓库提供黑盒脚本用于发布前验证真实部署的 OIDC 主链路。脚本不会读取仓库内的任何 secret，所有测试账号和 OAuth client 凭据都通过环境变量传入：
+
+```powershell
+$env:GOAUTH_BASE_URL="https://auth.example.com"
+$env:GOAUTH_TEST_EMAIL="oidc-smoke@example.com"
+$env:GOAUTH_TEST_PASSWORD="<password>"
+$env:GOAUTH_CLIENT_ID="smoke-client"
+$env:GOAUTH_CLIENT_SECRET="<client-secret>"
+$env:GOAUTH_REDIRECT_URI="https://app.example.com/callback"
+node scripts/oidc-e2e.mjs --check-config
+node scripts/oidc-e2e.mjs
+```
+
+测试 client 需要允许 `authorization_code` 和 `refresh_token` grant，允许 `openid profile email offline_access` scope，并把 `GOAUTH_REDIRECT_URI` 精确加入 redirect URI 列表。脚本会验证 discovery、JWKS、浏览器登录恢复、Authorization Code + PKCE、ID Token 签名和 claims、userinfo、refresh token 轮换、refresh reuse 拒绝、revoke、logout，并覆盖 bad redirect、错误 PKCE、重复 code、错误 client secret 等负向场景。
+
+可选项：
+
+- `GOAUTH_TOKEN_AUTH_METHOD=basic`：测试 `client_secret_basic` client；默认使用 `client_secret_post`。
+- `GOAUTH_SCOPE="openid profile email offline_access"`：覆盖请求 scope。
+- `GOAUTH_SKIP_NEGATIVE=1`：只跑正向链路，适合只读或受限测试环境。
+- `GOAUTH_INSECURE_TLS=1`：允许自签名 TLS，仅限预发环境。

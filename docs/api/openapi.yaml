@@ -1,0 +1,447 @@
+basePath: /
+host: localhost:8080
+info:
+  contact:
+    email: dev@goauth.dev
+    name: GoAuth Team
+    url: https://goauth.dev
+  description: OAuth2 / OpenID Connect identity provider with self-service auth flows.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: https://goauth.dev/terms
+  title: GoAuth Identity Service
+  version: "1.0"
+paths:
+  /.well-known/openid-configuration:
+    get:
+      description: Returns the OpenID Connect discovery document.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      summary: OIDC Discovery
+      tags:
+      - oidc
+  /oauth2/authorize:
+    get:
+      description: Authenticates user and issues authorization code.
+      parameters:
+      - description: OAuth2 client ID
+        in: query
+        name: client_id
+        required: true
+        type: string
+      - description: Redirect URI
+        in: query
+        name: redirect_uri
+        required: true
+        type: string
+      - description: response_type (code)
+        in: query
+        name: response_type
+        required: true
+        type: string
+      - description: Requested scopes
+        in: query
+        name: scope
+        type: string
+      - description: Opaque state
+        in: query
+        name: state
+        type: string
+      produces:
+      - application/json
+      responses:
+        "302":
+          description: Redirect with code
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+      summary: OAuth2 Authorize
+      tags:
+      - oidc
+  /oauth2/jwks:
+    get:
+      description: Returns the public keys used to verify token signatures.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+      summary: JWKS
+      tags:
+      - oidc
+  /oauth2/token:
+    post:
+      consumes:
+      - application/x-www-form-urlencoded
+      description: Issues access/id/refresh tokens for valid authorization codes and
+        refresh tokens.
+      parameters:
+      - description: grant_type (authorization_code or refresh_token)
+        in: formData
+        name: grant_type
+        required: true
+        type: string
+      - description: Authorization code
+        in: formData
+        name: code
+        type: string
+      - description: Redirect URI
+        in: formData
+        name: redirect_uri
+        type: string
+      - description: Refresh token
+        in: formData
+        name: refresh_token
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+      summary: OAuth2 Token
+      tags:
+      - oidc
+  /oauth2/userinfo:
+    get:
+      description: Returns standard OIDC claims for the authenticated user.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: OIDC UserInfo
+      tags:
+      - oidc
+  /v1/auth/email/send-code:
+    post:
+      consumes:
+      - application/json
+      description: Sends a 6-digit verification code for registration or password
+        reset.
+      parameters:
+      - description: Request body
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            purpose:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              sent:
+                type: boolean
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "403":
+          description: registration disabled
+          schema:
+            type: object
+        "429":
+          description: rate limited
+          schema:
+            type: object
+      summary: Send verification code
+      tags:
+      - auth
+  /v1/auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticates with email/password. Returns access token, refresh
+        token, and session info. May require 2FA verification.
+      parameters:
+      - description: Login credentials
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              access_token:
+                type: string
+              email:
+                type: string
+              refresh_token:
+                type: string
+              sid:
+                type: string
+              user_id:
+                format: int64
+                type: integer
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: invalid credentials
+          schema:
+            type: object
+        "423":
+          description: account locked
+          schema:
+            type: object
+      summary: Login
+      tags:
+      - auth
+  /v1/auth/logout:
+    post:
+      consumes:
+      - application/json
+      description: Revokes the specified session. Requires authentication.
+      parameters:
+      - description: Session ID to revoke
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            session_id:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Logout
+      tags:
+      - auth
+  /v1/auth/me:
+    get:
+      description: Returns the authenticated user profile.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              email:
+                type: string
+              sid:
+                type: string
+              user_id:
+                type: string
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      security:
+      - BearerAuth: []
+      summary: Current user
+      tags:
+      - auth
+  /v1/auth/password/forgot:
+    post:
+      consumes:
+      - application/json
+      description: Sends a password reset verification code.
+      parameters:
+      - description: User email
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+      summary: Forgot password
+      tags:
+      - auth
+  /v1/auth/password/reset:
+    post:
+      consumes:
+      - application/json
+      description: Resets password with a valid email verification code.
+      parameters:
+      - description: Reset data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            email:
+              type: string
+            email_code:
+              type: string
+            password:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+      summary: Reset password
+      tags:
+      - auth
+  /v1/auth/refresh:
+    post:
+      consumes:
+      - application/json
+      description: Returns a new access token and refresh token.
+      parameters:
+      - description: Refresh token
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            refresh_token:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              access_token:
+                type: string
+              refresh_token:
+                type: string
+              sid:
+                type: string
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            type: object
+      summary: Refresh token
+      tags:
+      - auth
+  /v1/auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new user account. Requires a valid email verification
+        code obtained via /email/send-code.
+      parameters:
+      - description: Registration data
+        in: body
+        name: body
+        required: true
+        schema:
+          properties:
+            display_name:
+              type: string
+            email:
+              type: string
+            email_code:
+              type: string
+            password:
+              type: string
+            username:
+              type: string
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            properties:
+              email:
+                type: string
+              id:
+                type: integer
+            type: object
+        "400":
+          description: invalid input or email code
+          schema:
+            type: object
+        "403":
+          description: registration disabled
+          schema:
+            type: object
+      summary: Register new user
+      tags:
+      - auth
+securityDefinitions:
+  BearerAuth:
+    description: Type "Bearer" followed by a space and the access token.
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

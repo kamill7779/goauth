@@ -11,6 +11,7 @@ node_modules/
 .kiro/
 .codegraph/
 .reasonix/
+graphify-out/
 
 bin/
 dist/
