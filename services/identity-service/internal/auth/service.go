@@ -212,11 +212,13 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (*store.Use
 		if err := tx.Create(user).Error; err != nil {
 			return err
 		}
-		members, err := s.policy.Apply(ctx, tx, user.ID)
-		if err != nil {
-			return err
+		if s.policy != nil {
+			members, err := s.policy.Apply(ctx, tx, user.ID)
+			if err != nil {
+				return err
+			}
+			provisionedMembers = members
 		}
-		provisionedMembers = members
 		return nil
 	}); err != nil {
 		// GORM doesn't surface driver-specific unique-violation codes uniformly

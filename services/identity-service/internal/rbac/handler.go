@@ -54,6 +54,9 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 
 // check performs a single permission check for a (user, tenant, permission) tuple.
 //
+// NOTE: This endpoint trusts the caller (internal service behind systemMiddleware).
+// No tenant-scope validation is performed on the request body.
+//
 // Call chain: HTTP POST /v1/authz/check → check → service.Can
 func (h *Handler) check(c *gin.Context) {
 	var request struct {
@@ -76,6 +79,9 @@ func (h *Handler) check(c *gin.Context) {
 
 // checkBatch performs multiple permission checks in a single request.
 // Stops on the first error from the service.
+//
+// NOTE: This endpoint trusts the caller (internal service behind systemMiddleware).
+// No tenant-scope validation is performed on the request body.
 //
 // Call chain: HTTP POST /v1/authz/check-batch → checkBatch → service.Can
 func (h *Handler) checkBatch(c *gin.Context) {

@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -110,6 +111,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*store.Invite,
 	if input.TenantID == 0 || input.RoleID == 0 || input.TargetEmail == "" {
 		return nil, fmt.Errorf("tenant_id, role_id, and target_email are required")
 	}
+	if s.privateKey == nil {
+		return nil, errors.New("invite signing key not configured")
+	}
 
 	expiresAt := time.Now().Add(inviteTTL)
 	jti, err := randomHex(16)
@@ -161,11 +165,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*store.Invite,
 		Link:      inviteLink,
 		ExpiryMin: int(inviteTTL.Minutes()),
 	})
-	_ = s.mailer.Send(ctx, mailer.Message{
+	if err := s.mailer.Send(ctx, mailer.Message{
 		To:      input.TargetEmail,
 		Subject: subject,
 		Body:    body,
-	})
+	}); err != nil {
+		slog.Warn("invite email delivery failed", "to", invite.TargetEmail, "error", err)
+	}
 
 	_ = s.audit.Record(ctx, audit.Entry{
 		ActorUserID: input.InviterID,
@@ -192,6 +198,9 @@ type RedeemInput struct {
 func (s *Service) Redeem(ctx context.Context, input RedeemInput) error {
 	if input.Token == "" {
 		return ErrInvalidToken
+	}
+	if s.privateKey == nil {
+		return errors.New("invite signing key not configured")
 	}
 
 	var claims inviteClaims

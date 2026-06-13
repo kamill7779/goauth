@@ -114,10 +114,14 @@ func (h *Handler) me(c *gin.Context) {
 		return
 	}
 
-	isAdmin, err := h.sessionService.IsSystemUser(c.Request.Context(), userID)
-	if err != nil {
-		httpserver.Error(c, http.StatusInternalServerError, err.Error())
-		return
+	var isAdmin bool
+	if h.sessionService != nil {
+		var err error
+		isAdmin, err = h.sessionService.IsSystemUser(c.Request.Context(), userID)
+		if err != nil {
+			httpserver.Error(c, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	displayName := userDisplayName(*user)

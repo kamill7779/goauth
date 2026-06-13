@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/util"
 )
 
 // Handler serves admin HTTP endpoints for tenant and role management.
@@ -67,7 +68,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 //
 // Call chain: HTTP GET /v1/admin/tenants → listTenants → db + tenantPayloads
 func (h *Handler) listTenants(c *gin.Context) {
-	page, pageSize := pagination(c)
+	page, pageSize := util.Pagination(c)
 	query := h.service.DB().WithContext(c.Request.Context()).Model(&store.Tenant{})
 	if search := strings.ToLower(strings.TrimSpace(c.Query("search"))); search != "" {
 		like := "%" + search + "%"
@@ -133,7 +134,7 @@ func (h *Handler) createTenant(c *gin.Context) {
 //
 // Call chain: HTTP PATCH /v1/admin/tenants/:id → updateTenant → service.UpdateTenant + singleTenantPayload
 func (h *Handler) updateTenant(c *gin.Context) {
-	id, err := parseInt64Param(c, "id")
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -161,7 +162,7 @@ func (h *Handler) updateTenant(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/tenants/:id/members → addMember → service.AddMember
 func (h *Handler) addMember(c *gin.Context) {
-	tenantID, err := parseInt64Param(c, "id")
+	tenantID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -191,11 +192,11 @@ func (h *Handler) addMember(c *gin.Context) {
 //
 // Call chain: HTTP DELETE /v1/admin/tenants/:id/members/:user_id → removeMember → service.RemoveMember
 func (h *Handler) removeMember(c *gin.Context) {
-	tenantID, err := parseInt64Param(c, "id")
+	tenantID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
-	userID, err := parseInt64Param(c, "user_id")
+	userID, err := util.ParseInt64Param(c, "user_id")
 	if err != nil {
 		return
 	}
@@ -222,7 +223,7 @@ func (h *Handler) listRoles(c *gin.Context) {
 		tenantID = parsed
 	}
 
-	page, pageSize := pagination(c)
+	page, pageSize := util.Pagination(c)
 	query := h.service.DB().WithContext(c.Request.Context()).Model(&store.Role{})
 	if tenantID != 0 {
 		query = query.Where("tenant_id = ?", tenantID)
@@ -286,7 +287,7 @@ func (h *Handler) createRole(c *gin.Context) {
 //
 // Call chain: HTTP PATCH /v1/admin/roles/:id → updateRole → service.UpdateRole + singleRolePayload
 func (h *Handler) updateRole(c *gin.Context) {
-	roleID, err := parseInt64Param(c, "id")
+	roleID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -314,7 +315,7 @@ func (h *Handler) updateRole(c *gin.Context) {
 //
 // Call chain: HTTP DELETE /v1/admin/roles/:id → deleteRole → service.DeleteRole
 func (h *Handler) deleteRole(c *gin.Context) {
-	roleID, err := parseInt64Param(c, "id")
+	roleID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -330,7 +331,7 @@ func (h *Handler) deleteRole(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/roles/:id/permissions → grantPermissions → service.GrantPermissions
 func (h *Handler) grantPermissions(c *gin.Context) {
-	roleID, err := parseInt64Param(c, "id")
+	roleID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -354,11 +355,11 @@ func (h *Handler) grantPermissions(c *gin.Context) {
 //
 // Call chain: HTTP DELETE /v1/admin/roles/:id/permissions/:permission_id → revokePermission → service.RevokePermission
 func (h *Handler) revokePermission(c *gin.Context) {
-	roleID, err := parseInt64Param(c, "id")
+	roleID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
-	permissionID, err := parseInt64Param(c, "permission_id")
+	permissionID, err := util.ParseInt64Param(c, "permission_id")
 	if err != nil {
 		return
 	}
@@ -374,7 +375,7 @@ func (h *Handler) revokePermission(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/members/:member_id/roles → assignRoles → service.AssignRoles
 func (h *Handler) assignRoles(c *gin.Context) {
-	memberID, err := parseInt64Param(c, "member_id")
+	memberID, err := util.ParseInt64Param(c, "member_id")
 	if err != nil {
 		return
 	}
@@ -398,11 +399,11 @@ func (h *Handler) assignRoles(c *gin.Context) {
 //
 // Call chain: HTTP DELETE /v1/admin/members/:member_id/roles/:role_id → removeRole → service.RemoveRole
 func (h *Handler) removeRole(c *gin.Context) {
-	memberID, err := parseInt64Param(c, "member_id")
+	memberID, err := util.ParseInt64Param(c, "member_id")
 	if err != nil {
 		return
 	}
-	roleID, err := parseInt64Param(c, "role_id")
+	roleID, err := util.ParseInt64Param(c, "role_id")
 	if err != nil {
 		return
 	}
@@ -412,16 +413,6 @@ func (h *Handler) removeRole(c *gin.Context) {
 		return
 	}
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
-}
-
-// parseInt64Param parses a URL path parameter as int64 and writes a 400 error on failure.
-func parseInt64Param(c *gin.Context, name string) (int64, error) {
-	value, err := strconv.ParseInt(c.Param(name), 10, 64)
-	if err != nil {
-		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid " + name)
-		return 0, err
-	}
-	return value, nil
 }
 
 type tenantCountRow struct {
@@ -649,22 +640,6 @@ func (h *Handler) oauthClientCounts(c *gin.Context, tenantIDs []int64) (map[int6
 		result[row.TenantID] = row.Count
 	}
 	return result, nil
-}
-
-// pagination extracts page and page_size query parameters with safe defaults (1-100).
-func pagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.Query("page"))
-	if page < 1 {
-		page = 1
-	}
-	pageSize, _ := strconv.Atoi(c.Query("page_size"))
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-	return page, pageSize
 }
 
 // tenantListOrder returns an ORDER BY clause for tenant listing, defaulting to name ASC.

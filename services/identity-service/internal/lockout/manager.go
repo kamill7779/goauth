@@ -58,20 +58,24 @@ return {0, 0}
 `)
 
 // NewManager creates a lockout Manager with sensible defaults.
+// failureWindow defaults to 30 minutes if 0 is passed.
 //
 // Call chain: auth handler → NewManager (wire) → (Redis client passed in at construction)
-func NewManager(redisClient *redis.Client, threshold int64, duration time.Duration) *Manager {
+func NewManager(redisClient *redis.Client, threshold int64, duration time.Duration, failureWindow time.Duration) *Manager {
 	if threshold <= 0 {
 		threshold = 5
 	}
 	if duration <= 0 {
 		duration = 15 * time.Minute
 	}
+	if failureWindow <= 0 {
+		failureWindow = 30 * time.Minute
+	}
 	return &Manager{
 		redis:         redisClient,
 		threshold:     threshold,
 		duration:      duration,
-		failureWindow: 30 * time.Minute,
+		failureWindow: failureWindow,
 	}
 }
 

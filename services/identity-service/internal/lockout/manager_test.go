@@ -20,7 +20,7 @@ func newTestManager(t *testing.T, threshold int64, duration time.Duration) (*loc
 	t.Cleanup(mr.Close)
 	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return lockout.NewManager(client, threshold, duration), mr
+	return lockout.NewManager(client, threshold, duration, 0), mr
 }
 
 func TestIsLocked_NotLockedInitially(t *testing.T) {

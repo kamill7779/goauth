@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
-	"time"
 
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/store"
@@ -297,45 +296,6 @@ func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 		},
 	})
 	return nil
-}
-
-// revokeFamily sets revoked_at on every non-revoked refresh token in the family.
-func (s *Service) revokeFamily(ctx context.Context, familyID string) error {
-	now := s.now()
-	return s.db.WithContext(ctx).
-		Model(&store.RefreshToken{}).
-		Where("family_id = ? AND revoked_at IS NULL", familyID).
-		Update("revoked_at", now).Error
-}
-
-// revokeLoginSession sets revoked_at on a single login session.
-func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {
-	if sessionID == "" {
-		return nil
-	}
-	now := s.now()
-	return s.db.WithContext(ctx).
-		Model(&store.LoginSession{}).
-		Where("id = ? AND revoked_at IS NULL", sessionID).
-		Update("revoked_at", now).Error
-}
-
-// revokeLoginSessionWithDB locks and revokes a login session within a transaction.
-//
-// Call chain: rejectRefreshTokenReuse → revokeLoginSessionWithDB → DB SELECT FOR UPDATE + UPDATE
-func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, sessionID string, now time.Time) error {
-	if err := db.WithContext(ctx).
-		Clauses(clause.Locking{Strength: "UPDATE"}).
-		Where("id = ?", sessionID).
-		First(&store.LoginSession{}).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		return err
-	}
-	return db.Model(&store.LoginSession{}).
-		Where("id = ? AND revoked_at IS NULL", sessionID).
-		Update("revoked_at", now).Error
 }
 
 // isSQLiteWriteLock detects SQLite "database table is locked" errors so callers

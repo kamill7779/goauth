@@ -298,7 +298,9 @@ func (h *Handler) login(c *gin.Context) {
 		return
 	}
 
-	h.session.SetOIDCAuthorizeCookie(c, result.cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
+	if h.session != nil {
+		h.session.SetOIDCAuthorizeCookie(c, result.cookieValue, int(h.session.OIDCAuthorizeCookieTTL().Seconds()))
+	}
 	httpserver.Success(c, stdhttp.StatusOK, result.pair)
 }
 

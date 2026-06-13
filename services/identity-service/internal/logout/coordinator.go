@@ -39,7 +39,11 @@ type Coordinator struct {
 func NewCoordinator(db *gorm.DB, key *rsa.PrivateKey, issuer, keyID string) *Coordinator {
 	var keyring *jwtkey.Keyring
 	if key != nil {
-		keyring, _ = jwtkey.NewKeyring(keyID, map[string]*rsa.PrivateKey{keyID: key})
+		var err error
+		keyring, err = jwtkey.NewKeyring(keyID, map[string]*rsa.PrivateKey{keyID: key})
+		if err != nil {
+			slog.Warn("failed to create logout keyring", "error", err)
+		}
 	}
 	return NewCoordinatorWithKeyring(db, keyring, issuer)
 }

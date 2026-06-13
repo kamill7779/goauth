@@ -12,6 +12,7 @@ import (
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
 	"goauth/services/identity-service/internal/tenant"
+	"goauth/services/identity-service/internal/util"
 )
 
 // Handler serves admin user management HTTP endpoints: CRUD, bulk operations,
@@ -83,7 +84,7 @@ func (h *Handler) listUsers(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	page, pageSize := pagination(c)
+	page, pageSize := util.Pagination(c)
 	result, err := h.service.ListUsersPage(c.Request.Context(), ListUsersInput{
 		Search:   c.Query("search"),
 		Status:   c.Query("status"),
@@ -134,7 +135,7 @@ func (h *Handler) createUser(c *gin.Context) {
 //
 // Call chain: HTTP PATCH /v1/admin/users/:id → updateUser → service.UpdateUser
 func (h *Handler) updateUser(c *gin.Context) {
-	id, err := parseUserID(c)
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -158,7 +159,7 @@ func (h *Handler) updateUser(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/users/:id/disable → disableUser → service.DisableUser
 func (h *Handler) disableUser(c *gin.Context) {
-	id, err := parseUserID(c)
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -179,7 +180,7 @@ func (h *Handler) disableUser(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/users/:id/enable → enableUser → service.EnableUser
 func (h *Handler) enableUser(c *gin.Context) {
-	id, err := parseUserID(c)
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -196,7 +197,7 @@ func (h *Handler) enableUser(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/users/:id/reset-password → resetPassword → service.ResetPassword
 func (h *Handler) resetPassword(c *gin.Context) {
-	id, err := parseUserID(c)
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -221,7 +222,7 @@ func (h *Handler) resetPassword(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/users/:id/unlock → unlockUser → lockoutManager.Unlock
 func (h *Handler) unlockUser(c *gin.Context) {
-	id, err := parseUserID(c)
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -357,14 +358,7 @@ func (h *Handler) bulkRemoveUsersFromTenant(c *gin.Context) {
 }
 
 // parseUserID parses the :id path parameter as int64 and writes a 400 error on failure.
-func parseUserID(c *gin.Context) (int64, error) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid id")
-		return 0, err
-	}
-	return id, nil
-}
+
 
 // userPayload maps a store.User to the standard API response shape.
 func userPayload(user store.User) gin.H {
@@ -628,21 +622,7 @@ func optionalInt64Query(c *gin.Context, name string) (int64, error) {
 	return value, nil
 }
 
-// pagination extracts page and page_size query parameters with safe defaults (1-100).
-func pagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.Query("page"))
-	if page < 1 {
-		page = 1
-	}
-	pageSize, _ := strconv.Atoi(c.Query("page_size"))
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-	return page, pageSize
-}
+
 
 // joinedOrDash joins non-empty strings with ", ", returning "-" when none are present.
 func joinedOrDash(values []string) string {

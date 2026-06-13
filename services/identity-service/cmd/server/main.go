@@ -275,7 +275,7 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	})
 
 	defaultPolicy := provisioning.NewDefaultMembershipPolicy(cfg.DefaultMemberTenantSlugs)
-	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration)
+	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration, 0)
 	pwPolicy := password.LoadFromConfig(cfg)
 	captchaVerifier := captcha.NewVerifier(captcha.Provider(cfg.CaptchaProvider), cfg.CaptchaSecretKey)
 

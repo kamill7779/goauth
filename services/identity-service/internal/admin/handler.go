@@ -15,6 +15,7 @@ import (
 	httpserver "goauth/services/identity-service/internal/http"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
+	"goauth/services/identity-service/internal/util"
 	"gorm.io/gorm"
 )
 
@@ -181,7 +182,7 @@ func (h *Handler) createPermission(c *gin.Context) {
 //
 // Call chain: HTTP PATCH /v1/admin/permissions/:id → updatePermission → db.Transaction + bumpAllPermissionVersions + recordAudit
 func (h *Handler) updatePermission(c *gin.Context) {
-	id, err := parseInt64Param(c, "id")
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -236,7 +237,7 @@ func (h *Handler) updatePermission(c *gin.Context) {
 //
 // Call chain: HTTP DELETE /v1/admin/permissions/:id → deletePermission → db.Transaction + bumpAllPermissionVersions + recordAudit
 func (h *Handler) deletePermission(c *gin.Context) {
-	id, err := parseInt64Param(c, "id")
+	id, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -261,7 +262,7 @@ func (h *Handler) deletePermission(c *gin.Context) {
 //
 // Call chain: HTTP GET /v1/admin/sessions → listSessions → sessionListQuery + latestRefreshTokensBySession
 func (h *Handler) listSessions(c *gin.Context) {
-	page, pageSize := pagination(c)
+	page, pageSize := util.Pagination(c)
 	now := time.Now()
 
 	countQuery, err := h.sessionListQuery(c, now)
@@ -362,7 +363,7 @@ func (h *Handler) revokeSession(c *gin.Context) {
 //
 // Call chain: HTTP GET /v1/admin/users/:id/sessions → listUserSessions → db.Find refresh tokens
 func (h *Handler) listUserSessions(c *gin.Context) {
-	userID, err := parseInt64Param(c, "id")
+	userID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -409,7 +410,7 @@ func (h *Handler) listUserSessions(c *gin.Context) {
 //
 // Call chain: HTTP POST /v1/admin/users/:id/logout-all → logoutUserSessions → sessionService.LogoutAll + recordAudit
 func (h *Handler) logoutUserSessions(c *gin.Context) {
-	userID, err := parseInt64Param(c, "id")
+	userID, err := util.ParseInt64Param(c, "id")
 	if err != nil {
 		return
 	}
@@ -430,7 +431,7 @@ func (h *Handler) logoutUserSessions(c *gin.Context) {
 //
 // Call chain: HTTP GET /v1/admin/audit-logs → listAuditLogs → db + actorEmails
 func (h *Handler) listAuditLogs(c *gin.Context) {
-	page, pageSize := pagination(c)
+	page, pageSize := util.Pagination(c)
 	query := h.db.WithContext(c.Request.Context()).Model(&store.AuditLog{})
 	if action := strings.TrimSpace(c.Query("action")); action != "" {
 		query = query.Where("action = ?", action)
@@ -618,32 +619,6 @@ func sessionRowStatus(row adminSessionRow, token store.RefreshToken, hasToken, a
 		return "expired"
 	}
 	return "inactive"
-}
-
-// parseInt64Param parses a URL path parameter as int64 and writes a 400 error on failure.
-func parseInt64Param(c *gin.Context, name string) (int64, error) {
-	value, err := strconv.ParseInt(c.Param(name), 10, 64)
-	if err != nil {
-		httpserver.Error(c, http.StatusBadRequest, "invalid " + name)
-		return 0, err
-	}
-	return value, nil
-}
-
-// pagination extracts page and page_size query parameters with safe defaults (1-100).
-func pagination(c *gin.Context) (int, int) {
-	page, _ := strconv.Atoi(c.Query("page"))
-	if page < 1 {
-		page = 1
-	}
-	pageSize, _ := strconv.Atoi(c.Query("page_size"))
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-	return page, pageSize
 }
 
 // bumpAllPermissionVersions increments permission_version on every active tenant

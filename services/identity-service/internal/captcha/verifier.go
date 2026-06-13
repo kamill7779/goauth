@@ -69,8 +69,7 @@ func (v *Verifier) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := strings.TrimSpace(c.GetHeader("X-Captcha-Token"))
 		if token == "" {
-			// Try reading from JSON body without consuming it.
-			// We peek at the raw body via a custom approach.
+		// Fall back to the captcha_token query parameter.
 			token = strings.TrimSpace(c.Query("captcha_token"))
 		}
 		if token == "" {
