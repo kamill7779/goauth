@@ -1,0 +1,58 @@
+{
+  // ── Go + gopls ──
+  "go.toolsManagement.autoUpdate": true,
+  "go.docsTool": "gopls",
+  "go.useLanguageServer": true,
+
+  // Hover: show function signature + doc comment (Javadoc-style)
+  "editor.hover.enabled": true,
+  "editor.hover.delay": 300,
+  "editor.hover.sticky": true,
+
+  // gopls: enable hover with structured/signature info
+  "gopls": {
+    "hoverKind": "FullDocumentation",
+    "usePlaceholders": true,
+    "completionDocumentation": true,
+    "deepCompletion": true,
+    "staticcheck": true,
+
+    // Show call hierarchy and references
+    "symbolMatcher": "FastFuzzy",
+    "symbolStyle": "Full",
+
+    // Formatting
+    "formatting.gofumpt": false,
+    "formatting.local": "goauth/services",
+
+    // Semantic tokens for richer highlighting
+    "semanticTokens": true,
+
+    // Code lens: show references above functions
+    "codelenses": {
+      "gc_details": false,
+      "generate": true,
+      "test": true,
+      "tidy": true,
+      "vendor": false
+    }
+  },
+
+  // On save: auto format + organize imports
+  "[go]": {
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    },
+    "editor.defaultFormatter": "golang.go"
+  },
+
+  // Inlay hints: show parameter names inline
+  "go.inlayHints.assignVariableTypes": true,
+  "go.inlayHints.compositeLiteralFields": true,
+  "go.inlayHints.compositeLiteralTypes": true,
+  "go.inlayHints.constantValues": true,
+  "go.inlayHints.functionTypeParameters": false,
+  "go.inlayHints.parameterNames": true,
+  "go.inlayHints.rangeVariableTypes": true
+}
