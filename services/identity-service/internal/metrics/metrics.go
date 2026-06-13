@@ -23,8 +23,10 @@ var (
 	AccountLockout      prometheus.Counter
 )
 
-// Register initialises and registers all metrics into a dedicated registry.
-// Safe to call multiple times (idempotent via sync.Once pattern).
+// Register initialises and registers all metrics into a dedicated Prometheus registry.
+// Safe to call multiple times (idempotent via sync.Once).
+//
+// Call chain: main → Register → prometheus.NewRegistry / MustRegister
 func Register() {
 	registerOnce.Do(func() {
 		registry = prometheus.NewRegistry()
@@ -70,33 +72,47 @@ func Register() {
 }
 
 // Handler returns an HTTP handler that serves Prometheus metrics.
+//
+// Call chain: router setup → Handler → promhttp.HandlerFor
 func Handler() http.Handler {
 	Register()
 	return handler
 }
 
-// IncLoginSuccess increments the login success counter (noop if not registered).
+// IncLoginSuccess increments the login success counter.
+// Safe to call before Register (no-op if the counter is nil).
+//
+// Call chain: login handler → IncLoginSuccess → prometheus.Counter.Inc
 func IncLoginSuccess() {
 	if LoginSuccess != nil {
 		LoginSuccess.Inc()
 	}
 }
 
-// IncLoginFailure increments the login failure counter (noop if not registered).
+// IncLoginFailure increments the login failure counter.
+// Safe to call before Register (no-op if the counter is nil).
+//
+// Call chain: login handler → IncLoginFailure → prometheus.Counter.Inc
 func IncLoginFailure() {
 	if LoginFailure != nil {
 		LoginFailure.Inc()
 	}
 }
 
-// IncAccountLockout increments the account lockout counter (noop if not registered).
+// IncAccountLockout increments the account lockout counter.
+// Safe to call before Register (no-op if the counter is nil).
+//
+// Call chain: lockout.Manager → IncAccountLockout → prometheus.Counter.Inc
 func IncAccountLockout() {
 	if AccountLockout != nil {
 		AccountLockout.Inc()
 	}
 }
 
-// IncTokenIssued increments the token issued counter for the given grant type.
+// IncTokenIssued increments the token-issued counter for the given grant type.
+// Safe to call before Register (no-op if the counter is nil).
+//
+// Call chain: token endpoint → IncTokenIssued → prometheus.CounterVec.WithLabelValues.Inc
 func IncTokenIssued(grantType string) {
 	if TokenIssued != nil {
 		TokenIssued.WithLabelValues(grantType).Inc()

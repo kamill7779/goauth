@@ -150,7 +150,9 @@ type GitHubOAuthConfig struct {
 	RedirectURI string
 }
 
-// Token returns the token-related sub-config.
+// Token returns the JWT signing and token-lifetime sub-config.
+//
+// Call chain: any service constructor → Config.Token → (no downstream)
 func (c Config) Token() TokenConfig {
 	return TokenConfig{
 		KeyID:              c.JWTKeyID,
@@ -164,7 +166,9 @@ func (c Config) Token() TokenConfig {
 	}
 }
 
-// Mailer returns the mailer sub-config.
+// Mailer returns the mailer (SMTP/console/noop) sub-config.
+//
+// Call chain: main.registerRoutes → Config.Mailer → (no downstream)
 func (c Config) Mailer() MailerConfig {
 	return MailerConfig{
 		Provider: c.MailerProvider,
@@ -180,7 +184,9 @@ func (c Config) Mailer() MailerConfig {
 	}
 }
 
-// Brand returns the branding sub-config.
+// Brand returns the UI branding sub-config.
+//
+// Call chain: mailer/template rendering → Config.Brand → (no downstream)
 func (c Config) Brand() BrandConfig {
 	return BrandConfig{
 		Name:     c.BrandName,
@@ -190,7 +196,9 @@ func (c Config) Brand() BrandConfig {
 	}
 }
 
-// PasswordPolicy returns the password policy sub-config.
+// PasswordPolicy returns the password-complexity policy sub-config.
+//
+// Call chain: password.LoadFromConfig → Config.PasswordPolicy → (no downstream)
 func (c Config) PasswordPolicy() PasswordConfig {
 	return PasswordConfig{
 		MinLength:      c.PasswordMinLength,
@@ -202,7 +210,9 @@ func (c Config) PasswordPolicy() PasswordConfig {
 	}
 }
 
-// Lockout returns the lockout sub-config.
+// Lockout returns the account-lockout threshold and duration sub-config.
+//
+// Call chain: lockout.NewManager → Config.Lockout → (no downstream)
 func (c Config) Lockout() LockoutConfig {
 	return LockoutConfig{
 		Threshold: c.LockoutThreshold,
@@ -210,7 +220,9 @@ func (c Config) Lockout() LockoutConfig {
 	}
 }
 
-// GitHubOAuth returns the GitHub OAuth sub-config.
+// GitHubOAuth returns the GitHub OAuth provider sub-config.
+//
+// Call chain: main.buildServices → Config.GitHubOAuth → (no downstream)
 func (c Config) GitHubOAuth() GitHubOAuthConfig {
 	return GitHubOAuthConfig{
 		Enabled:      c.GitHubOAuthEnabled,
@@ -220,7 +232,10 @@ func (c Config) GitHubOAuth() GitHubOAuthConfig {
 	}
 }
 
-// IsGitHubConfigured returns true when all required GitHub OAuth settings are present.
+// IsGitHubConfigured reports whether every required GitHub OAuth field is populated,
+// so callers can decide whether to register the GitHub IDP routes.
+//
+// Call chain: main.buildServices → Config.IsGitHubConfigured → (no downstream)
 func (c Config) IsGitHubConfigured() bool {
 	return c.GitHubOAuthEnabled &&
 		c.GitHubClientID != "" &&
@@ -228,8 +243,11 @@ func (c Config) IsGitHubConfigured() bool {
 		c.GitHubRedirectURI != ""
 }
 
-// Load reads all configuration from environment variables. Missing variables
-// fall back to safe defaults suitable for local development.
+// Load reads every recognised environment variable and returns a validated Config.
+// Missing variables fall back to safe defaults; invalid values return an error.
+// In production (APP_ENV=production) extra checks reject insecure settings.
+//
+// Call chain: main.run → config.Load → envOrDefault / parseDurationEnv / parseIntEnv / parseBoolEnv / splitCSV / validateCaptchaConfig / validateProductionConfig / configuredEnvKeys
 func Load() (Config, error) {
 	accessTokenTTL, err := parseDurationEnv("ACCESS_TOKEN_TTL", 15*time.Minute)
 	if err != nil {
@@ -409,6 +427,11 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
+// validateCaptchaConfig ensures CAPTCHA_PROVIDER, CAPTCHA_SITE_KEY, and
+// CAPTCHA_SECRET_KEY are either all empty (disabled) or all set to a recognised
+// provider (turnstile/hcaptcha/recaptcha).
+//
+// Call chain: config.Load → validateCaptchaConfig → (no downstream)
 func validateCaptchaConfig(provider, siteKey, secretKey string) error {
 	provider = strings.TrimSpace(provider)
 	siteKey = strings.TrimSpace(siteKey)
@@ -427,6 +450,10 @@ func validateCaptchaConfig(provider, siteKey, secretKey string) error {
 	}
 }
 
+// validateProductionConfig rejects dangerous defaults when APP_ENV=production
+// (e.g. HTTP issuer URL, missing DSN, missing SMTP host).
+//
+// Call chain: config.Load → validateProductionConfig → (no downstream)
 func validateProductionConfig(cfg Config) error {
 	if !strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production") {
 		return nil
@@ -468,6 +495,11 @@ func validateProductionConfig(cfg Config) error {
 	return nil
 }
 
+// EnvConfigured reports whether the named environment variable was explicitly set
+// to a non-empty value during startup. The second return value is false when the
+// key is unknown (not in the EnvDefinitions catalogue).
+//
+// Call chain: runtime config handlers → Config.EnvConfigured → (no downstream)
 func (c Config) EnvConfigured(key string) (bool, bool) {
 	if c.ConfiguredEnv == nil {
 		return false, false
@@ -476,6 +508,9 @@ func (c Config) EnvConfigured(key string) (bool, bool) {
 	return configured, ok
 }
 
+// configuredEnvKeys snapshots every recognised env var as set (true) or absent/empty (false).
+//
+// Call chain: config.Load → configuredEnvKeys → EnvDefinitions
 func configuredEnvKeys() map[string]bool {
 	result := make(map[string]bool, len(EnvDefinitions()))
 	for _, definition := range EnvDefinitions() {
@@ -485,6 +520,9 @@ func configuredEnvKeys() map[string]bool {
 	return result
 }
 
+// envOrDefault returns the trimmed value of the named env var, or fallback when empty.
+//
+// Call chain: config.Load → envOrDefault → os.Getenv
 func envOrDefault(key, fallback string) string {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -493,6 +531,10 @@ func envOrDefault(key, fallback string) string {
 	return value
 }
 
+// defaultCORSAllowCredentials defaults CORS credentials to true unless the origin
+// list contains "*". Wildcard origins are incompatible with credentialed requests.
+//
+// Call chain: config.Load → defaultCORSAllowCredentials → (no downstream)
 func defaultCORSAllowCredentials(origins []string) bool {
 	if len(origins) == 0 {
 		return false
@@ -505,6 +547,9 @@ func defaultCORSAllowCredentials(origins []string) bool {
 	return true
 }
 
+// parseDurationEnv reads key, parses it as a time.Duration, or returns fallback.
+//
+// Call chain: config.Load → parseDurationEnv → os.Getenv / time.ParseDuration
 func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -518,6 +563,9 @@ func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error)
 	return parsed, nil
 }
 
+// parseIntEnv reads key, parses it as an int, or returns fallback.
+//
+// Call chain: config.Load → parseIntEnv → os.Getenv / strconv.Atoi
 func parseIntEnv(key string, fallback int) (int, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -531,6 +579,9 @@ func parseIntEnv(key string, fallback int) (int, error) {
 	return parsed, nil
 }
 
+// parseInt64Env reads key, parses it as an int64, or returns fallback.
+//
+// Call chain: config.Load → parseInt64Env → os.Getenv / strconv.ParseInt
 func parseInt64Env(key string, fallback int64) (int64, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -544,6 +595,9 @@ func parseInt64Env(key string, fallback int64) (int64, error) {
 	return parsed, nil
 }
 
+// parseBoolEnv reads key, parses it as a bool, or returns fallback.
+//
+// Call chain: config.Load → parseBoolEnv → os.Getenv / strconv.ParseBool
 func parseBoolEnv(key string, fallback bool) (bool, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -557,6 +611,10 @@ func parseBoolEnv(key string, fallback bool) (bool, error) {
 	return parsed, nil
 }
 
+// splitCSV splits a comma-separated string into trimmed, non-empty parts.
+// An empty input returns nil.
+//
+// Call chain: config.Load → splitCSV → (no downstream)
 func splitCSV(value string) []string {
 	if strings.TrimSpace(value) == "" {
 		return nil
@@ -573,6 +631,9 @@ func splitCSV(value string) []string {
 	return result
 }
 
+// splitUniqueCSV splits a CSV string and deduplicates entries (case-sensitive).
+//
+// Call chain: config.Load → splitUniqueCSV → splitCSV
 func splitUniqueCSV(value string) []string {
 	parts := splitCSV(value)
 	if len(parts) == 0 {
@@ -591,6 +652,9 @@ func splitUniqueCSV(value string) []string {
 	return result
 }
 
+// splitUniqueLowerCSV splits a CSV string, lowercases every part, and deduplicates.
+//
+// Call chain: config.Load → splitUniqueLowerCSV → splitCSV
 func splitUniqueLowerCSV(value string) []string {
 	parts := splitCSV(value)
 	if len(parts) == 0 {

@@ -41,10 +41,15 @@ type OAuthStatePayload struct {
 	UserID   int64  `json:"user_id,omitempty"`
 }
 
+// NewExchangeStore creates an ExchangeStore backed by Redis.
 func NewExchangeStore(client *redis.Client) *ExchangeStore {
 	return &ExchangeStore{client: client}
 }
 
+// Save stores an ExchangePayload under a random single-use exchange code in
+// Redis with a 60-second TTL. Returns the one-time code.
+//
+// Call chain: handler.callback → Save → Redis SET
 func (s *ExchangeStore) Save(ctx context.Context, payload ExchangePayload) (string, error) {
 	if s == nil || s.client == nil {
 		return "", errors.New("exchange store redis client is nil")
@@ -63,6 +68,10 @@ func (s *ExchangeStore) Save(ctx context.Context, payload ExchangePayload) (stri
 	return code, nil
 }
 
+// Consume atomically reads and deletes the exchange payload identified by
+// code. Returns ErrExchangeCodeInvalid when the code is missing or expired.
+//
+// Call chain: handler.exchange → Consume → Redis GETDEL
 func (s *ExchangeStore) Consume(ctx context.Context, code string) (*ExchangePayload, error) {
 	if s == nil || s.client == nil {
 		return nil, errors.New("exchange store redis client is nil")
@@ -87,6 +96,10 @@ func (s *ExchangeStore) Consume(ctx context.Context, code string) (*ExchangePayl
 	return &payload, nil
 }
 
+// SaveOAuthState persists the OAuth state payload in Redis with a 10-minute
+// TTL so the callback can recover flow parameters.
+//
+// Call chain: handler.start / startAccountBind → SaveOAuthState → Redis SET
 func (s *ExchangeStore) SaveOAuthState(ctx context.Context, state string, payload OAuthStatePayload) error {
 	if s == nil || s.client == nil {
 		return errors.New("exchange store redis client is nil")
@@ -102,6 +115,10 @@ func (s *ExchangeStore) SaveOAuthState(ctx context.Context, state string, payloa
 	return s.client.Set(ctx, cache.ExternalOAuthStateKey(state), data, externalOAuthStateTTL).Err()
 }
 
+// ConsumeOAuthState atomically reads and deletes the OAuth state payload.
+// Returns an empty payload when the state is not found (not an error).
+//
+// Call chain: handler.callback → ConsumeOAuthState → Redis GETDEL
 func (s *ExchangeStore) ConsumeOAuthState(ctx context.Context, state string) (*OAuthStatePayload, error) {
 	if s == nil || s.client == nil {
 		return nil, errors.New("exchange store redis client is nil")
@@ -124,6 +141,10 @@ func (s *ExchangeStore) ConsumeOAuthState(ctx context.Context, state string) (*O
 	return &payload, nil
 }
 
+// randomExchangeCode generates a base64url-encoded 256-bit random value for
+// use as a one-time exchange code.
+//
+// Call chain: Save → randomExchangeCode
 func randomExchangeCode() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {

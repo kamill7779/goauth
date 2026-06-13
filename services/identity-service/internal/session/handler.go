@@ -18,6 +18,9 @@ type Handler struct {
 	rateLimiter *ratelimit.Service
 }
 
+// NewHandler creates a session Handler with a single RSA public key for token verification.
+//
+// Call chain: main → NewHandler → register routes on gin.Engine
 func NewHandler(service *Service, publicKey *rsa.PublicKey, rateLimiter *ratelimit.Service) *Handler {
 	return &Handler{
 		service:     service,
@@ -26,6 +29,9 @@ func NewHandler(service *Service, publicKey *rsa.PublicKey, rateLimiter *ratelim
 	}
 }
 
+// NewHandlerWithKeyring creates a session Handler backed by a keyring for key rotation.
+//
+// Call chain: main → NewHandlerWithKeyring → register routes on gin.Engine
 func NewHandlerWithKeyring(service *Service, keyring *jwtkey.Keyring, rateLimiter *ratelimit.Service) *Handler {
 	return &Handler{
 		service:     service,
@@ -34,6 +40,9 @@ func NewHandlerWithKeyring(service *Service, keyring *jwtkey.Keyring, rateLimite
 	}
 }
 
+// RegisterRoutes mounts the session endpoints on the given router group.
+//
+// Call chain: main → RegisterRoutes → AuthMiddleware → handler methods
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/refresh", h.refresh)
 	auth := AuthMiddleware(h.service, h.publicKey)
@@ -51,6 +60,8 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 }
 
 // refresh exchanges a valid refresh token for a new token pair.
+//
+// Call chain: POST /refresh → refresh → service.Refresh → IssueOIDCAuthorizeCookieBySessionID
 //
 // @Summary      Refresh token
 // @Description  Returns a new access token and refresh token.
@@ -89,9 +100,9 @@ func (h *Handler) refresh(c *gin.Context) {
 }
 
 // logout revokes a single session.
-
 //
-
+// Call chain: POST /logout → logout → service.Logout → repo.RevokeSession + coordinator.Notify
+//
 // @Summary      Logout
 // @Description  Revokes the specified session. Requires authentication.
 // @Tags         auth
@@ -133,6 +144,9 @@ func (h *Handler) logout(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"revoked": true})
 }
 
+// logoutAll revokes every active session for the authenticated user.
+//
+// Call chain: POST /logout-all → logoutAll → service.LogoutAll → repo + token_version bump
 func (h *Handler) logoutAll(c *gin.Context) {
 	var request struct {
 		UserID *int64 `json:"user_id"`
@@ -165,9 +179,9 @@ func (h *Handler) logoutAll(c *gin.Context) {
 }
 
 // me returns the current authenticated user.
-
 //
-
+// Call chain: GET /me → me → ClaimsFromContext → JSON response
+//
 // @Summary      Current user
 // @Description  Returns the authenticated user profile.
 // @Tags         auth

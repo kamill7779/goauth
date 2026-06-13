@@ -1,11 +1,12 @@
 // Package idp integrates third-party identity providers (currently GitHub)
 // for external login, identity binding, and code exchange.
 //
-// Call chain:
+// Call-chain overview:
 //
-//	handler.startGitHubLogin → GitHub OAuth redirect
-//	handler.handleGitHubCallback → service.Authenticate → provider.ExchangeCode
-//	handler.exchangeGitHubCode   → service.ExchangeCode → provider.ExchangeCode
+//	HTTP handlers → Service.Authenticate / Bind / Unbind → Provider.ExchangeCode → Provider.FetchProfile
+//	                Service.Authenticate → DB (find-or-create user + identity)
+//	                Service.Bind          → DB (link identity to existing user)
+//	                Service.Unbind        → DB (remove identity, ensure login method remains)
 package idp
 
 import (
@@ -94,6 +95,8 @@ func NewService(db *gorm.DB, providers ...Provider) *Service {
 	}
 }
 
+// SetRegistrationMode sets who can register via external identity providers.
+//
 // Deprecated: use SetDependencies.
 func (s *Service) SetRegistrationMode(mode string) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
@@ -103,11 +106,15 @@ func (s *Service) SetRegistrationMode(mode string) {
 	s.registrationMode = mode
 }
 
+// SetDefaultMembershipPolicy sets the default-membership provisioner.
+//
 // Deprecated: use SetDependencies.
 func (s *Service) SetDefaultMembershipPolicy(policy *provisioning.DefaultMembershipPolicy) {
 	s.policy = policy
 }
 
+// SetAuditRecorder sets the audit recorder; nil resets to no-op.
+//
 // Deprecated: use SetDependencies.
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	if recorder == nil {
@@ -117,6 +124,9 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	s.audit = recorder
 }
 
+// Start builds the OAuth authorization URL for the given provider.
+//
+// Call chain: handler → Start → provider.AuthCodeURL
 func (s *Service) Start(providerSlug, state string, opts AuthCodeOptions) (string, error) {
 	provider, err := s.provider(providerSlug)
 	if err != nil {
@@ -133,10 +143,18 @@ func (s *Service) Authenticate(ctx context.Context, providerSlug, code, redirect
 	return s.authenticate(ctx, providerSlug, code, redirectURI, "")
 }
 
+// AuthenticateWithState delegates to authenticate, forwarding the OAuth state
+// parameter through to the provider's code-exchange step.
+//
+// Call chain: handler.callback → AuthenticateWithState → authenticate
 func (s *Service) AuthenticateWithState(ctx context.Context, providerSlug, code, redirectURI, state string) (*AuthenticateResult, error) {
 	return s.authenticate(ctx, providerSlug, code, redirectURI, state)
 }
 
+// authenticate resolves the provider profile, finds or creates the local user
+// and identity record in a single transaction, and records audit events.
+//
+// Call chain: Authenticate / AuthenticateWithState → authenticate → resolveProfile → findIdentity / findUserByEmail → DB (create user + identity)
 func (s *Service) authenticate(ctx context.Context, providerSlug, code, redirectURI, state string) (*AuthenticateResult, error) {
 	provider, profile, token, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, state)
 	if err != nil {
@@ -288,6 +306,10 @@ func (s *Service) Bind(ctx context.Context, userID int64, providerSlug, code, re
 	return s.BindWithState(ctx, userID, providerSlug, code, redirectURI, "")
 }
 
+// BindWithState links an external identity to the given user, forwarding the
+// OAuth state to the code-exchange step.
+//
+// Call chain: handler.bind / completeBindCallback → BindWithState → resolveProfile → findIdentity → DB (create identity)
 func (s *Service) BindWithState(ctx context.Context, userID int64, providerSlug, code, redirectURI, state string) (*store.UserIdentity, error) {
 	provider, profile, _, err := s.resolveProfile(ctx, providerSlug, code, redirectURI, state)
 	if err != nil {
@@ -339,6 +361,10 @@ func (s *Service) BindWithState(ctx context.Context, userID int64, providerSlug,
 	return identity, nil
 }
 
+// Unbind removes an external identity from a user, first checking that at
+// least one login method (password or another identity) remains.
+//
+// Call chain: handler.unbind / unbindAccountProvider → Unbind → DB (delete identity, verify login methods)
 func (s *Service) Unbind(ctx context.Context, userID int64, providerSlug string) error {
 	providerSlug = strings.ToLower(strings.TrimSpace(providerSlug))
 	var identity store.UserIdentity
@@ -386,6 +412,11 @@ func (s *Service) Unbind(ctx context.Context, userID int64, providerSlug string)
 	return nil
 }
 
+// ensureUnbindLeavesLoginMethod checks that removing the current identity
+// won't leave the user without any login method. If the user has a local
+// password or more than one identity the check passes.
+//
+// Call chain: Unbind → ensureUnbindLeavesLoginMethod → DB (count identities)
 func ensureUnbindLeavesLoginMethod(ctx context.Context, tx *gorm.DB, userID int64) error {
 	var user store.User
 	query := tx.WithContext(ctx)
@@ -409,6 +440,10 @@ func ensureUnbindLeavesLoginMethod(ctx context.Context, tx *gorm.DB, userID int6
 	return nil
 }
 
+// ensureUserHasLoginMethod verifies the user still has at least one usable
+// login method after an identity is deleted.
+//
+// Call chain: Unbind → ensureUserHasLoginMethod → DB (check password / count identities)
 func ensureUserHasLoginMethod(ctx context.Context, tx *gorm.DB, userID int64) error {
 	var user store.User
 	if err := tx.WithContext(ctx).Where("id = ?", userID).First(&user).Error; err != nil {
@@ -428,11 +463,15 @@ func ensureUserHasLoginMethod(ctx context.Context, tx *gorm.DB, userID int64) er
 	return nil
 }
 
+// hasUsableLocalPassword returns true when hash is a real (non-external) password hash.
 func hasUsableLocalPassword(hash string) bool {
 	hash = strings.TrimSpace(hash)
 	return hash != "" && !strings.HasPrefix(hash, "!external:")
 }
 
+// ListIdentities returns all external identities linked to the given user.
+//
+// Call chain: handler.listIdentities → ListIdentities → DB (query identities)
 func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]store.UserIdentity, error) {
 	var identities []store.UserIdentity
 	if err := s.db.WithContext(ctx).
@@ -444,6 +483,10 @@ func (s *Service) ListIdentities(ctx context.Context, userID int64) ([]store.Use
 	return identities, nil
 }
 
+// resolveProfile looks up the provider, exchanges the code for a token, and
+// fetches the external user profile.
+//
+// Call chain: authenticate / BindWithState → resolveProfile → provider.ExchangeCode → provider.FetchProfile
 func (s *Service) resolveProfile(ctx context.Context, providerSlug, code, redirectURI, state string) (Provider, *ExternalProfile, *TokenSet, error) {
 	provider, err := s.provider(providerSlug)
 	if err != nil {
@@ -467,6 +510,10 @@ func (s *Service) resolveProfile(ctx context.Context, providerSlug, code, redire
 	return provider, profile, token, nil
 }
 
+// provider returns the registered Provider for the given slug or
+// ErrProviderNotFound.
+//
+// Call chain: Start / resolveProfile → provider
 func (s *Service) provider(providerSlug string) (Provider, error) {
 	provider, ok := s.providers[providerSlug]
 	if !ok {
@@ -475,6 +522,10 @@ func (s *Service) provider(providerSlug string) (Provider, error) {
 	return provider, nil
 }
 
+// findIdentity queries for an external identity by provider + provider user ID.
+// Returns nil, nil when not found.
+//
+// Call chain: authenticate / BindWithState → findIdentity → DB (query identity)
 func (s *Service) findIdentity(ctx context.Context, providerSlug, providerUserID string) (*store.UserIdentity, error) {
 	var identity store.UserIdentity
 	err := s.db.WithContext(ctx).
@@ -489,6 +540,10 @@ func (s *Service) findIdentity(ctx context.Context, providerSlug, providerUserID
 	return &identity, nil
 }
 
+// findIdentityForUserAndProvider queries for a specific user's identity with
+// the given provider.
+//
+// Call chain: authenticate / BindWithState → findIdentityForUserAndProvider → DB
 func (s *Service) findIdentityForUserAndProvider(ctx context.Context, db *gorm.DB, userID int64, providerSlug string) (*store.UserIdentity, error) {
 	var identity store.UserIdentity
 	err := db.WithContext(ctx).
@@ -503,6 +558,9 @@ func (s *Service) findIdentityForUserAndProvider(ctx context.Context, db *gorm.D
 	return &identity, nil
 }
 
+// findUserByID loads a user by primary key.
+//
+// Call chain: authenticate / BindWithState / Unbind → findUserByID → DB
 func (s *Service) findUserByID(ctx context.Context, userID int64) (*store.User, error) {
 	var user store.User
 	if err := s.db.WithContext(ctx).First(&user, userID).Error; err != nil {
@@ -511,6 +569,9 @@ func (s *Service) findUserByID(ctx context.Context, userID int64) (*store.User, 
 	return &user, nil
 }
 
+// findUserByEmail looks up a user by email; returns nil, nil when not found.
+//
+// Call chain: authenticate → findUserByEmail → DB
 func (s *Service) findUserByEmail(ctx context.Context, email string) (*store.User, error) {
 	var user store.User
 	err := s.db.WithContext(ctx).Where("email = ?", email).First(&user).Error
@@ -523,6 +584,10 @@ func (s *Service) findUserByEmail(ctx context.Context, email string) (*store.Use
 	return &user, nil
 }
 
+// newIdentity constructs a UserIdentity record from a profile, normalising
+// email and trimming whitespace.
+//
+// Call chain: authenticate / BindWithState → newIdentity
 func newIdentity(userID int64, providerSlug string, profile *ExternalProfile) *store.UserIdentity {
 	return &store.UserIdentity{
 		UserID:         userID,
@@ -536,6 +601,10 @@ func newIdentity(userID int64, providerSlug string, profile *ExternalProfile) *s
 	}
 }
 
+// chooseDisplayName picks the best display name from a profile: DisplayName >
+// Username > fallback.
+//
+// Call chain: newIdentity / authenticate → chooseDisplayName
 func chooseDisplayName(profile *ExternalProfile, fallback string) string {
 	if profile == nil {
 		return fallback

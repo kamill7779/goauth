@@ -21,6 +21,8 @@ var ErrProtectedUser = errors.New("protected user cannot be disabled")
 
 var protectedRoleCodes = []string{"root", "system-admin", "system_admin"}
 
+// Service implements admin user management: CRUD, pagination with filters,
+// password reset, enable/disable, and bootstrap admin provisioning.
 type Service struct {
 	db    *gorm.DB
 	audit audit.Recorder
@@ -69,6 +71,9 @@ type BootstrapAdminInput struct {
 	RoleCode    string
 }
 
+// NewService creates a user Service. Falls back to a no-op audit recorder when nil.
+//
+// Call chain: main → NewService → Service
 func NewService(db *gorm.DB, recorder audit.Recorder) *Service {
 	if recorder == nil {
 		recorder = audit.NoopRecorder{}
@@ -79,12 +84,19 @@ func NewService(db *gorm.DB, recorder audit.Recorder) *Service {
 	}
 }
 
+// ListUsers returns all users ordered by ID ascending.
+//
+// Call chain: (external consumers) → ListUsers → db.Find
 func (s *Service) ListUsers(ctx context.Context) ([]store.User, error) {
 	var users []store.User
 	err := s.db.WithContext(ctx).Order("id ASC").Find(&users).Error
 	return users, err
 }
 
+// ListUsersPage returns a paginated, filtered user list with search, status,
+// tenant, and role filters.
+//
+// Call chain: listUsers → ListUsersPage → db query with dynamic filters
 func (s *Service) ListUsersPage(ctx context.Context, input ListUsersInput) (*ListUsersResult, error) {
 	page := input.Page
 	if page < 1 {
@@ -146,6 +158,9 @@ func (s *Service) ListUsersPage(ctx context.Context, input ListUsersInput) (*Lis
 	}, nil
 }
 
+// GetUser returns a single user by primary key.
+//
+// Call chain: various handlers/services → GetUser → db.First
 func (s *Service) GetUser(ctx context.Context, id int64) (*store.User, error) {
 	var user store.User
 	if err := s.db.WithContext(ctx).First(&user, id).Error; err != nil {
@@ -154,6 +169,10 @@ func (s *Service) GetUser(ctx context.Context, id int64) (*store.User, error) {
 	return &user, nil
 }
 
+// CreateUser provisions a new user: hashes the password, derives username from
+// email when omitted, normalizes all fields, and writes an audit entry.
+//
+// Call chain: createUser → CreateUser → auth.HashPassword + db.Create + audit.Record
 func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*store.User, error) {
 	hash, err := auth.HashPassword(input.Password)
 	if err != nil {
@@ -206,6 +225,9 @@ func (s *Service) CreateUser(ctx context.Context, input CreateUserInput) (*store
 	return record, nil
 }
 
+// UpdateUser patch-updates a user's email, nickname, display name, and avatar.
+//
+// Call chain: updateUser → UpdateUser → db.Updates + GetUser + audit.Record
 func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInput) (*store.User, error) {
 	updates := map[string]any{}
 	if input.Email != nil {
@@ -248,6 +270,10 @@ func (s *Service) UpdateUser(ctx context.Context, id int64, input UpdateUserInpu
 	return record, nil
 }
 
+// DisableUser sets a user's status to disabled after confirming they are not
+// a protected user (system admin).
+//
+// Call chain: disableUser/bulkDisableUsers → DisableUser → isProtectedUser + db.Update + audit.Record
 func (s *Service) DisableUser(ctx context.Context, id int64) error {
 	protected, err := s.isProtectedUser(ctx, id)
 	if err != nil {
@@ -268,6 +294,9 @@ func (s *Service) DisableUser(ctx context.Context, id int64) error {
 	})
 }
 
+// EnableUser sets a user's status back to active.
+//
+// Call chain: enableUser/bulkEnableUsers → EnableUser → db.Update + audit.Record
 func (s *Service) EnableUser(ctx context.Context, id int64) error {
 	if err := s.db.WithContext(ctx).Model(&store.User{}).Where("id = ?", id).Update("status", store.UserStatusActive).Error; err != nil {
 		return err
@@ -280,6 +309,10 @@ func (s *Service) EnableUser(ctx context.Context, id int64) error {
 	})
 }
 
+// ResetPassword hashes and persists a new password, incrementing token_version
+// to invalidate existing sessions.
+//
+// Call chain: resetPassword → ResetPassword → auth.HashPassword + db.Updates + audit.Record
 func (s *Service) ResetPassword(ctx context.Context, id int64, password string) error {
 	hash, err := auth.HashPassword(password)
 	if err != nil {
@@ -486,6 +519,10 @@ func (s *Service) MarkSystemUser(ctx context.Context, userID int64, roleCode str
 	})
 }
 
+// isProtectedUser returns true when the user holds a system role or a role with
+// a protected code (root, system-admin, system_admin) in an active tenant.
+//
+// Call chain: DisableUser → isProtectedUser → db query across tenant_members, member_roles, roles
 func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
 	var count int64
 	err := s.db.WithContext(ctx).
@@ -504,10 +541,12 @@ func (s *Service) isProtectedUser(ctx context.Context, id int64) (bool, error) {
 	return count > 0, nil
 }
 
+// normalizeEmail delegates to identity.NormalizeEmail for consistent casing.
 func normalizeEmail(email string) string {
 	return identity.NormalizeEmail(email)
 }
 
+// userListOrder returns an ORDER BY clause for the given sort parameter, defaulting to created_at DESC.
 func userListOrder(sort string) string {
 	switch strings.TrimSpace(sort) {
 	case "username_asc":

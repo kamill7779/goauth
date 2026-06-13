@@ -23,10 +23,15 @@ const (
 	passwordResetRateLimitWindow = 10 * time.Minute
 )
 
+// SetRateLimiter injects a rate-limit service for the auth handler.
 func (h *Handler) SetRateLimiter(limiter *ratelimit.Service) {
 	h.rateLimiter = limiter
 }
 
+// allowJSONRateLimit checks the rate limit and writes a JSON error response if
+// exceeded. Returns true when the request may proceed.
+//
+// Call chain: handler methods → allowJSONRateLimit → rateLimiter.Allow
 func (h *Handler) allowJSONRateLimit(c *gin.Context, scope, key string, limit int64, window time.Duration) bool {
 	if h.rateLimiter == nil {
 		return true
@@ -46,6 +51,7 @@ func (h *Handler) allowJSONRateLimit(c *gin.Context, scope, key string, limit in
 	return false
 }
 
+// rateLimitKey builds a composite key from the client IP and optional identity parts.
 func rateLimitKey(c *gin.Context, identityParts ...string) string {
 	parts := make([]string, 0, len(identityParts)+1)
 	ip := strings.TrimSpace(c.ClientIP())
@@ -63,6 +69,7 @@ func rateLimitKey(c *gin.Context, identityParts ...string) string {
 }
 
 
+// rateLimitEmailCodeKey builds a rate-limit key that includes the purpose and email.
 func rateLimitEmailCodeKey(c *gin.Context, purpose, email string) string {
 	return fmt.Sprintf("%s|%s", strings.TrimSpace(strings.ToLower(purpose)), rateLimitKey(c, email))
 }

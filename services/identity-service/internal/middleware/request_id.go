@@ -27,6 +27,9 @@ func RequestID() gin.HandlerFunc {
 	}
 }
 
+// newRequestID generates a 16-byte random hex string suitable as a request identifier.
+//
+// Call chain: middleware.RequestID → newRequestID → crypto/rand.Read
 func newRequestID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)

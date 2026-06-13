@@ -1,3 +1,8 @@
+// Package rbac serves HTTP endpoints for permission checks and retrieving
+// the current user's permissions within a tenant.
+//
+// The /v1/authz/check and /v1/authz/check-batch endpoints are internal
+// (system middleware) used by other services for authorization decisions.
 package rbac
 
 import (
@@ -9,12 +14,16 @@ import (
 	"goauth/services/identity-service/internal/session"
 )
 
+// Handler serves RBAC HTTP endpoints for permission checks.
 type Handler struct {
 	service          *Service
 	authMiddleware   gin.HandlerFunc
 	systemMiddleware gin.HandlerFunc
 }
 
+// NewHandler creates an RBAC Handler with injected service and middleware.
+//
+// Call chain: main → NewHandler → Handler
 func NewHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFunc) *Handler {
 	return &Handler{
 		service:          service,
@@ -23,6 +32,10 @@ func NewHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFu
 	}
 }
 
+// RegisterRoutes mounts RBAC endpoints: /v1/authz/check and /v1/authz/check-batch
+// (system-gated) and /v1/tenants/:tenant_id/my-permissions (auth-gated).
+//
+// Call chain: main → router setup → RegisterRoutes → gin router
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	v1 := router.Group("/v1")
 	if h.authMiddleware != nil {
@@ -39,6 +52,9 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	v1.GET("/tenants/:tenant_id/my-permissions", h.myPermissions)
 }
 
+// check performs a single permission check for a (user, tenant, permission) tuple.
+//
+// Call chain: HTTP POST /v1/authz/check → check → service.Can
 func (h *Handler) check(c *gin.Context) {
 	var request struct {
 		UserID     int64  `json:"user_id"`
@@ -58,6 +74,10 @@ func (h *Handler) check(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"allowed": allowed})
 }
 
+// checkBatch performs multiple permission checks in a single request.
+// Stops on the first error from the service.
+//
+// Call chain: HTTP POST /v1/authz/check-batch → checkBatch → service.Can
 func (h *Handler) checkBatch(c *gin.Context) {
 	var request struct {
 		UserID      int64    `json:"user_id"`
@@ -81,6 +101,10 @@ func (h *Handler) checkBatch(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"results": results})
 }
 
+// myPermissions returns the authenticated user's effective permissions for a
+// tenant, enforcing that the JWT tenant matches the requested tenant.
+//
+// Call chain: HTTP GET /v1/tenants/:tenant_id/my-permissions → myPermissions → session.ClaimsFromContext + service.ListPermissions
 func (h *Handler) myPermissions(c *gin.Context) {
 	claims, ok := session.ClaimsFromContext(c)
 	if !ok {

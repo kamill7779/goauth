@@ -21,6 +21,8 @@ const (
 )
 
 // NormalizeEmail trims and lowercases an email address.
+//
+// Call chain: registration/login handler → NormalizeEmail → strings.TrimSpace / strings.ToLower
 func NormalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }
@@ -28,7 +30,9 @@ func NormalizeEmail(email string) string {
 // NormalizeUsername trims, lowercases, strips leading/trailing dashes and
 // underscores, and rejects characters outside [a-z0-9_-]. It enforces the
 // public input length of 3–32, which does NOT apply to backfill generation.
-// That path can use sanitiseUsernameToken or NormalizeBackfillUsername directly.
+// That path can use sanitizeUsernameToken or NormalizeBackfillUsername directly.
+//
+// Call chain: registration handler → NormalizeUsername → sanitizeUsernameToken
 func NormalizeUsername(username string) (string, error) {
 	s, err := sanitizeUsernameToken(username)
 	if err != nil {
@@ -46,6 +50,8 @@ func NormalizeUsername(username string) (string, error) {
 // NormalizeBackfillUsername is like NormalizeUsername but accepts up to 64
 // characters (the column width). It is intended for migration and store-level
 // usage only — public inputs must go through NormalizeUsername.
+//
+// Call chain: migration / backfill → NormalizeBackfillUsername → sanitizeUsernameToken
 func NormalizeBackfillUsername(username string) (string, error) {
 	s, err := sanitizeUsernameToken(username)
 	if err != nil {
@@ -62,6 +68,8 @@ func NormalizeBackfillUsername(username string) (string, error) {
 
 // NormalizeNickname trims the value. If the result is empty, fallback is
 // returned unmodified.
+//
+// Call chain: profile handler → NormalizeNickname → strings.TrimSpace
 func NormalizeNickname(nickname, fallback string) string {
 	v := strings.TrimSpace(nickname)
 	if v == "" {
@@ -74,6 +82,8 @@ func NormalizeNickname(nickname, fallback string) string {
 // local-part. Characters outside [a-z0-9_-] are folded into a single dash.
 // Leading/trailing dashes and underscores are removed. The result is empty
 // when the sanitised length is < 3.
+//
+// Call chain: registration handler → UsernameFromEmail → strings.Builder (pure)
 func UsernameFromEmail(email string) string {
 	email = strings.TrimSpace(email)
 	at := strings.Index(email, "@")
@@ -111,6 +121,8 @@ func UsernameFromEmail(email string) string {
 
 // IsUsernameLikeIdentifier reports whether identifier looks like a username
 // (does not contain '@') rather than an email. Empty strings return false.
+//
+// Call chain: login handler → IsUsernameLikeIdentifier → strings.Contains
 func IsUsernameLikeIdentifier(identifier string) bool {
 	if identifier == "" {
 		return false
@@ -120,6 +132,10 @@ func IsUsernameLikeIdentifier(identifier string) bool {
 
 // ----- internal helpers -----
 
+// sanitizeUsernameToken validates that raw contains only [a-z0-9_-] and trims
+// leading/trailing punctuation.
+//
+// Call chain: NormalizeUsername / NormalizeBackfillUsername → sanitizeUsernameToken
 func sanitizeUsernameToken(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	raw = strings.ToLower(raw)

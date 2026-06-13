@@ -45,6 +45,10 @@ type Provider struct {
 	httpClient   *http.Client
 }
 
+// New creates a GitHub Provider with default endpoints and scopes when not
+// specified. If no HTTP client is given, http.DefaultClient is used.
+//
+// Call chain: wire (DI) → New → registers provider in Service.providers
 func New(cfg Config) *Provider {
 	scopes := cfg.Scopes
 	if len(scopes) == 0 {
@@ -81,14 +85,20 @@ func New(cfg Config) *Provider {
 	}
 }
 
+// Slug returns the provider identifier.
 func (p *Provider) Slug() string {
 	return "github"
 }
 
+// DisplayName returns the human-readable provider name.
 func (p *Provider) DisplayName() string {
 	return "GitHub"
 }
 
+// AuthCodeURL constructs the GitHub OAuth authorize endpoint URL with the
+// configured client ID, scopes, state, and optional redirect URI.
+//
+// Call chain: service.Start → AuthCodeURL
 func (p *Provider) AuthCodeURL(state string, opts idp.AuthCodeOptions) (string, error) {
 	authURL, err := url.Parse(p.authorizeURL)
 	if err != nil {
@@ -111,6 +121,10 @@ func (p *Provider) AuthCodeURL(state string, opts idp.AuthCodeOptions) (string, 
 	return authURL.String(), nil
 }
 
+// ExchangeCode exchanges the OAuth authorization code for an access token via
+// GitHub's token endpoint. The state parameter is accepted but unused by GitHub.
+//
+// Call chain: service.resolveProfile → ExchangeCode → GitHub POST /login/oauth/access_token
 func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI string, _ string) (*idp.TokenSet, error) {
 	redirectURI = strings.TrimSpace(redirectURI)
 	if redirectURI == "" {
@@ -155,6 +169,10 @@ func (p *Provider) ExchangeCode(ctx context.Context, code string, redirectURI st
 	return &token, nil
 }
 
+// FetchProfile retrieves the GitHub user and their email list, resolving the
+// best verified email via resolveEmail.
+//
+// Call chain: service.resolveProfile → FetchProfile → getJSON(/user) → getJSON(/user/emails) → resolveEmail
 func (p *Provider) FetchProfile(ctx context.Context, token *idp.TokenSet) (*idp.ExternalProfile, error) {
 	if token == nil || strings.TrimSpace(token.AccessToken) == "" {
 		return nil, errors.New("missing access token")
@@ -197,6 +215,10 @@ func (p *Provider) FetchProfile(ctx context.Context, token *idp.TokenSet) (*idp.
 	}, nil
 }
 
+// getJSON performs an authenticated GET to the GitHub API and decodes the
+// JSON response into target.
+//
+// Call chain: FetchProfile → getJSON → http.Client.Do
 func (p *Provider) getJSON(ctx context.Context, accessToken, path string, target any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.apiBaseURL+path, nil)
 	if err != nil {
@@ -221,6 +243,11 @@ func (p *Provider) getJSON(ctx context.Context, accessToken, path string, target
 	return json.NewDecoder(response.Body).Decode(target)
 }
 
+// resolveEmail selects the best email from the GitHub profile and email list.
+// Priority: matching visible email > primary+verified > any verified >
+// primary > first in list.
+//
+// Call chain: FetchProfile → resolveEmail
 func resolveEmail(visibleEmail string, emails []struct {
 	Email    string `json:"email"`
 	Primary  bool   `json:"primary"`

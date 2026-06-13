@@ -14,6 +14,8 @@ import (
 	"goauth/services/identity-service/internal/tenant"
 )
 
+// Handler serves admin user management HTTP endpoints: CRUD, bulk operations,
+// password reset, lockout control, and enable/disable.
 type Handler struct {
 	service          *Service
 	tenantService    *tenant.Service
@@ -23,6 +25,9 @@ type Handler struct {
 	systemMiddleware gin.HandlerFunc
 }
 
+// NewHandler creates a user Handler with constructor-injected collaborators.
+//
+// Call chain: main → NewHandler → Handler
 func NewHandler(service *Service, tenantService *tenant.Service, sessionService *session.Service, authMiddleware, systemMiddleware gin.HandlerFunc, lockoutManager *lockout.Manager) *Handler {
 	return &Handler{
 		service:          service,
@@ -34,11 +39,15 @@ func NewHandler(service *Service, tenantService *tenant.Service, sessionService 
 	}
 }
 
-// Deprecated: use constructor injection.
+// SetLockoutManager is deprecated; inject the lockout manager via NewHandler instead.
 func (h *Handler) SetLockoutManager(m *lockout.Manager) {
 	h.lockoutManager = m
 }
 
+// RegisterRoutes mounts user admin endpoints under /v1/admin with auth and
+// system middleware when configured.
+//
+// Call chain: main → router setup → RegisterRoutes → gin router
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin := router.Group("/v1/admin")
 	if h.authMiddleware != nil {
@@ -62,6 +71,9 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.POST("/users/:id/unlock", h.unlockUser)
 }
 
+// listUsers returns a paginated, filtered user list with tenant/role enrichment.
+//
+// Call chain: HTTP GET /v1/admin/users → listUsers → service.ListUsersPage + userListPayloads
 func (h *Handler) listUsers(c *gin.Context) {
 	tenantID, err := optionalInt64Query(c, "tenant_id")
 	if err != nil {
@@ -99,6 +111,9 @@ func (h *Handler) listUsers(c *gin.Context) {
 	})
 }
 
+// createUser creates a user from JSON body.
+//
+// Call chain: HTTP POST /v1/admin/users → createUser → service.CreateUser
 func (h *Handler) createUser(c *gin.Context) {
 	var request CreateUserInput
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -115,6 +130,9 @@ func (h *Handler) createUser(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusCreated, userPayload(*user))
 }
 
+// updateUser patch-updates a user by ID from JSON body.
+//
+// Call chain: HTTP PATCH /v1/admin/users/:id → updateUser → service.UpdateUser
 func (h *Handler) updateUser(c *gin.Context) {
 	id, err := parseUserID(c)
 	if err != nil {
@@ -136,6 +154,9 @@ func (h *Handler) updateUser(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, userPayload(*user))
 }
 
+// disableUser sets a user's status to disabled. Protected users are rejected.
+//
+// Call chain: HTTP POST /v1/admin/users/:id/disable → disableUser → service.DisableUser
 func (h *Handler) disableUser(c *gin.Context) {
 	id, err := parseUserID(c)
 	if err != nil {
@@ -154,6 +175,9 @@ func (h *Handler) disableUser(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"disabled": true})
 }
 
+// enableUser sets a user's status back to active.
+//
+// Call chain: HTTP POST /v1/admin/users/:id/enable → enableUser → service.EnableUser
 func (h *Handler) enableUser(c *gin.Context) {
 	id, err := parseUserID(c)
 	if err != nil {
@@ -168,6 +192,9 @@ func (h *Handler) enableUser(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"enabled": true})
 }
 
+// resetPassword sets a new password for a user (admin-initiated).
+//
+// Call chain: HTTP POST /v1/admin/users/:id/reset-password → resetPassword → service.ResetPassword
 func (h *Handler) resetPassword(c *gin.Context) {
 	id, err := parseUserID(c)
 	if err != nil {
@@ -190,6 +217,9 @@ func (h *Handler) resetPassword(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"reset": true})
 }
 
+// unlockUser clears lockout state for a user. No-op when lockout manager is nil.
+//
+// Call chain: HTTP POST /v1/admin/users/:id/unlock → unlockUser → lockoutManager.Unlock
 func (h *Handler) unlockUser(c *gin.Context) {
 	id, err := parseUserID(c)
 	if err != nil {
@@ -206,6 +236,9 @@ func (h *Handler) unlockUser(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"unlocked": true})
 }
 
+// bulkDisableUsers disables multiple users, checking each for protected status first.
+//
+// Call chain: HTTP POST /v1/admin/users/bulk-disable → bulkDisableUsers → service.isProtectedUser + service.DisableUser
 func (h *Handler) bulkDisableUsers(c *gin.Context) {
 	userIDs, ok := h.bulkUserIDs(c)
 	if !ok {
@@ -235,6 +268,9 @@ func (h *Handler) bulkDisableUsers(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated_count": len(userIDs)})
 }
 
+// bulkEnableUsers enables multiple users.
+//
+// Call chain: HTTP POST /v1/admin/users/bulk-enable → bulkEnableUsers → service.EnableUser
 func (h *Handler) bulkEnableUsers(c *gin.Context) {
 	userIDs, ok := h.bulkUserIDs(c)
 	if !ok {
@@ -249,6 +285,9 @@ func (h *Handler) bulkEnableUsers(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated_count": len(userIDs)})
 }
 
+// bulkLogoutUsers revokes all sessions for multiple users.
+//
+// Call chain: HTTP POST /v1/admin/users/bulk-logout → bulkLogoutUsers → sessionService.LogoutAll
 func (h *Handler) bulkLogoutUsers(c *gin.Context) {
 	userIDs, ok := h.bulkUserIDs(c)
 	if !ok {
@@ -267,6 +306,9 @@ func (h *Handler) bulkLogoutUsers(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"revoked_count": len(userIDs)})
 }
 
+// bulkAddUsersToTenant adds multiple users as members of a tenant.
+//
+// Call chain: HTTP POST /v1/admin/users/bulk-add-to-tenant → bulkAddUsersToTenant → tenantService.AddMember
 func (h *Handler) bulkAddUsersToTenant(c *gin.Context) {
 	request, ok := h.bulkTenantRequest(c)
 	if !ok {
@@ -293,6 +335,9 @@ func (h *Handler) bulkAddUsersToTenant(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated_count": len(request.UserIDs)})
 }
 
+// bulkRemoveUsersFromTenant removes multiple users from a tenant.
+//
+// Call chain: HTTP POST /v1/admin/users/bulk-remove-from-tenant → bulkRemoveUsersFromTenant → tenantService.RemoveMember
 func (h *Handler) bulkRemoveUsersFromTenant(c *gin.Context) {
 	request, ok := h.bulkTenantRequest(c)
 	if !ok {
@@ -311,6 +356,7 @@ func (h *Handler) bulkRemoveUsersFromTenant(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated_count": len(request.UserIDs)})
 }
 
+// parseUserID parses the :id path parameter as int64 and writes a 400 error on failure.
 func parseUserID(c *gin.Context) (int64, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -320,6 +366,7 @@ func parseUserID(c *gin.Context) (int64, error) {
 	return id, nil
 }
 
+// userPayload maps a store.User to the standard API response shape.
 func userPayload(user store.User) gin.H {
 	return gin.H{
 		"id":             user.ID,
@@ -357,6 +404,10 @@ type membershipRow struct {
 	RoleCode     string
 }
 
+// userListPayloads enriches a list of users with membership, tenant, role, and
+// last-login data for the list endpoint.
+//
+// Call chain: listUsers → userListPayloads → userMemberships + userLastLogins
 func (h *Handler) userListPayloads(c *gin.Context, users []store.User) ([]gin.H, error) {
 	if len(users) == 0 {
 		return []gin.H{}, nil
@@ -407,6 +458,9 @@ func (h *Handler) userListPayloads(c *gin.Context, users []store.User) ([]gin.H,
 	return items, nil
 }
 
+// userMemberships returns tenant memberships with roles for a set of user IDs.
+//
+// Call chain: userListPayloads → userMemberships → db raw SQL join
 func (h *Handler) userMemberships(c *gin.Context, userIDs []int64) (map[int64][]gin.H, error) {
 	var rows []membershipRow
 	if err := h.service.db.WithContext(c.Request.Context()).
@@ -476,6 +530,9 @@ func (h *Handler) userMemberships(c *gin.Context, userIDs []int64) (map[int64][]
 	return result, nil
 }
 
+// userLastLogins returns the most recent login timestamp for each user ID.
+//
+// Call chain: userListPayloads → userLastLogins → db raw SQL
 func (h *Handler) userLastLogins(c *gin.Context, userIDs []int64) (map[int64]string, error) {
 	rows, err := h.service.db.WithContext(c.Request.Context()).
 		Raw("SELECT user_id, MAX(created_at) AS last_login FROM refresh_tokens WHERE user_id IN ? GROUP BY user_id", userIDs).
@@ -497,6 +554,9 @@ func (h *Handler) userLastLogins(c *gin.Context, userIDs []int64) (map[int64]str
 	return result, rows.Err()
 }
 
+// bulkUserIDs decodes and validates a bulkUserRequest body, returning deduplicated user IDs.
+//
+// Call chain: bulk* handlers → bulkUserIDs → normalizeUserIDs
 func (h *Handler) bulkUserIDs(c *gin.Context) ([]int64, bool) {
 	var request bulkUserRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -507,6 +567,9 @@ func (h *Handler) bulkUserIDs(c *gin.Context) ([]int64, bool) {
 	return userIDs, ok
 }
 
+// bulkTenantRequest decodes and validates a bulkTenantUserRequest body.
+//
+// Call chain: bulkAddUsersToTenant/bulkRemoveUsersFromTenant → bulkTenantRequest → normalizeUserIDs
 func (h *Handler) bulkTenantRequest(c *gin.Context) (bulkTenantUserRequest, bool) {
 	var request bulkTenantUserRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -525,6 +588,7 @@ func (h *Handler) bulkTenantRequest(c *gin.Context) (bulkTenantUserRequest, bool
 	return request, true
 }
 
+// normalizeUserIDs deduplicates and validates a list of user IDs (positive, ≤100, non-empty).
 func normalizeUserIDs(c *gin.Context, raw []int64) ([]int64, bool) {
 	seen := map[int64]struct{}{}
 	userIDs := make([]int64, 0, len(raw))
@@ -550,6 +614,7 @@ func normalizeUserIDs(c *gin.Context, raw []int64) ([]int64, bool) {
 	return userIDs, true
 }
 
+// optionalInt64Query parses a query parameter as int64; returns 0 if empty.
 func optionalInt64Query(c *gin.Context, name string) (int64, error) {
 	raw := strings.TrimSpace(c.Query(name))
 	if raw == "" {
@@ -563,6 +628,7 @@ func optionalInt64Query(c *gin.Context, name string) (int64, error) {
 	return value, nil
 }
 
+// pagination extracts page and page_size query parameters with safe defaults (1-100).
 func pagination(c *gin.Context) (int, int) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	if page < 1 {
@@ -578,6 +644,7 @@ func pagination(c *gin.Context) (int, int) {
 	return page, pageSize
 }
 
+// joinedOrDash joins non-empty strings with ", ", returning "-" when none are present.
 func joinedOrDash(values []string) string {
 	clean := make([]string, 0, len(values))
 	for _, value := range values {
@@ -592,11 +659,13 @@ func joinedOrDash(values []string) string {
 	return strings.Join(clean, ", ")
 }
 
+// stringFromGinH extracts a string value from a gin.H map, defaulting to "".
 func stringFromGinH(item gin.H, key string) string {
 	value, _ := item[key].(string)
 	return value
 }
 
+// formatSQLTime converts a time.Time, string, or []byte to RFC3339 format.
 func formatSQLTime(value any) string {
 	switch typed := value.(type) {
 	case time.Time:

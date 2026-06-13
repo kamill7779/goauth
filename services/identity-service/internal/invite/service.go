@@ -391,11 +391,15 @@ func (s *Service) Revoke(ctx context.Context, inviteID int64) error {
 	return nil
 }
 
+// hashToken returns a hex-encoded SHA-256 hash of the token string.
 func hashToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(h[:])
 }
 
+// randomHex returns n random bytes hex-encoded.
+//
+// Call chain: Create → randomHex (for JWT jti)
 func randomHex(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -404,6 +408,10 @@ func randomHex(n int) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// isSQLiteWriteLock returns true when err describes a SQLite "database is
+// locked" condition, used for retry logic.
+//
+// Call chain: Redeem (retry loop) → isSQLiteWriteLock
 func isSQLiteWriteLock(err error) bool {
 	if err == nil {
 		return false

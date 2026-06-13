@@ -13,14 +13,20 @@ type PublicConfigHandler struct {
 	cfg config.Config
 }
 
+// NewPublicConfigHandler creates a handler that exposes non-sensitive runtime
+// configuration to unauthenticated clients (issuer URL, registration mode, etc.).
 func NewPublicConfigHandler(cfg config.Config) *PublicConfigHandler {
 	return &PublicConfigHandler{cfg: cfg}
 }
 
+// RegisterRoutes mounts the public-config endpoint.
 func (h *PublicConfigHandler) RegisterRoutes(router gin.IRoutes) {
 	router.GET("/public-config", h.get)
 }
 
+// get returns the public configuration as JSON.
+//
+// Call chain: GET /public-config → get → config values
 func (h *PublicConfigHandler) get(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"issuer_url": strings.TrimSpace(h.cfg.PublicIssuerURL),
@@ -56,6 +62,7 @@ func (h *PublicConfigHandler) get(c *gin.Context) {
 	})
 }
 
+// externalProviders returns the list of configured external IdP providers.
 func (h *PublicConfigHandler) externalProviders() []gin.H {
 	if !h.cfg.IsGitHubConfigured() {
 		return []gin.H{}
@@ -70,6 +77,7 @@ func (h *PublicConfigHandler) externalProviders() []gin.H {
 }
 
 
+// publicCaptchaProvider returns the CAPTCHA provider name when CAPTCHA is enabled.
 func publicCaptchaProvider(cfg config.Config) string {
 	if !publicCaptchaEnabled(cfg) {
 		return ""
@@ -77,6 +85,7 @@ func publicCaptchaProvider(cfg config.Config) string {
 	return cfg.CaptchaProvider
 }
 
+// publicCaptchaSiteKey returns the CAPTCHA site key when CAPTCHA is enabled.
 func publicCaptchaSiteKey(cfg config.Config) string {
 	if !publicCaptchaEnabled(cfg) {
 		return ""
@@ -84,6 +93,7 @@ func publicCaptchaSiteKey(cfg config.Config) string {
 	return cfg.CaptchaSiteKey
 }
 
+// publicCaptchaEnabled reports whether CAPTCHA is fully configured.
 func publicCaptchaEnabled(cfg config.Config) bool {
 	return strings.TrimSpace(cfg.CaptchaProvider) != "" &&
 		strings.TrimSpace(cfg.CaptchaSiteKey) != "" &&

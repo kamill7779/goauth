@@ -32,6 +32,9 @@ type CreateClientInput struct {
 
 var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// CreateClient validates input, hashes the secret, and persists a new OAuth2 client.
+//
+// Call chain: POST /v1/admin/oauth-clients → AdminHandler.createClient → CreateClient → DB Create
 func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*store.OAuthClient, error) {
 	clientID := strings.TrimSpace(input.ClientID)
 	if clientID == "" || strings.TrimSpace(input.ClientSecret) == "" {
@@ -112,12 +115,16 @@ func (s *Service) CreateClient(ctx context.Context, input CreateClientInput) (*s
 	return client, nil
 }
 
+// ListClients returns all OAuth2 clients ordered by ID.
 func (s *Service) ListClients(ctx context.Context) ([]store.OAuthClient, error) {
 	var clients []store.OAuthClient
 	err := s.db.WithContext(ctx).Order("id ASC").Find(&clients).Error
 	return clients, err
 }
 
+// UpdateClientStatus sets the client's status (active or disabled).
+//
+// Call chain: PATCH /v1/admin/oauth-clients/:id/status → AdminHandler.updateClientStatus → UpdateClientStatus → DB Update
 func (s *Service) UpdateClientStatus(ctx context.Context, clientID, status string) (*store.OAuthClient, error) {
 	clientID = strings.TrimSpace(clientID)
 	status = strings.TrimSpace(status)
@@ -152,6 +159,10 @@ func (s *Service) UpdateClientStatus(ctx context.Context, clientID, status strin
 	return client, nil
 }
 
+// RotateClientSecret generates a new secret, updates the hash, and returns the
+// plaintext secret for one-time display.
+//
+// Call chain: POST /v1/admin/oauth-clients/:id/rotate-secret → AdminHandler.rotateClientSecret → RotateClientSecret → DB Update
 func (s *Service) RotateClientSecret(ctx context.Context, clientID string) (*store.OAuthClient, string, error) {
 	clientID = strings.TrimSpace(clientID)
 	if clientID == "" {
@@ -190,6 +201,9 @@ func (s *Service) RotateClientSecret(ctx context.Context, clientID string) (*sto
 	return client, secret, nil
 }
 
+// loadClient fetches a single OAuth2 client by client_id.
+//
+// Call chain: authenticateClient / authorize / token → loadClient → DB query
 func (s *Service) loadClient(ctx context.Context, clientID string) (*store.OAuthClient, error) {
 	var client store.OAuthClient
 	if err := s.db.WithContext(ctx).Where("client_id = ?", strings.TrimSpace(clientID)).First(&client).Error; err != nil {
@@ -198,6 +212,10 @@ func (s *Service) loadClient(ctx context.Context, clientID string) (*store.OAuth
 	return &client, nil
 }
 
+// authenticateClient validates client credentials (ID + secret) and checks the
+// client is active.
+//
+// Call chain: authenticateClientFromRequest → authenticateClient → loadClient + CheckPassword
 func (s *Service) authenticateClient(ctx context.Context, clientID, clientSecret string) (*store.OAuthClient, error) {
 	client, err := s.loadClient(ctx, clientID)
 	if err != nil {
@@ -232,6 +250,8 @@ func (s *Service) validateRedirectURI(client *store.OAuthClient, redirectURI str
 	return false
 }
 
+// validateScope checks that every requested scope is in the client's allowed list
+// and that "openid" is present.
 func (s *Service) validateScope(client *store.OAuthClient, scope string) error {
 	allowedScopes, err := decodeStringSlice(client.AllowedScopes)
 	if err != nil {
@@ -311,6 +331,7 @@ func (s *Service) authenticateClientFromRequest(c *gin.Context) (*store.OAuthCli
 	return client, nil
 }
 
+// splitScope splits a space-delimited scope string into individual values.
 func splitScope(scope string) []string {
 	if strings.TrimSpace(scope) == "" {
 		return nil
@@ -318,6 +339,7 @@ func splitScope(scope string) []string {
 	return strings.Fields(scope)
 }
 
+// supportsGrantType checks whether the client is configured for the given grant type.
 func supportsGrantType(client *store.OAuthClient, grantType string) bool {
 	grantTypes, err := decodeStringSlice(client.GrantTypes)
 	if err != nil {
@@ -331,6 +353,7 @@ func supportsGrantType(client *store.OAuthClient, grantType string) bool {
 	return false
 }
 
+// isSupportedGrantType reports whether the given grant type is known.
 func isSupportedGrantType(value string) bool {
 	switch strings.TrimSpace(value) {
 	case "authorization_code", "refresh_token":
@@ -340,6 +363,7 @@ func isSupportedGrantType(value string) bool {
 	}
 }
 
+// isSupportedTokenEndpointAuthMethod reports whether the auth method is known.
 func isSupportedTokenEndpointAuthMethod(value string) bool {
 	switch value {
 	case authMethodClientSecretBasic, authMethodClientSecretPost:
@@ -349,6 +373,7 @@ func isSupportedTokenEndpointAuthMethod(value string) bool {
 	}
 }
 
+// parseBasicAuthHeader decodes a Basic auth header into client_id:client_secret.
 func parseBasicAuthHeader(header string) (string, string, bool) {
 	header = strings.TrimSpace(header)
 	if len(header) < len("Basic ") || !strings.EqualFold(header[:len("Basic ")], "Basic ") {
@@ -366,6 +391,7 @@ func parseBasicAuthHeader(header string) (string, string, bool) {
 	return username, password, true
 }
 
+// encodeStringSlice marshals a string slice to datatypes.JSON.
 func encodeStringSlice(values []string) (datatypes.JSON, error) {
 	bytes, err := json.Marshal(values)
 	if err != nil {
@@ -374,6 +400,7 @@ func encodeStringSlice(values []string) (datatypes.JSON, error) {
 	return datatypes.JSON(bytes), nil
 }
 
+// decodeStringSlice unmarshals a datatypes.JSON value into a string slice.
 func decodeStringSlice(value datatypes.JSON) ([]string, error) {
 	if len(value) == 0 {
 		return nil, nil
@@ -385,10 +412,12 @@ func decodeStringSlice(value datatypes.JSON) ([]string, error) {
 	return result, nil
 }
 
+// oauthError writes an OAuth2-standard JSON error response.
 func oauthError(c *gin.Context, status int, code string) {
 	httpserver.Error(c, status, code)
 }
 
+// noContentOrJSON returns HTTP 200 with no body, satisfying RFC 7009 revocation.
 func noContentOrJSON(c *gin.Context) {
 	c.Status(http.StatusOK)
 }

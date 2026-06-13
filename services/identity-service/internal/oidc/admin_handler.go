@@ -16,6 +16,7 @@ type AdminHandler struct {
 	systemMiddleware gin.HandlerFunc
 }
 
+// NewAdminHandler creates an OIDC admin handler with auth and system middleware.
 func NewAdminHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFunc) *AdminHandler {
 	return &AdminHandler{
 		service:          service,
@@ -24,6 +25,9 @@ func NewAdminHandler(service *Service, authMiddleware, systemMiddleware gin.Hand
 	}
 }
 
+// RegisterRoutes mounts admin OAuth client endpoints under /v1/admin.
+//
+// Call chain: main → RegisterRoutes → auth/system middleware → CRUD handlers
 func (h *AdminHandler) RegisterRoutes(router *gin.Engine) {
 	admin := router.Group("/v1/admin")
 	if h.authMiddleware != nil {
@@ -39,6 +43,9 @@ func (h *AdminHandler) RegisterRoutes(router *gin.Engine) {
 	admin.POST("/oauth-clients/:client_id/rotate-secret", h.rotateClientSecret)
 }
 
+// listClients returns all configured OAuth2 clients.
+//
+// Call chain: GET /v1/admin/oauth-clients → listClients → service.ListClients
 func (h *AdminHandler) listClients(c *gin.Context) {
 	clients, err := h.service.ListClients(c.Request.Context())
 	if err != nil {
@@ -58,6 +65,9 @@ func (h *AdminHandler) listClients(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"oauth_clients": items})
 }
 
+// createClient creates a new OAuth2 client from the request body.
+//
+// Call chain: POST /v1/admin/oauth-clients → createClient → service.CreateClient
 func (h *AdminHandler) createClient(c *gin.Context) {
 	var request CreateClientInput
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -79,6 +89,9 @@ func (h *AdminHandler) createClient(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusCreated, payload)
 }
 
+// updateClientStatus enables or disables an OAuth2 client.
+//
+// Call chain: PATCH /v1/admin/oauth-clients/:client_id/status → updateClientStatus → service.UpdateClientStatus
 func (h *AdminHandler) updateClientStatus(c *gin.Context) {
 	var request struct {
 		Status string `json:"status"`
@@ -106,6 +119,9 @@ func (h *AdminHandler) updateClientStatus(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, payload)
 }
 
+// rotateClientSecret generates a new secret for an OAuth2 client.
+//
+// Call chain: POST /v1/admin/oauth-clients/:client_id/rotate-secret → rotateClientSecret → service.RotateClientSecret
 func (h *AdminHandler) rotateClientSecret(c *gin.Context) {
 	client, secret, err := h.service.RotateClientSecret(c.Request.Context(), c.Param("client_id"))
 	if err != nil {
@@ -126,6 +142,9 @@ func (h *AdminHandler) rotateClientSecret(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, payload)
 }
 
+// oauthClientPayload converts a store.OAuthClient into a JSON-safe gin.H map.
+//
+// Call chain: admin handler methods → oauthClientPayload → decodeStringSlice
 func oauthClientPayload(client store.OAuthClient) (gin.H, error) {
 	redirectURIs, err := decodeStringSlice(client.RedirectURIs)
 	if err != nil {

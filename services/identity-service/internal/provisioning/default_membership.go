@@ -19,14 +19,22 @@ import (
 
 var ErrDefaultTenantNotFound = errors.New("default member tenant not found")
 
+// DefaultMembershipPolicy adds new users to a configured set of tenants at registration time.
 type DefaultMembershipPolicy struct {
 	tenantSlugs []string
 }
 
+// NewDefaultMembershipPolicy returns a policy that assigns membership in the given tenants.
+//
+// Call chain: wire → NewDefaultMembershipPolicy → normalizeSlugs
 func NewDefaultMembershipPolicy(tenantSlugs []string) *DefaultMembershipPolicy {
 	return &DefaultMembershipPolicy{tenantSlugs: normalizeSlugs(tenantSlugs)}
 }
 
+// Apply inserts tenant-member rows for every configured tenant slug, skipping duplicates.
+// Returns the newly-created memberships (idempotent via ON CONFLICT DO NOTHING).
+//
+// Call chain: registration handler → Apply → gorm.DB.Create (ON CONFLICT DO NOTHING)
 func (p *DefaultMembershipPolicy) Apply(ctx context.Context, db *gorm.DB, userID int64) ([]store.TenantMember, error) {
 	if p == nil || len(p.tenantSlugs) == 0 || userID == 0 {
 		return nil, nil
@@ -75,6 +83,9 @@ func (p *DefaultMembershipPolicy) Apply(ctx context.Context, db *gorm.DB, userID
 	return created, nil
 }
 
+// RecordMembershipAudits writes an audit entry for each newly-created tenant membership.
+//
+// Call chain: registration handler → RecordMembershipAudits → audit.Recorder.Record
 func RecordMembershipAudits(ctx context.Context, recorder audit.Recorder, members []store.TenantMember) error {
 	if recorder == nil {
 		recorder = audit.NoopRecorder{}
@@ -97,6 +108,9 @@ func RecordMembershipAudits(ctx context.Context, recorder audit.Recorder, member
 	return nil
 }
 
+// normalizeSlugs deduplicates, trims whitespace, and drops empty entries.
+//
+// Call chain: NewDefaultMembershipPolicy → normalizeSlugs
 func normalizeSlugs(slugs []string) []string {
 	if len(slugs) == 0 {
 		return nil

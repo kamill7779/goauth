@@ -131,6 +131,8 @@ func (s *Service) DB() *gorm.DB { return s.db }
 // SendEmailCode generates a 6-digit code, stores it in Redis with a TTL,
 // and dispatches it via the configured mailer. Returns the code for test
 // convenience; callers must not expose it beyond the mailer.
+//
+// Call chain: handler.sendCode / handler.forgotPassword → SendEmailCode → Redis SET + mailer.Send
 func (s *Service) SendEmailCode(ctx context.Context, purpose, email string) (string, error) {
 	purpose, err := normalizeEmailCodePurpose(purpose)
 	if err != nil {
@@ -333,6 +335,9 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*store.User, err
 	return &user, nil
 }
 
+// lookupUserByEmail resolves a user by their normalized email address.
+//
+// Call chain: Login → lookupUserByEmail → repo.FindByEmail
 func (s *Service) lookupUserByEmail(ctx context.Context, email string) (store.User, error) {
 	user, err := s.users.FindByEmail(ctx, email)
 	if err != nil {
@@ -341,6 +346,9 @@ func (s *Service) lookupUserByEmail(ctx context.Context, email string) (store.Us
 	return *user, nil
 }
 
+// lookupUserByUsername normalizes the raw input then resolves by username.
+//
+// Call chain: Login → lookupUserByUsername → NormalizeUsername + repo.FindByUsername
 func (s *Service) lookupUserByUsername(ctx context.Context, raw string) (store.User, error) {
 	username, err := identity.NormalizeUsername(raw)
 	if err != nil {
@@ -353,6 +361,7 @@ func (s *Service) lookupUserByUsername(ctx context.Context, raw string) (store.U
 	return *user, nil
 }
 
+// loginIdentifierType classifies a login identifier as "username" or "email".
 func loginIdentifierType(identifier string) string {
 	if identity.IsUsernameLikeIdentifier(identifier) {
 		return "username"
@@ -360,9 +369,6 @@ func loginIdentifierType(identifier string) string {
 	return "email"
 }
 
-// ForgotPassword silently returns nil for unknown emails so attackers cannot
-// enumerate registered accounts via the response shape. A code is only sent
-// when the email actually exists.
 // ForgotPassword sends a password-reset code via email. It does not reveal
 // whether the email exists (constant-time-like response).
 //
@@ -477,6 +483,7 @@ func (s *Service) requireEmailCode(ctx context.Context, purpose, email, code str
 	return nil
 }
 
+// emailCodeKey builds the Redis key for an email verification code.
 func emailCodeKey(purpose, email string) string {
 	return fmt.Sprintf("auth:email_code:%s:%s", purpose, email)
 }

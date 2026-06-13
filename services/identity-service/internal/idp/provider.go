@@ -1,6 +1,11 @@
 // Package idp implements external identity provider (social login) integration.
 // It handles the OAuth2 authorization code flow, profile fetching, and
 // account linking/unlinking for external identities.
+//
+// Call-chain overview:
+//
+//	Provider interface: AuthCodeURL → ExchangeCode → FetchProfile
+//	github.Provider implements Provider for GitHub OAuth.
 package idp
 
 import "context"

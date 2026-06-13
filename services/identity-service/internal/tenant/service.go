@@ -69,6 +69,9 @@ type UpdateRoleInput struct {
 	IsSystem    *bool   `json:"is_system"`
 }
 
+// NewService creates a tenant Service. Use SetDependencies to inject an audit recorder.
+//
+// Call chain: main → NewService → Service
 func NewService(db *gorm.DB, rbacService *rbac.Service) *Service {
 	return &Service{
 		db:    db,
@@ -77,7 +80,9 @@ func NewService(db *gorm.DB, rbacService *rbac.Service) *Service {
 	}
 }
 
-// SetDependencies injects optional collaborators.
+// SetDependencies injects optional collaborators (currently the audit recorder).
+//
+// Call chain: main/wire → SetDependencies → Service.audit
 func (s *Service) SetDependencies(r audit.Recorder) {
 	s.audit = r
 	if s.audit == nil {
@@ -85,8 +90,7 @@ func (s *Service) SetDependencies(r audit.Recorder) {
 	}
 }
 
-// Deprecated: use SetDependencies.
-
+// SetAuditRecorder is deprecated; use SetDependencies instead.
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	if recorder == nil {
 		s.audit = audit.NoopRecorder{}
@@ -95,16 +99,23 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	s.audit = recorder
 }
 
+// DB returns the underlying *gorm.DB for consumers that need raw queries.
 func (s *Service) DB() *gorm.DB {
 	return s.db
 }
 
+// ListTenants returns all tenants ordered by ID.
+//
+// Call chain: (external consumers) → ListTenants → db.Find
 func (s *Service) ListTenants(ctx context.Context) ([]store.Tenant, error) {
 	var tenants []store.Tenant
 	err := s.db.WithContext(ctx).Order("id ASC").Find(&tenants).Error
 	return tenants, err
 }
 
+// CreateTenant creates a tenant, defaulting status to active when empty.
+//
+// Call chain: createTenant → CreateTenant → db.Create + audit.Record
 func (s *Service) CreateTenant(ctx context.Context, input CreateTenantInput) (*store.Tenant, error) {
 	status := input.Status
 	if status == "" {
@@ -136,6 +147,10 @@ func (s *Service) CreateTenant(ctx context.Context, input CreateTenantInput) (*s
 	return record, nil
 }
 
+// UpdateTenant patch-updates a tenant. When status changes, it bumps permission
+// versions and invalidates the RBAC cache for that tenant.
+//
+// Call chain: updateTenant → UpdateTenant → db.Transaction + bumpTenantPermissionVersions + rbac.InvalidateTenantPermissions + audit.Record
 func (s *Service) UpdateTenant(ctx context.Context, id int64, input UpdateTenantInput) (*store.Tenant, error) {
 	updates := map[string]any{}
 	if input.Name != nil {
@@ -183,6 +198,10 @@ func (s *Service) UpdateTenant(ctx context.Context, id int64, input UpdateTenant
 	return &record, nil
 }
 
+// AddMember adds a user to a tenant. Restores soft-deleted memberships when
+// they exist instead of creating duplicates.
+//
+// Call chain: addMember/bulkAddUsersToTenant → AddMember → ensureActiveTenant + ensureActiveUser + db.Create/restore + recordMembershipAdded
 func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.TenantMember, error) {
 	status := input.Status
 	if status == "" {
@@ -239,6 +258,10 @@ func (s *Service) AddMember(ctx context.Context, input AddMemberInput) (*store.T
 	return member, nil
 }
 
+// RemoveMember soft-deletes all memberships for a user in a tenant, removes
+// their role assignments, bumps permission versions, and invalidates cache.
+//
+// Call chain: removeMember/bulkRemoveUsersFromTenant → RemoveMember → db.Transaction + bumpPermissionScopes + invalidatePermissionScopes + audit.Record
 func (s *Service) RemoveMember(ctx context.Context, tenantID, userID int64) error {
 	var members []store.TenantMember
 	if err := s.db.WithContext(ctx).
@@ -287,6 +310,9 @@ func (s *Service) RemoveMember(ctx context.Context, tenantID, userID int64) erro
 	return nil
 }
 
+// ListRoles returns roles, optionally filtered by tenant ID.
+//
+// Call chain: (external consumers) → ListRoles → db.Find
 func (s *Service) ListRoles(ctx context.Context, tenantID int64) ([]store.Role, error) {
 	var roles []store.Role
 	query := s.db.WithContext(ctx).Order("id ASC")
@@ -297,6 +323,9 @@ func (s *Service) ListRoles(ctx context.Context, tenantID int64) ([]store.Role, 
 	return roles, err
 }
 
+// CreateRole creates a role in a tenant after verifying the tenant is active.
+//
+// Call chain: createRole → CreateRole → ensureActiveTenant + db.Create + audit.Record
 func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (*store.Role, error) {
 	if err := s.ensureActiveTenant(ctx, input.TenantID); err != nil {
 		return nil, err
@@ -330,6 +359,9 @@ func (s *Service) CreateRole(ctx context.Context, input CreateRoleInput) (*store
 	return role, nil
 }
 
+// UpdateRole patch-updates a role's name, code, description, or system flag.
+//
+// Call chain: updateRole → UpdateRole → db.Updates + audit.Record
 func (s *Service) UpdateRole(ctx context.Context, id int64, input UpdateRoleInput) (*store.Role, error) {
 	updates := map[string]any{}
 	if input.Name != nil {
@@ -369,6 +401,10 @@ func (s *Service) UpdateRole(ctx context.Context, id int64, input UpdateRoleInpu
 	return &role, nil
 }
 
+// DeleteRole removes a role, its permissions, its member assignments, bumps
+// the whole tenant's permission versions, and invalidates caches.
+//
+// Call chain: deleteRole → DeleteRole → db.Transaction (delete RolePermission + MemberRole + Role) + bumpTenantPermissionVersions + invalidatePermissionScopes + audit.Record
 func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 	var role store.Role
 	if err := s.db.WithContext(ctx).First(&role, id).Error; err != nil {
@@ -413,6 +449,10 @@ func (s *Service) DeleteRole(ctx context.Context, id int64) error {
 	})
 }
 
+// GrantPermissions assigns permissions to a role (idempotent on conflict).
+// Bumps permission versions and invalidates caches for affected members.
+//
+// Call chain: grantPermissions → GrantPermissions → db.Transaction + bumpRolePermissionScopes + invalidatePermissionScopes + audit.Record
 func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permissionIDs []int64) error {
 	if len(permissionIDs) == 0 {
 		return nil
@@ -457,6 +497,10 @@ func (s *Service) GrantPermissions(ctx context.Context, roleID int64, permission
 	})
 }
 
+// RevokePermission removes a single permission from a role, bumps versions,
+// and invalidates caches.
+//
+// Call chain: revokePermission → RevokePermission → db.Transaction + bumpRolePermissionScopes + invalidatePermissionScopes + audit.Record
 func (s *Service) RevokePermission(ctx context.Context, roleID, permissionID int64) error {
 	role, err := s.roleByID(ctx, roleID)
 	if err != nil {
@@ -491,6 +535,10 @@ func (s *Service) RevokePermission(ctx context.Context, roleID, permissionID int
 	})
 }
 
+// AssignRoles assigns roles to a member after verifying the roles belong to
+// the same tenant as the member. Bumps permission versions and invalidates cache.
+//
+// Call chain: assignRoles → AssignRoles → memberByID + ensureRolesBelongToTenant + db.Transaction + bumpPermissionScopes + invalidatePermissionScopes + audit.Record
 func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int64) error {
 	member, err := s.memberByID(ctx, memberID)
 	if err != nil {
@@ -533,6 +581,7 @@ func (s *Service) AssignRoles(ctx context.Context, memberID int64, roleIDs []int
 	return nil
 }
 
+// memberByID fetches a tenant member by primary key.
 func (s *Service) memberByID(ctx context.Context, memberID int64) (*store.TenantMember, error) {
 	var member store.TenantMember
 	if err := s.db.WithContext(ctx).First(&member, memberID).Error; err != nil {
@@ -541,18 +590,23 @@ func (s *Service) memberByID(ctx context.Context, memberID int64) (*store.Tenant
 	return &member, nil
 }
 
+// ensureActiveTenant returns an error if the tenant does not exist, is deleted, or is not active.
 func (s *Service) ensureActiveTenant(ctx context.Context, tenantID int64) error {
 	return s.db.WithContext(ctx).
 		Where("id = ? AND status = ? AND deleted_at IS NULL", tenantID, store.TenantStatusActive).
 		First(&store.Tenant{}).Error
 }
 
+// ensureActiveUser returns an error if the user does not exist, is deleted, or is not active.
 func (s *Service) ensureActiveUser(ctx context.Context, userID int64) error {
 	return s.db.WithContext(ctx).
 		Where("id = ? AND status = ? AND deleted_at IS NULL", userID, store.UserStatusActive).
 		First(&store.User{}).Error
 }
 
+// recordMembershipAdded writes a tenant_membership_added audit entry.
+//
+// Call chain: AddMember → recordMembershipAdded → audit.Record
 func (s *Service) recordMembershipAdded(ctx context.Context, tenantID int64, member *store.TenantMember) error {
 	return s.audit.Record(ctx, audit.Entry{
 		ActorUserID: 0,
@@ -566,6 +620,10 @@ func (s *Service) recordMembershipAdded(ctx context.Context, tenantID int64, mem
 	})
 }
 
+// permissionCacheScopesForRole returns distinct (user, tenant) pairs for every
+// member who holds the given role.
+//
+// Call chain: DeleteRole/GrantPermissions/RevokePermission → permissionCacheScopesForRole → db query
 func (s *Service) permissionCacheScopesForRole(ctx context.Context, roleID int64) ([]permissionCacheScope, error) {
 	var scopes []permissionCacheScope
 	err := s.db.WithContext(ctx).
@@ -577,6 +635,10 @@ func (s *Service) permissionCacheScopesForRole(ctx context.Context, roleID int64
 	return scopes, err
 }
 
+// invalidatePermissionScopes invalidates the RBAC cache for each scope.
+// No-op when the RBAC service is nil.
+//
+// Call chain: mutating service methods → invalidatePermissionScopes → rbac.InvalidateUserTenantPermissions
 func (s *Service) invalidatePermissionScopes(ctx context.Context, scopes []permissionCacheScope) error {
 	if s.rbac == nil {
 		return nil
@@ -589,6 +651,10 @@ func (s *Service) invalidatePermissionScopes(ctx context.Context, scopes []permi
 	return nil
 }
 
+// bumpPermissionScopes increments permission_version for the given (user, tenant)
+// pairs to force cache misses.
+//
+// Call chain: RemoveMember/AssignRoles/RemoveRole → bumpPermissionScopes → db.Update
 func (s *Service) bumpPermissionScopes(ctx context.Context, tx *gorm.DB, scopes []permissionCacheScope) error {
 	seen := make(map[permissionCacheScope]struct{}, len(scopes))
 	for _, scope := range scopes {
@@ -609,6 +675,10 @@ func (s *Service) bumpPermissionScopes(ctx context.Context, tx *gorm.DB, scopes 
 	return nil
 }
 
+// bumpTenantPermissionVersions increments permission_version for every active
+// member in a tenant.
+//
+// Call chain: UpdateTenant/DeleteRole → bumpTenantPermissionVersions → db.Update
 func (s *Service) bumpTenantPermissionVersions(ctx context.Context, tx *gorm.DB, tenantID int64) error {
 	return tx.WithContext(ctx).
 		Model(&store.TenantMember{}).
@@ -616,6 +686,10 @@ func (s *Service) bumpTenantPermissionVersions(ctx context.Context, tx *gorm.DB,
 		Update("permission_version", gorm.Expr("permission_version + 1")).Error
 }
 
+// bumpRolePermissionScopes increments permission_version for every member who
+// holds the given role.
+//
+// Call chain: GrantPermissions/RevokePermission → bumpRolePermissionScopes → db.Update subquery
 func (s *Service) bumpRolePermissionScopes(ctx context.Context, tx *gorm.DB, roleID int64) error {
 	return tx.WithContext(ctx).
 		Model(&store.TenantMember{}).
@@ -624,6 +698,7 @@ func (s *Service) bumpRolePermissionScopes(ctx context.Context, tx *gorm.DB, rol
 		Update("permission_version", gorm.Expr("permission_version + 1")).Error
 }
 
+// roleByID fetches a role by primary key.
 func (s *Service) roleByID(ctx context.Context, roleID int64) (*store.Role, error) {
 	var role store.Role
 	if err := s.db.WithContext(ctx).First(&role, roleID).Error; err != nil {
@@ -632,6 +707,7 @@ func (s *Service) roleByID(ctx context.Context, roleID int64) (*store.Role, erro
 	return &role, nil
 }
 
+// ensureRolesBelongToTenant verifies every given role ID belongs to the specified tenant.
 func (s *Service) ensureRolesBelongToTenant(ctx context.Context, tenantID int64, roleIDs []int64) error {
 	if len(roleIDs) == 0 {
 		return nil
@@ -660,6 +736,10 @@ func (s *Service) ensureRolesBelongToTenant(ctx context.Context, tenantID int64,
 	return nil
 }
 
+// RemoveRole un-assigns a role from a member, bumps permission versions, and
+// invalidates the cache.
+//
+// Call chain: removeRole → RemoveRole → db.Transaction + bumpPermissionScopes + invalidatePermissionScopes + audit.Record
 func (s *Service) RemoveRole(ctx context.Context, memberID, roleID int64) error {
 	member, err := s.memberByID(ctx, memberID)
 	if err != nil {

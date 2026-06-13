@@ -51,6 +51,9 @@ func (h *Handler) SetDeps(d HandlerDeps) {
 
 var defaultCaptchaActions = []string{"login", "register", "email_code", "password_forgot"}
 
+// NewHandler creates an auth Handler wired to the given auth and session services.
+//
+// Call chain: main → NewHandler → register routes on gin.Engine
 func NewHandler(service *Service, sessionService *session.Service) *Handler {
 	return &Handler{
 		service:                   service,
@@ -61,6 +64,7 @@ func NewHandler(service *Service, sessionService *session.Service) *Handler {
 	}
 }
 
+// SetRegistrationMode configures how new accounts can be created (e.g. "open", "invite").
 func (h *Handler) SetRegistrationMode(mode string) {
 	mode = strings.ToLower(strings.TrimSpace(mode))
 	if mode == "" {
@@ -69,18 +73,24 @@ func (h *Handler) SetRegistrationMode(mode string) {
 	h.registrationMode = mode
 }
 
+// SetLocalPasswordLoginEnabled toggles whether local-credential login is available.
 func (h *Handler) SetLocalPasswordLoginEnabled(enabled bool) {
 	h.localPasswordLoginEnabled = enabled
 }
 
+// SetCaptchaVerifier injects a CAPTCHA verifier for automated-abuse protection.
 func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
 	h.captchaVerifier = v
 }
 
+// SetCaptchaActions sets which handler actions require CAPTCHA verification.
 func (h *Handler) SetCaptchaActions(actions []string) {
 	h.captchaActions = captcha.ActionSet(actions)
 }
 
+// captchaMW returns a noop middleware when no CAPTCHA verifier is configured.
+//
+// Call chain: captchaMWFor → captchaMW → verifier.Middleware
 func (h *Handler) captchaMW() gin.HandlerFunc {
 	if h.captchaVerifier == nil {
 		return func(c *gin.Context) { c.Next() }
@@ -88,6 +98,9 @@ func (h *Handler) captchaMW() gin.HandlerFunc {
 	return h.captchaVerifier.Middleware()
 }
 
+// captchaMWFor returns a CAPTCHA middleware only when the action is gated.
+//
+// Call chain: RegisterRoutes → captchaMWFor → captchaMW
 func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
 	if !h.captchaActionEnabled(action) {
 		return func(c *gin.Context) { c.Next() }
@@ -95,6 +108,7 @@ func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
 	return h.captchaMW()
 }
 
+// captchaActionEnabled reports whether CAPTCHA is active for the given action.
 func (h *Handler) captchaActionEnabled(action string) bool {
 	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
 		return false
@@ -103,6 +117,9 @@ func (h *Handler) captchaActionEnabled(action string) bool {
 	return ok
 }
 
+// RegisterRoutes mounts auth endpoints onto the given router group.
+//
+// Call chain: main → RegisterRoutes → captchaMWFor → handler methods
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/email/send-code", h.captchaMWFor("email_code"), h.sendCode)
 	router.POST("/register", h.captchaMWFor("register"), h.register)
@@ -114,6 +131,8 @@ func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 
 
 // sendCode sends a one-time verification code to the specified email address.
+//
+// Call chain: POST /email/send-code → sendCode → service.SendEmailCode → Redis + mailer
 //
 // @Summary      Send verification code
 // @Description  Sends a 6-digit verification code for registration or password reset.
@@ -155,6 +174,8 @@ func (h *Handler) sendCode(c *gin.Context) {
 }
 
 // register creates a new user account after email verification.
+//
+// Call chain: POST /register → register → service.Register → repo.Create + policy.Apply
 //
 // @Summary      Register new user
 // @Description  Creates a new user account. Requires a valid email verification code obtained via /email/send-code.
@@ -206,6 +227,8 @@ func (h *Handler) register(c *gin.Context) {
 }
 
 // login authenticates a user with email and password.
+//
+// Call chain: POST /login → login → completeLogin → service.Login + 2FA check + issueLoginTokens
 //
 // @Summary      Login
 // @Description  Authenticates with email/password. Returns access token, refresh token, and session info. May require 2FA verification.
@@ -279,6 +302,7 @@ func (h *Handler) login(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, result.pair)
 }
 
+// loginErrorResponse maps known auth errors to HTTP status codes and messages.
 func loginErrorResponse(err error) (int, string) {
 	var lockoutErr *LockoutError
 	if errors.As(err, &lockoutErr) {
@@ -294,6 +318,8 @@ func loginErrorResponse(err error) (int, string) {
 }
 
 // forgotPassword sends a password reset code to the user's email.
+//
+// Call chain: POST /password/forgot → forgotPassword → service.ForgotPassword → SendEmailCode(password_forgot)
 //
 // @Summary      Forgot password
 // @Description  Sends a password reset verification code.
@@ -323,6 +349,8 @@ func (h *Handler) forgotPassword(c *gin.Context) {
 }
 
 // resetPassword resets the user's password using a verification code.
+//
+// Call chain: POST /password/reset → resetPassword → service.ResetPassword → requireEmailCode + repo.UpdatePassword
 //
 // @Summary      Reset password
 // @Description  Resets password with a valid email verification code.

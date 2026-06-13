@@ -31,6 +31,9 @@ type ConsoleSender struct {
 	dir    string
 }
 
+// NewConsoleSender returns a ConsoleSender that writes mail to temp files.
+//
+// Call chain: wire → NewConsoleSender
 func NewConsoleSender(logger *slog.Logger) ConsoleSender {
 	if logger == nil {
 		logger = slog.Default()
@@ -41,6 +44,9 @@ func NewConsoleSender(logger *slog.Logger) ConsoleSender {
 	}
 }
 
+// Send writes the message to a temp file under goauth-mailbox and logs it.
+//
+// Call chain: email dispatch → Send → os.CreateTemp + logger.InfoContext
 func (s ConsoleSender) Send(ctx context.Context, message Message) error {
 	logger := s.logger
 	if logger == nil {

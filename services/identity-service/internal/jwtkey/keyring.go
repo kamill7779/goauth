@@ -28,6 +28,11 @@ type Keyring struct {
 	order    []string
 }
 
+// Load creates a Keyring from the configuration: first it tries a JWTKeysetDir
+// (directory of PEM files), then a single JWTPrivateKeyPath, and finally falls
+// back to an ephemeral RSA key for local development.
+//
+// Call chain: main.loadSigningKeyring → jwtkey.Load → loadDirectory / LoadRSAPrivateKey / NewKeyring
 func Load(cfg config.Config) (*Keyring, error) {
 	if dir := strings.TrimSpace(cfg.JWTKeysetDir); dir != "" {
 		return loadDirectory(dir, strings.TrimSpace(cfg.JWTActiveKeyID))
@@ -51,6 +56,11 @@ func Load(cfg config.Config) (*Keyring, error) {
 	})
 }
 
+// NewKeyring builds a validated Keyring, normalising key IDs, picking the active
+// key (or defaulting to the sole key), and establishing a deterministic iteration
+// order with the active key first.
+//
+// Call chain: jwtkey.Load → jwtkey.NewKeyring → (no downstream)
 func NewKeyring(activeID string, keys map[string]*rsa.PrivateKey) (*Keyring, error) {
 	activeID = strings.TrimSpace(activeID)
 	if len(keys) == 0 {
@@ -94,6 +104,7 @@ func NewKeyring(activeID string, keys map[string]*rsa.PrivateKey) (*Keyring, err
 	}, nil
 }
 
+// ActiveKeyID returns the id of the active signing key, or "" for a nil receiver.
 func (k *Keyring) ActiveKeyID() string {
 	if k == nil {
 		return ""
@@ -101,6 +112,7 @@ func (k *Keyring) ActiveKeyID() string {
 	return k.activeID
 }
 
+// ActivePrivateKey returns the active RSA private key, or nil for a nil receiver.
 func (k *Keyring) ActivePrivateKey() *rsa.PrivateKey {
 	if k == nil {
 		return nil
@@ -108,6 +120,7 @@ func (k *Keyring) ActivePrivateKey() *rsa.PrivateKey {
 	return k.active
 }
 
+// ActivePublicKey returns the active RSA public key, or nil for a nil receiver.
 func (k *Keyring) ActivePublicKey() *rsa.PublicKey {
 	if k == nil || k.active == nil {
 		return nil
@@ -115,6 +128,10 @@ func (k *Keyring) ActivePublicKey() *rsa.PublicKey {
 	return &k.active.PublicKey
 }
 
+// PublicKeys returns every key in the keyring in deterministic order (active first,
+// then remaining keys sorted alphabetically).
+//
+// Call chain: OIDC JWKS endpoint → Keyring.PublicKeys → (no downstream)
 func (k *Keyring) PublicKeys() []PublicKey {
 	if k == nil {
 		return nil
@@ -130,6 +147,11 @@ func (k *Keyring) PublicKeys() []PublicKey {
 	return result
 }
 
+// Keyfunc is a jwt-go compatible Keyfunc that looks up the RSA public key by the
+// "kid" header claim. When there is only one key the kid is optional, matching
+// pre-keyring token behaviour.
+//
+// Call chain: jwt.ParseWithClaims → Keyring.Keyfunc → (no downstream)
 func (k *Keyring) Keyfunc(token *jwt.Token) (any, error) {
 	if k == nil {
 		return nil, errors.New("jwt keyring is not configured")
@@ -154,6 +176,10 @@ func (k *Keyring) Keyfunc(token *jwt.Token) (any, error) {
 	return &key.PublicKey, nil
 }
 
+// loadDirectory reads every .pem file in dir, derives the key id from the filename
+// (minus extension), and constructs a Keyring.
+//
+// Call chain: jwtkey.Load → loadDirectory → LoadRSAPrivateKey / NewKeyring
 func loadDirectory(dir, activeID string) (*Keyring, error) {
 	if activeID == "" {
 		return nil, errors.New("JWT_ACTIVE_KEY_ID is required when JWT_KEYSET_DIR is configured")
@@ -182,6 +208,9 @@ func loadDirectory(dir, activeID string) (*Keyring, error) {
 	return NewKeyring(activeID, keys)
 }
 
+// LoadRSAPrivateKey decodes a PEM file and parses it as PKCS#1 or PKCS#8 RSA.
+//
+// Call chain: jwtkey.Load → LoadRSAPrivateKey → os.ReadFile / pem.Decode / x509.ParsePKCS1PrivateKey / x509.ParsePKCS8PrivateKey
 func LoadRSAPrivateKey(path string) (*rsa.PrivateKey, error) {
 	bytes, err := os.ReadFile(path)
 	if err != nil {

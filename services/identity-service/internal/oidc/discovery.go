@@ -8,6 +8,8 @@ import (
 
 // discovery serves the OIDC Discovery document (RFC 8414).
 //
+// Call chain: GET /.well-known/openid-configuration → discovery → static config JSON
+//
 // @Summary      OIDC Discovery
 // @Description  Returns the OpenID Connect discovery document.
 // @Tags         oidc

@@ -15,6 +15,8 @@ import (
 
 // OpenDB connects to MySQL if MYSQL_DSN is set, otherwise falls back to an
 // in-memory SQLite instance (useful for development and testing).
+//
+// Call chain: main.run → store.OpenDB → gorm.Open
 func OpenDB(cfg config.Config) (*gorm.DB, error) {
 	if cfg.MySQLDSN != "" {
 		return gorm.Open(mysql.Open(cfg.MySQLDSN), &gorm.Config{})
@@ -26,6 +28,8 @@ func OpenDB(cfg config.Config) (*gorm.DB, error) {
 
 // AutoMigrate runs GORM schema migration for all models, then performs
 // backfill operations that must happen after the schema is stable.
+//
+// Call chain: main.run → store.AutoMigrate → setupUserIdentityColumns / db.AutoMigrate / backfillUserIdentityFields / ensureUsernameUniqueIndex / backfillLoginSessions
 func AutoMigrate(db *gorm.DB) error {
 	// For pre-existing tables, add the new columns with a safe default so
 	// GORM can run its own migration without constraint violations.
@@ -67,6 +71,8 @@ func AutoMigrate(db *gorm.DB) error {
 // setupUserIdentityColumns adds the new username and nickname columns to
 // pre-existing user tables. GORM may rebuild the table during its own
 // AutoMigrate pass so we defer the backfill and unique index to later.
+//
+// Call chain: store.AutoMigrate → setupUserIdentityColumns → db.Exec
 func setupUserIdentityColumns(db *gorm.DB) error {
 	if db == nil {
 		return nil
@@ -88,6 +94,10 @@ func setupUserIdentityColumns(db *gorm.DB) error {
 	return nil
 }
 
+// ensureUsernameUniqueIndex creates a unique index on users.username if one
+// does not already exist.
+//
+// Call chain: store.AutoMigrate → ensureUsernameUniqueIndex → hasIndex / db.Exec
 func ensureUsernameUniqueIndex(db *gorm.DB) error {
 	indexName := "idx_users_username"
 	if hasIndex(db.Migrator(), "users", indexName) {
@@ -103,6 +113,9 @@ func ensureUsernameUniqueIndex(db *gorm.DB) error {
 	return db.Exec(query).Error
 }
 
+// hasIndex returns true when the named index exists on the table.
+//
+// Call chain: store.ensureUsernameUniqueIndex → hasIndex → gorm.Migrator.GetIndexes
 func hasIndex(migrator gorm.Migrator, table, indexName string) bool {
 	if migrator == nil {
 		return false
@@ -119,6 +132,11 @@ func hasIndex(migrator gorm.Migrator, table, indexName string) bool {
 	return false
 }
 
+// backfillLoginSessions populates the login_sessions table from existing
+// refresh_tokens, grouping by session_id. Uses INSERT IGNORE (MySQL) or
+// ON CONFLICT DO NOTHING (SQLite).
+//
+// Call chain: store.AutoMigrate → backfillLoginSessions → db.Exec
 func backfillLoginSessions(db *gorm.DB) error {
 	query := `
 		INSERT INTO login_sessions (id, user_id, tenant_id, client_id, created_at, updated_at)

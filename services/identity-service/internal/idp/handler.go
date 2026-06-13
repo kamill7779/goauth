@@ -68,6 +68,10 @@ func (h *Handler) SetDeps(d HandlerDeps) {
 	h.exchangeStore = d.ExchangeStore
 }
 
+// buildTrustedOriginSet canonicalises a list of URL strings into a set of
+// "scheme://host" keys for fast lookup.
+//
+// Call chain: SetDeps → buildTrustedOriginSet
 func buildTrustedOriginSet(origins []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(origins))
 	for _, o := range origins {
@@ -83,6 +87,9 @@ func buildTrustedOriginSet(origins []string) map[string]struct{} {
 	return set
 }
 
+// NewHandler creates an IDP Handler with sensible defaults.
+//
+// Call chain: wire (DI) → NewHandler → registers routes on gin router
 func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.HandlerFunc, browserCookieSecure bool) *Handler {
 	return &Handler{
 		service:              service,
@@ -95,10 +102,15 @@ func NewHandler(service *Service, sessions SessionIssuer, authMiddleware gin.Han
 	}
 }
 
+// SetExchangeStore sets the exchange store.
 func (h *Handler) SetExchangeStore(store *ExchangeStore) {
 	h.exchangeStore = store
 }
 
+// SetFrontendCallbackPath sets the frontend callback path used after OAuth
+// completion; defaults to /external/callback when empty.
+//
+// Call chain: wire (DI) → SetFrontendCallbackPath
 func (h *Handler) SetFrontendCallbackPath(path string) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -107,6 +119,10 @@ func (h *Handler) SetFrontendCallbackPath(path string) {
 	h.frontendCallbackPath = path
 }
 
+// SetTrustedReturnToOrigins configures which external origins are allowed as
+// return_to targets after an OAuth flow.
+//
+// Call chain: wire (DI) → SetTrustedReturnToOrigins
 func (h *Handler) SetTrustedReturnToOrigins(origins ...string) {
 	h.trustedReturnOrigins = make(map[string]struct{}, len(origins))
 	for _, origin := range origins {
@@ -118,14 +134,20 @@ func (h *Handler) SetTrustedReturnToOrigins(origins ...string) {
 	}
 }
 
+// SetCaptchaVerifier sets the captcha verifier.
 func (h *Handler) SetCaptchaVerifier(v *captcha.Verifier) {
 	h.captchaVerifier = v
 }
 
+// SetCaptchaActions sets the captcha-protected actions.
 func (h *Handler) SetCaptchaActions(actions []string) {
 	h.captchaActions = captcha.ActionSet(actions)
 }
 
+// captchaMW returns a gin middleware that validates captcha if configured,
+// otherwise a no-op passthrough.
+//
+// Call chain: captchaMWFor → captchaMW → captcha.Verifier.Middleware
 func (h *Handler) captchaMW() gin.HandlerFunc {
 	if h.captchaVerifier == nil {
 		return func(c *gin.Context) { c.Next() }
@@ -133,6 +155,10 @@ func (h *Handler) captchaMW() gin.HandlerFunc {
 	return h.captchaVerifier.Middleware()
 }
 
+// captchaMWFor returns a captcha middleware gated on the named action being
+// enabled; falls back to a no-op when the action is not protected.
+//
+// Call chain: route registration → captchaMWFor → captchaMW
 func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
 	if !h.captchaActionEnabled(action) {
 		return func(c *gin.Context) { c.Next() }
@@ -140,6 +166,10 @@ func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
 	return h.captchaMW()
 }
 
+// captchaActionEnabled reports whether the given action is configured for
+// captcha protection.
+//
+// Call chain: route handlers / captchaMWFor → captchaActionEnabled
 func (h *Handler) captchaActionEnabled(action string) bool {
 	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
 		return false
@@ -149,6 +179,9 @@ func (h *Handler) captchaActionEnabled(action string) bool {
 }
 
 
+// RegisterRoutes wires idp endpoints onto the provided gin router.
+//
+// Call chain: HTTP router setup → RegisterRoutes → individual handlers
 func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	external := router.Group("/v1/external/github")
 	external.GET("/start", h.start)
@@ -167,6 +200,10 @@ func (h *Handler) RegisterRoutes(router gin.IRouter) {
 	protected.GET("/me/identities", h.listIdentities)
 }
 
+// start initiates the GitHub OAuth authorization-code flow. On GET it
+// redirects to GitHub; on POST it returns the authorize URL as JSON.
+//
+// Call chain: POST/GET /v1/external/github/start → start → service.Start → provider.AuthCodeURL
 func (h *Handler) start(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -217,6 +254,10 @@ func (h *Handler) start(c *gin.Context) {
 	c.Redirect(stdhttp.StatusFound, authURL)
 }
 
+// startInput extracts authorization-request parameters from either JSON body
+// (POST) or query string (GET).
+//
+// Call chain: start → startInput
 func (h *Handler) startInput(c *gin.Context) (struct {
 	RedirectURI string `json:"redirect_uri"`
 	ReturnTo    string `json:"return_to"`
@@ -236,6 +277,11 @@ func (h *Handler) startInput(c *gin.Context) (struct {
 	return input, nil
 }
 
+// callback handles the GitHub OAuth redirect. It validates the state
+// parameter against the cookie, exchanges the code for a profile, issues
+// session tokens, and redirects to the frontend with an exchange code.
+//
+// Call chain: GET /v1/external/github/callback → callback → service.Authenticate → sessions.IssueTokens → exchangeStore.Save
 func (h *Handler) callback(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -328,6 +374,10 @@ func (h *Handler) callback(c *gin.Context) {
 	c.Redirect(stdhttp.StatusFound, h.frontendExchangeURL(code))
 }
 
+// exchange consumes a short-lived exchange code and returns the cached token
+// pair and user payload to the frontend.
+//
+// Call chain: POST /v1/external/github/exchange → exchange → exchangeStore.Consume
 func (h *Handler) exchange(c *gin.Context) {
 	if h.exchangeStore == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "external login exchange unavailable")
@@ -353,6 +403,10 @@ func (h *Handler) exchange(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, payload)
 }
 
+// consumeOAuthState reads and deletes the OAuth state payload from the
+// exchange store. When no store is configured it returns an empty payload.
+//
+// Call chain: callback → consumeOAuthState → exchangeStore.ConsumeOAuthState
 func (h *Handler) consumeOAuthState(ctx context.Context, state string) (*OAuthStatePayload, error) {
 	if h.exchangeStore == nil {
 		return &OAuthStatePayload{}, nil
@@ -364,6 +418,10 @@ func (h *Handler) consumeOAuthState(ctx context.Context, state string) (*OAuthSt
 	return payload, nil
 }
 
+// frontendExchangeURL builds the frontend callback URL with exchange code
+// and provider set as the fragment.
+//
+// Call chain: callback → frontendExchangeURL
 func (h *Handler) frontendExchangeURL(code string) string {
 	values := url.Values{}
 	values.Set("code", code)
@@ -380,10 +438,18 @@ func (h *Handler) frontendExchangeURL(code string) string {
 	return parsed.String()
 }
 
+// browserExchangeUnavailable returns true when sessions are configured but
+// the exchange store (Redis) is not, meaning the browser-based OAuth flow
+// cannot complete.
 func (h *Handler) browserExchangeUnavailable() bool {
 	return h.sessions != nil && h.exchangeStore == nil
 }
 
+// startAccountBind initiates an OAuth flow for binding an external identity
+// to the currently authenticated account. It persists flow=bind in the OAuth
+// state so the callback knows to link rather than authenticate.
+//
+// Call chain: POST /v1/account/login-methods/:provider/bind/start → startAccountBind → service.Start → exchangeStore.SaveOAuthState
 func (h *Handler) startAccountBind(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -441,6 +507,10 @@ func (h *Handler) startAccountBind(c *gin.Context) {
 	})
 }
 
+// unbindAccountProvider removes a linked external identity from the current
+// user, preventing lock-out by verifying at least one login method remains.
+//
+// Call chain: DELETE /v1/account/login-methods/:provider → unbindAccountProvider → service.Unbind
 func (h *Handler) unbindAccountProvider(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -467,6 +537,11 @@ func (h *Handler) unbindAccountProvider(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"unbound": true})
 }
 
+// completeBindCallback finishes the OAuth bind flow after the provider
+// redirects back; it calls service.BindWithState and redirects to the
+// frontend with success/error flags.
+//
+// Call chain: callback (flow=bind) → completeBindCallback → service.BindWithState
 func (h *Handler) completeBindCallback(c *gin.Context, providerSlug, code, state string, payload *OAuthStatePayload) {
 	if payload.UserID <= 0 {
 		httpserver.Error(c, stdhttp.StatusBadRequest, "invalid bind state")
@@ -480,6 +555,10 @@ func (h *Handler) completeBindCallback(c *gin.Context, providerSlug, code, state
 	c.Redirect(stdhttp.StatusFound, externalBindReturnURL(payload.ReturnTo, providerSlug, nil))
 }
 
+// bind links an external GitHub identity to an already-authenticated user
+// using an authorization code obtained on the frontend.
+//
+// Call chain: POST /v1/external/github/bind → bind → service.Bind
 func (h *Handler) bind(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -518,6 +597,9 @@ func (h *Handler) bind(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, identity)
 }
 
+// unbind removes the GitHub identity from the authenticated user.
+//
+// Call chain: DELETE /v1/external/github/bind → unbind → service.Unbind
 func (h *Handler) unbind(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -544,6 +626,10 @@ func (h *Handler) unbind(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"unbound": true})
 }
 
+// listIdentities returns all external identities linked to the authenticated
+// user.
+//
+// Call chain: GET /v1/me/identities → listIdentities → service.ListIdentities
 func (h *Handler) listIdentities(c *gin.Context) {
 	if h.service == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "identity provider service unavailable")
@@ -565,10 +651,15 @@ func (h *Handler) listIdentities(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, identities)
 }
 
+// normalizedProviderSlug returns a lowercased, trimmed provider identifier.
 func normalizedProviderSlug(provider string) string {
 	return strings.ToLower(strings.TrimSpace(provider))
 }
 
+// externalBindReturnURL builds the redirect URL returned to the frontend
+// after an external identity bind flow, attaching success/error parameters.
+//
+// Call chain: completeBindCallback → externalBindReturnURL
 func externalBindReturnURL(returnTo, provider string, bindErr error) string {
 	returnTo = strings.TrimSpace(returnTo)
 	if returnTo == "" {
@@ -589,6 +680,10 @@ func externalBindReturnURL(returnTo, provider string, bindErr error) string {
 	return parsed.String()
 }
 
+// currentUserID extracts the authenticated user ID from session claims stored
+// in the gin context.
+//
+// Call chain: route handlers → currentUserID → session.ClaimsFromContext
 func currentUserID(c *gin.Context) (int64, bool) {
 	claims, ok := session.ClaimsFromContext(c)
 	if !ok {
@@ -602,6 +697,11 @@ func currentUserID(c *gin.Context) (int64, bool) {
 	return userID, true
 }
 
+// normalizeExternalReturnTo validates that raw is a relative path (or
+// absolute path with no host) suitable for a frontend redirect; rejects
+// fully-qualified URLs.
+//
+// Call chain: start / startAccountBind → normalizeExternalReturnTo
 func normalizeExternalReturnTo(raw string) (string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -624,6 +724,10 @@ func normalizeExternalReturnTo(raw string) (string, bool) {
 	return target, true
 }
 
+// normalizeExternalReturnTo extends the package-level check by also allowing
+// trusted third-party origins whose path is /oauth2/authorize.
+//
+// Call chain: start / startAccountBind → h.normalizeExternalReturnTo → canonicalOrigin
 func (h *Handler) normalizeExternalReturnTo(raw string) (string, bool) {
 	if target, ok := normalizeExternalReturnTo(raw); ok {
 		return target, true
@@ -653,6 +757,10 @@ func (h *Handler) normalizeExternalReturnTo(raw string) (string, bool) {
 	return target, true
 }
 
+// canonicalOrigin extracts the lowercased "scheme://host" from a URL string.
+// Returns false when the input is not a valid absolute URL.
+//
+// Call chain: SetTrustedReturnToOrigins / h.normalizeExternalReturnTo → canonicalOrigin
 func canonicalOrigin(raw string) (string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -661,6 +769,9 @@ func canonicalOrigin(raw string) (string, bool) {
 	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host), true
 }
 
+// randomState generates a hex-encoded 128-bit random value for OAuth state.
+//
+// Call chain: start / startAccountBind → randomState
 func randomState() (string, error) {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
@@ -669,11 +780,13 @@ func randomState() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// setGitHubOAuthStateCookie stores the OAuth state in a browser cookie.
 func setGitHubOAuthStateCookie(c *gin.Context, value string, secure bool) {
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
 	c.SetCookie(githubOAuthStateCookieName, value, githubOAuthStateCookieMaxAgeS, "/", "", secure, true)
 }
 
+// clearGitHubOAuthStateCookie removes the OAuth state cookie.
 func clearGitHubOAuthStateCookie(c *gin.Context, secure bool) {
 	c.SetSameSite(stdhttp.SameSiteLaxMode)
 	c.SetCookie(githubOAuthStateCookieName, "", -1, "/", "", secure, true)

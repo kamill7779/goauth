@@ -68,12 +68,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// main is the process entry point; it calls run and exits fatally on error.
 func main() {
 	if err := run(); err != nil {
 		log.Fatalf("identity service: %v", err)
 	}
 }
 
+// run initialises logging, config, DB, keyring, Redis, and the HTTP router,
+// then starts the Gin server. It returns an error instead of calling log.Fatal
+// so defers still run.
+//
+// Call chain: main.main → run → config.Load / store.OpenDB / store.AutoMigrate / loadSigningKeyring / requireRedis / bootstrapAdminUser / buildRouterWithKeyring
 func run() error {
 	// Set up structured JSON logging globally.
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -131,6 +137,10 @@ func run() error {
 	return nil
 }
 
+// requireRedis opens a Redis client; if Redis is unavailable the service cannot
+// start (rate limiting, caching, and OIDC sessions all depend on it).
+//
+// Call chain: main.run → requireRedis → cache.OpenRedis
 func requireRedis(cfg config.Config) (*redis.Client, error) {
 	client, err := cache.OpenRedis(cfg)
 	if err != nil {
@@ -139,6 +149,10 @@ func requireRedis(cfg config.Config) (*redis.Client, error) {
 	return client, nil
 }
 
+// loadSigningKeyring creates the JWT keyring from config, logging a notice
+// when neither a key path nor a keyset directory is configured (ephemeral key).
+//
+// Call chain: main.run → loadSigningKeyring → jwtkey.Load
 func loadSigningKeyring(cfg config.Config) (*jwtkey.Keyring, error) {
 	if strings.TrimSpace(cfg.JWTPrivateKeyPath) == "" && strings.TrimSpace(cfg.JWTKeysetDir) == "" {
 		log.Printf("JWT signing key path is empty, generating ephemeral RSA key for local development")
@@ -146,6 +160,11 @@ func loadSigningKeyring(cfg config.Config) (*jwtkey.Keyring, error) {
 	return jwtkey.Load(cfg)
 }
 
+// bootstrapAdminUser ensures a root-level admin account exists on first run.
+// BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD must both be set or both
+// empty; a partial pair is an error.
+//
+// Call chain: main.run → bootstrapAdminUser → user.NewService / user.Service.EnsureBootstrapAdmin
 func bootstrapAdminUser(db *gorm.DB, cfg config.Config) error {
 	email := strings.TrimSpace(cfg.BootstrapAdminEmail)
 	password := strings.TrimSpace(cfg.BootstrapAdminPassword)
@@ -178,6 +197,10 @@ func bootstrapAdminUser(db *gorm.DB, cfg config.Config) error {
 	return nil
 }
 
+// buildRouter constructs the full Gin router from a *rsa.PrivateKey for
+// backward-compatibility with legacy callers. Prefer buildRouterWithKeyring.
+//
+// Call chain: legacy callers → buildRouter → jwtkey.NewKeyring / buildRouterWithKeyring
 func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, privateKey *rsa.PrivateKey) *gin.Engine {
 	var keyring *jwtkey.Keyring
 	if privateKey != nil {
@@ -186,6 +209,10 @@ func buildRouter(cfg config.Config, db *gorm.DB, redisClient *redis.Client, priv
 	return buildRouterWithKeyring(cfg, db, redisClient, keyring)
 }
 
+// buildRouterWithKeyring wires all services, constructs the Gin engine with
+// middleware, registers every route group, and returns the ready-to-run router.
+//
+// Call chain: main.run → buildRouterWithKeyring → buildServices / buildRouterWithServices / registerRoutes
 func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring) *gin.Engine {
 	svc := buildServices(cfg, db, redisClient, keyring)
 	router := buildRouterWithServices(cfg, db, redisClient, svc)
@@ -193,7 +220,8 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 	return router
 }
 
-// services holds all shared dependencies wired at startup.
+// services holds all shared dependencies wired at startup — a manual DI
+// container that avoids package-level globals.
 type services struct {
 	session     *session.Service
 	sessionH    *session.Handler
@@ -217,6 +245,11 @@ type services struct {
 	systemMiddleware gin.HandlerFunc
 }
 
+// buildServices constructs every service/handler in dependency order, returning
+// them in a single services struct. Callers that require optional subsystems
+// (e.g. GitHub IDP) check Config flags before accessing the fields.
+//
+// Call chain: main.buildRouterWithKeyring → buildServices → audit.NewService / ratelimit.NewService / logout.NewCoordinatorWithKeyring / session.NewServiceWithKeyringAndDeps / oidc.NewServiceWithKeyring / ... (all service constructors)
 func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring) *services {
 	// Pre-create shared dependencies that multiple services need.
 	auditService := audit.NewService(db)
@@ -310,6 +343,10 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	}
 }
 
+// buildRouterWithServices creates the Gin engine, attaches middleware (RequestID,
+// StructuredLogger), readiness checks, and the optional /metrics endpoint.
+//
+// Call chain: main.buildRouterWithKeyring → buildRouterWithServices → metrics.Register / http.NewReadinessRegistrar / http.NewRouter / middleware.RequestID / middleware.StructuredLogger
 func buildRouterWithServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, svc *services) *gin.Engine {
 	if cfg.MetricsEnabled {
 		metrics.Register()
@@ -331,6 +368,11 @@ func buildRouterWithServices(cfg config.Config, db *gorm.DB, redisClient *redis.
 	return router
 }
 
+// registerRoutes mounts every route group on the engine: /v1/auth (auth flows,
+// sessions), OIDC discovery/token/userinfo, admin CRUD (RBAC, tenants, users,
+// clients, account, console), invites, and the Swagger UI.
+//
+// Call chain: main.buildRouterWithKeyring → registerRoutes → (all handler constructors and RegisterRoutes calls)
 func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisClient *redis.Client, keyring *jwtkey.Keyring, svc *services) {
 	privateKey := keyring.ActivePrivateKey()
 	authGroup := router.Group("/v1/auth")
@@ -379,6 +421,10 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 }
 
+// buildExchangeStore returns an IDP exchange store backed by Redis, or nil when
+// Redis is unavailable.
+//
+// Call chain: main.buildServices → buildExchangeStore → idp.NewExchangeStore
 func buildExchangeStore(redisClient *redis.Client) *idp.ExchangeStore {
 	if redisClient != nil {
 		return idp.NewExchangeStore(redisClient)
@@ -386,6 +432,11 @@ func buildExchangeStore(redisClient *redis.Client) *idp.ExchangeStore {
 	return nil
 }
 
+// buildMailSender returns the configured mailer.Sender implementation (console,
+// SMTP, or noop). Falls back to noop when SMTP is requested but host/from are
+// missing.
+//
+// Call chain: main.registerRoutes → buildMailSender → mailer constructors
 func buildMailSender(cfg config.Config) mailer.Sender {
 	switch cfg.MailerProvider {
 	case "noop":
@@ -408,6 +459,10 @@ func buildMailSender(cfg config.Config) mailer.Sender {
 	}
 }
 
+// buildReadinessChecks returns the standard MySQL + Redis health checks for the
+// /readyz endpoint.
+//
+// Call chain: main.buildRouterWithServices → buildReadinessChecks → (no downstream)
 func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.ReadinessCheck {
 	return []httpserver.ReadinessCheck{
 		{
@@ -442,6 +497,11 @@ func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.R
 }
 
 
+// frontendCallbackURLFromBrowserLoginURL derives the external IDP callback URL
+// from the configured browser login URL by replacing the path with /external/callback.
+// If parsing fails it falls back to a relative path.
+//
+// Call chain: main.buildServices → frontendCallbackURLFromBrowserLoginURL → url.Parse
 func frontendCallbackURLFromBrowserLoginURL(browserLoginURL string) string {
 	parsed, err := url.Parse(strings.TrimSpace(browserLoginURL))
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {

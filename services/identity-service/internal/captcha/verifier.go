@@ -39,7 +39,10 @@ type Verifier struct {
 	client    *http.Client
 }
 
-// NewVerifier creates a Verifier. If provider is empty, Middleware() returns a noop.
+// NewVerifier creates a Verifier with a 10-second HTTP timeout.
+// If provider is empty, Middleware() returns a no-op handler.
+//
+// Call chain: wire → NewVerifier
 func NewVerifier(provider Provider, secretKey string) *Verifier {
 	return &Verifier{
 		provider:  provider,
@@ -48,12 +51,16 @@ func NewVerifier(provider Provider, secretKey string) *Verifier {
 	}
 }
 
+// Enabled reports whether CAPTCHA verification is configured.
 func (v *Verifier) Enabled() bool {
 	return v != nil && v.provider != ProviderNone
 }
 
-// Middleware returns a Gin middleware that validates CAPTCHA tokens.
-// If provider is empty, returns a noop middleware.
+// Middleware returns a Gin middleware that validates CAPTCHA tokens from the
+// X-Captcha-Token header or captcha_token query parameter.
+// If the provider is not enabled, returns a no-op handler.
+//
+// Call chain: router setup → Middleware → verify → provider siteverify API
 func (v *Verifier) Middleware() gin.HandlerFunc {
 	if !v.Enabled() {
 		return func(c *gin.Context) { c.Next() }
@@ -88,6 +95,10 @@ type verifyResponse struct {
 	Success bool `json:"success"`
 }
 
+// verify POSTs the token to the configured provider's siteverify endpoint and
+// checks the success flag in the JSON response.
+//
+// Call chain: Middleware → verify → HTTP POST → json.Unmarshal
 func (v *Verifier) verify(ctx context.Context, token, remoteIP string) error {
 	verifyURL, ok := verifyURLs[v.provider]
 	if !ok {
@@ -140,7 +151,10 @@ func (e *VerificationError) Error() string {
 	return "captcha verification failed for provider: " + e.Provider
 }
 
-// ActionSet builds a lookup set from a list of action names, normalizing to lowercase.
+// ActionSet builds a lowercase lookup set from a list of action names, trimming
+// whitespace and skipping empty entries.
+//
+// Call chain: caller → ActionSet → (pure function, no dependencies)
 func ActionSet(actions []string) map[string]struct{} {
 	result := make(map[string]struct{}, len(actions))
 	for _, action := range actions {

@@ -226,6 +226,9 @@ func (h *Handler) introspect(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"active": false})
 }
 
+// revoke revokes a refresh token and its family for a given client.
+//
+// Call chain: POST /oauth2/revoke → revoke → revokeRefreshTokenGrant
 func (h *Handler) revoke(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		oauthError(c, http.StatusBadRequest, "invalid_request")
@@ -288,6 +291,10 @@ func (h *Handler) logout(c *gin.Context) {
 	h.performLogout(c, request)
 }
 
+// logoutPost handles the CSRF-protected POST from the browser logout confirmation
+// page, then delegates to performLogout.
+//
+// Call chain: POST /oauth2/logout → logoutPost → performLogout
 func (h *Handler) logoutPost(c *gin.Context) {
 	if !logoutCSRFValid(c) {
 		c.String(http.StatusForbidden, "invalid csrf token")
@@ -301,6 +308,10 @@ func (h *Handler) logoutPost(c *gin.Context) {
 	})
 }
 
+// performLogout revokes the resolved session, clears the SSO cookie, and
+// redirects to the post-logout URI when configured.
+//
+// Call chain: logout / logoutPost → performLogout → revokeLoginSessionWithDB + resolvePostLogoutRedirectURI
 func (h *Handler) performLogout(c *gin.Context, request logoutRequest) {
 	ctx := c.Request.Context()
 	sessionID, ok := h.resolveLogoutSession(request.SessionID, h.currentLogoutCookieSessionID(c))
@@ -342,6 +353,9 @@ func (h *Handler) performLogout(c *gin.Context, request logoutRequest) {
 	c.JSON(http.StatusOK, gin.H{"logout": true})
 }
 
+// resolveLogoutSession resolves the effective session ID from the requested and
+// cookie values. If both are present they must match; otherwise the cookie
+// value is used as default.
 func (h *Handler) resolveLogoutSession(requestedSessionID, cookieSessionID string) (string, bool) {
 	requestedSessionID = strings.TrimSpace(requestedSessionID)
 	cookieSessionID = strings.TrimSpace(cookieSessionID)
@@ -354,6 +368,9 @@ func (h *Handler) resolveLogoutSession(requestedSessionID, cookieSessionID strin
 	return cookieSessionID, true
 }
 
+// currentLogoutCookieSessionID parses the OIDC SSO cookie and returns the session ID.
+//
+// Call chain: logout → currentLogoutCookieSessionID → ParseOIDCAuthorizeCookie
 func (h *Handler) currentLogoutCookieSessionID(c *gin.Context) string {
 	cookieValue, err := c.Cookie(session.OIDCAuthorizeCookieName)
 	if err != nil || strings.TrimSpace(cookieValue) == "" {
@@ -369,6 +386,10 @@ func (h *Handler) currentLogoutCookieSessionID(c *gin.Context) string {
 	return strings.TrimSpace(claims.SessionID)
 }
 
+// issueTokenResponse signs access and ID tokens, and optionally creates a refresh
+// token row when the client supports refresh_token grant and offline_access scope.
+//
+// Call chain: exchangeAuthorizationCode → issueTokenResponse → signAccessToken + signIDToken + DB Create RefreshToken
 func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *store.User, client *store.OAuthClient, record *store.OAuthAuthorizationCode) (*tokenResponse, error) {
 	issueRefreshToken := supportsGrantType(client, "refresh_token") && hasScope(scopeSet(record.Scope), "offline_access")
 	sessionID := strings.TrimSpace(record.SessionID)
@@ -427,6 +448,10 @@ func (s *Service) issueTokenResponse(ctx context.Context, db *gorm.DB, user *sto
 	}, nil
 }
 
+// refreshToken rotates an OIDC refresh token in a transaction: revoke the old one,
+// create a replacement in the same family, and sign new access/ID tokens.
+//
+// Call chain: POST /oauth2/token (refresh_token grant) → refreshToken → DB Transaction + signAccessToken + signIDToken
 func (h *Handler) refreshToken(c *gin.Context, client *store.OAuthClient) {
 	ctx := c.Request.Context()
 	rawToken := strings.TrimSpace(c.PostForm("refresh_token"))
@@ -592,6 +617,7 @@ func (s *Service) recordRefreshTokenReuse(ctx context.Context, token store.Refre
 	return nil
 }
 
+// revokeRefreshTokenFamily sets revoked_at on every non-revoked token in the family.
 func (s *Service) revokeRefreshTokenFamily(ctx context.Context, familyID string) error {
 	now := s.now()
 	return s.db.WithContext(ctx).
@@ -600,6 +626,10 @@ func (s *Service) revokeRefreshTokenFamily(ctx context.Context, familyID string)
 		Update("revoked_at", now).Error
 }
 
+// revokeRefreshTokenGrant revokes a refresh token, its family, and its login
+// session, then records an audit entry.
+//
+// Call chain: handler.revoke → revokeRefreshTokenGrant → revokeLoginSessionWithDB + DB UPDATE family
 func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientID string, now time.Time) error {
 	var token store.RefreshToken
 	err := s.db.WithContext(ctx).
@@ -641,6 +671,7 @@ func (s *Service) revokeRefreshTokenGrant(ctx context.Context, rawToken, clientI
 	return nil
 }
 
+// revokeLoginSession sets revoked_at on a single login session.
 func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return nil
@@ -652,6 +683,9 @@ func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) erro
 		Update("revoked_at", now).Error
 }
 
+// revokeLoginSessionWithDB locks and revokes a login session within a transaction.
+//
+// Call chain: performLogout / revokeRefreshTokenGrant → revokeLoginSessionWithDB → DB SELECT FOR UPDATE + UPDATE
 func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, sessionID string, now time.Time) error {
 	if err := db.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -667,6 +701,8 @@ func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, ses
 		Update("revoked_at", now).Error
 }
 
+// isSQLiteWriteLock detects SQLite write-lock errors so callers can treat them
+// as concurrency conflicts.
 func isSQLiteWriteLock(err error) bool {
 	if err == nil {
 		return false
@@ -675,6 +711,7 @@ func isSQLiteWriteLock(err error) bool {
 	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
 }
 
+// recordAuditBestEffort writes an audit entry and logs a warning on failure.
 func (s *Service) recordAuditBestEffort(ctx context.Context, entry audit.Entry) {
 	if err := s.audit.Record(ctx, entry); err != nil {
 		slog.Warn("oidc audit record failed",
@@ -686,6 +723,9 @@ func (s *Service) recordAuditBestEffort(ctx context.Context, entry audit.Entry) 
 	}
 }
 
+// signAccessToken signs an OIDC-scoped JWT access token with RS256.
+//
+// Call chain: issueTokenResponse / refreshToken → signAccessToken → jwt.SignedString
 func (s *Service) signAccessToken(user *store.User, clientID string, tenantID int64, sessionID, scope string) (string, error) {
 	issuedAt := s.now()
 	jti, err := s.randomID(16)
@@ -729,6 +769,9 @@ func (s *Service) signAccessToken(user *store.User, clientID string, tenantID in
 	return token.SignedString(s.privateKey)
 }
 
+// signIDToken signs an OIDC ID token JWT with RS256.
+//
+// Call chain: issueTokenResponse / refreshToken → signIDToken → jwt.SignedString
 func (s *Service) signIDToken(user *store.User, clientID, nonce, scope string) (string, error) {
 	issuedAt := s.now()
 	scopes := scopeSet(scope)

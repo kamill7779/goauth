@@ -20,6 +20,8 @@ import (
 // active. Any miss short-circuits before persisting the authorization code.
 // authorize starts the OAuth2 authorization code flow.
 //
+// Call chain: GET /oauth2/authorize → authorize → loadClient + ensureClientTenantMembership + create auth code
+//
 // @Summary      OAuth2 Authorize
 // @Description  Authenticates user and issues authorization code.
 // @Tags         oidc
@@ -171,6 +173,10 @@ func (h *Handler) authorize(c *gin.Context) {
 	c.Redirect(http.StatusFound, redirectURL.String())
 }
 
+// redirectBrowserToLogin sends a browser-initiated request to the login page
+// with a return_to parameter pointing back to the authorize endpoint.
+//
+// Call chain: authorize → redirectBrowserToLogin → buildAuthorizeReturnTarget + Redirect
 func (h *Handler) redirectBrowserToLogin(c *gin.Context) bool {
 	if h.service.browserLoginURL == "" || !browserPrefersHTML(c) {
 		return false

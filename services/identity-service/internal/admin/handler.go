@@ -18,6 +18,8 @@ import (
 	"gorm.io/gorm"
 )
 
+// Handler serves admin HTTP endpoints for dashboard, permissions, sessions,
+// audit logs, and runtime configuration.
 type Handler struct {
 	db               *gorm.DB
 	sessionService   *session.Service
@@ -27,6 +29,9 @@ type Handler struct {
 	cfg              config.Config
 }
 
+// NewHandler creates an admin Handler with required collaborators.
+//
+// Call chain: main → NewHandler → Handler (stored for route registration)
 func NewHandler(db *gorm.DB, sessionService *session.Service, recorder audit.Recorder, authMiddleware, systemMiddleware gin.HandlerFunc, cfg ...config.Config) *Handler {
 	if recorder == nil {
 		recorder = audit.NoopRecorder{}
@@ -45,6 +50,10 @@ func NewHandler(db *gorm.DB, sessionService *session.Service, recorder audit.Rec
 	}
 }
 
+// RegisterRoutes mounts admin endpoints under /v1/admin with auth and system
+// middleware when configured.
+//
+// Call chain: main → router setup → RegisterRoutes → gin router
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin := router.Group("/v1/admin")
 	if h.authMiddleware != nil {
@@ -68,6 +77,10 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.GET("/access-overview", h.accessOverview)
 }
 
+// dashboard returns aggregate stats (users, sessions, tenants, clients),
+// recent logins, and permission change audit entries.
+//
+// Call chain: HTTP GET /v1/admin/dashboard → dashboard → db/stats + recentLogins + permissionChanges
 func (h *Handler) dashboard(c *gin.Context) {
 	var totalUsers, activeSessions, totalTenants, totalOAuthClients int64
 	if err := h.db.WithContext(c.Request.Context()).Model(&store.User{}).Count(&totalUsers).Error; err != nil {
@@ -118,6 +131,9 @@ func (h *Handler) dashboard(c *gin.Context) {
 	})
 }
 
+// listPermissions returns every registered permission ordered by resource and action.
+//
+// Call chain: HTTP GET /v1/admin/permissions → listPermissions → db.Find
 func (h *Handler) listPermissions(c *gin.Context) {
 	var permissions []store.Permission
 	if err := h.db.WithContext(c.Request.Context()).Order("resource ASC, action ASC, id ASC").Find(&permissions).Error; err != nil {
@@ -127,6 +143,10 @@ func (h *Handler) listPermissions(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"permissions": permissions})
 }
 
+// createPermission creates a permission record from JSON body.
+// Auto-generates the code as "resource:action" when not provided.
+//
+// Call chain: HTTP POST /v1/admin/permissions → createPermission → db.Create + recordAudit
 func (h *Handler) createPermission(c *gin.Context) {
 	var request permissionRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -156,6 +176,10 @@ func (h *Handler) createPermission(c *gin.Context) {
 	httpserver.Success(c, http.StatusCreated, record)
 }
 
+// updatePermission patch-updates a permission and bumps all tenant member
+// permission versions so caches are invalidated.
+//
+// Call chain: HTTP PATCH /v1/admin/permissions/:id → updatePermission → db.Transaction + bumpAllPermissionVersions + recordAudit
 func (h *Handler) updatePermission(c *gin.Context) {
 	id, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -207,6 +231,10 @@ func (h *Handler) updatePermission(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, record)
 }
 
+// deletePermission removes a permission and its role-permission links, then
+// bumps all permission versions to force cache refresh.
+//
+// Call chain: HTTP DELETE /v1/admin/permissions/:id → deletePermission → db.Transaction + bumpAllPermissionVersions + recordAudit
 func (h *Handler) deletePermission(c *gin.Context) {
 	id, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -228,6 +256,10 @@ func (h *Handler) deletePermission(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"deleted": true})
 }
 
+// listSessions returns a paginated, filterable list of login sessions with
+// their latest refresh-token metadata.
+//
+// Call chain: HTTP GET /v1/admin/sessions → listSessions → sessionListQuery + latestRefreshTokensBySession
 func (h *Handler) listSessions(c *gin.Context) {
 	page, pageSize := pagination(c)
 	now := time.Now()
@@ -290,6 +322,9 @@ func (h *Handler) listSessions(c *gin.Context) {
 	})
 }
 
+// revokeSession revokes a single login session by its ID via the session service.
+//
+// Call chain: HTTP POST /v1/admin/sessions/:session_id/revoke → revokeSession → sessionService.Logout + recordAudit
 func (h *Handler) revokeSession(c *gin.Context) {
 	sessionID := strings.TrimSpace(c.Param("session_id"))
 	if sessionID == "" {
@@ -323,6 +358,9 @@ func (h *Handler) revokeSession(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
 }
 
+// listUserSessions returns active sessions for a specific user.
+//
+// Call chain: HTTP GET /v1/admin/users/:id/sessions → listUserSessions → db.Find refresh tokens
 func (h *Handler) listUserSessions(c *gin.Context) {
 	userID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -367,6 +405,9 @@ func (h *Handler) listUserSessions(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"sessions": items})
 }
 
+// logoutUserSessions revokes all sessions belonging to a user.
+//
+// Call chain: HTTP POST /v1/admin/users/:id/logout-all → logoutUserSessions → sessionService.LogoutAll + recordAudit
 func (h *Handler) logoutUserSessions(c *gin.Context) {
 	userID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -384,6 +425,10 @@ func (h *Handler) logoutUserSessions(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
 }
 
+// listAuditLogs returns a paginated, filterable list of audit log entries
+// enriched with actor email addresses.
+//
+// Call chain: HTTP GET /v1/admin/audit-logs → listAuditLogs → db + actorEmails
 func (h *Handler) listAuditLogs(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := h.db.WithContext(c.Request.Context()).Model(&store.AuditLog{})
@@ -455,6 +500,10 @@ type adminSessionRow struct {
 	UserDisplayName string
 }
 
+// sessionListQuery builds a filtered query for login sessions joined with users.
+// Returns an error via the gin context for invalid filter values.
+//
+// Call chain: listSessions → sessionListQuery → db (gorm query builder)
 func (h *Handler) sessionListQuery(c *gin.Context, now time.Time) (*gorm.DB, error) {
 	query := h.db.WithContext(c.Request.Context()).
 		Table("login_sessions").
@@ -499,6 +548,10 @@ func (h *Handler) sessionListQuery(c *gin.Context, now time.Time) (*gorm.DB, err
 	return query, nil
 }
 
+// latestRefreshTokensBySession loads the most recent refresh token for each
+// session ID, keyed by session ID.
+//
+// Call chain: listSessions → latestRefreshTokensBySession → db.Find
 func (h *Handler) latestRefreshTokensBySession(c *gin.Context, rows []adminSessionRow) (map[string]store.RefreshToken, error) {
 	result := map[string]store.RefreshToken{}
 	if len(rows) == 0 {
@@ -525,6 +578,7 @@ func (h *Handler) latestRefreshTokensBySession(c *gin.Context, rows []adminSessi
 	return result, nil
 }
 
+// sessionUserLabel returns the best human-readable label for a session's user.
 func sessionUserLabel(row adminSessionRow) string {
 	if strings.TrimSpace(row.UserEmail) != "" {
 		return row.UserEmail
@@ -535,6 +589,7 @@ func sessionUserLabel(row adminSessionRow) string {
 	return "user:" + strconv.FormatInt(row.UserID, 10)
 }
 
+// sessionRowClientLabel returns the best human-readable label for a session's client.
 func sessionRowClientLabel(row adminSessionRow, token store.RefreshToken) string {
 	if strings.TrimSpace(token.UserAgent) != "" {
 		return token.UserAgent
@@ -548,6 +603,7 @@ func sessionRowClientLabel(row adminSessionRow, token store.RefreshToken) string
 	return "GoAuth"
 }
 
+// sessionRowStatus returns a status string (active, revoked, expired, inactive).
 func sessionRowStatus(row adminSessionRow, token store.RefreshToken, hasToken, active bool, now time.Time) string {
 	if row.RevokedAt != nil {
 		return "revoked"
@@ -564,6 +620,7 @@ func sessionRowStatus(row adminSessionRow, token store.RefreshToken, hasToken, a
 	return "inactive"
 }
 
+// parseInt64Param parses a URL path parameter as int64 and writes a 400 error on failure.
 func parseInt64Param(c *gin.Context, name string) (int64, error) {
 	value, err := strconv.ParseInt(c.Param(name), 10, 64)
 	if err != nil {
@@ -573,6 +630,7 @@ func parseInt64Param(c *gin.Context, name string) (int64, error) {
 	return value, nil
 }
 
+// pagination extracts page and page_size query parameters with safe defaults (1-100).
 func pagination(c *gin.Context) (int, int) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	if page < 1 {
@@ -588,12 +646,17 @@ func pagination(c *gin.Context) (int, int) {
 	return page, pageSize
 }
 
+// bumpAllPermissionVersions increments permission_version on every active tenant
+// member to force a cache miss on next permission lookup.
+//
+// Call chain: updatePermission/deletePermission → bumpAllPermissionVersions → db.Update
 func bumpAllPermissionVersions(tx *gorm.DB) error {
 	return tx.Model(&store.TenantMember{}).
 		Where("deleted_at IS NULL").
 		Update("permission_version", gorm.Expr("permission_version + 1")).Error
 }
 
+// sessionClientLabel returns the best human-readable label for a refresh token's client.
 func sessionClientLabel(token store.RefreshToken) string {
 	if strings.TrimSpace(token.UserAgent) != "" {
 		return token.UserAgent
@@ -604,6 +667,9 @@ func sessionClientLabel(token store.RefreshToken) string {
 	return "GoAuth"
 }
 
+// recentLogins returns the 5 most recent login audit entries with actor emails.
+//
+// Call chain: dashboard → recentLogins → db.Find + actorEmails
 func (h *Handler) recentLogins(c *gin.Context) ([]gin.H, error) {
 	var logs []store.AuditLog
 	if err := h.db.WithContext(c.Request.Context()).
@@ -631,6 +697,9 @@ func (h *Handler) recentLogins(c *gin.Context) ([]gin.H, error) {
 	return items, nil
 }
 
+// permissionChanges returns the 5 most recent permission-related audit entries.
+//
+// Call chain: dashboard → permissionChanges → db.Find + actorEmails
 func (h *Handler) permissionChanges(c *gin.Context) ([]gin.H, error) {
 	var logs []store.AuditLog
 	if err := h.db.WithContext(c.Request.Context()).
@@ -655,6 +724,10 @@ func (h *Handler) permissionChanges(c *gin.Context) ([]gin.H, error) {
 	return items, nil
 }
 
+// actorEmails resolves a set of audit-log actor user IDs to email addresses.
+// Returns "system" for actor ID 0 and "user:<id>" for unresolved IDs.
+//
+// Call chain: listAuditLogs/recentLogins/permissionChanges → actorEmails → db.Find users
 func (h *Handler) actorEmails(c *gin.Context, logs []store.AuditLog) (map[int64]string, error) {
 	ids := make([]int64, 0, len(logs))
 	seen := map[int64]struct{}{}
@@ -688,6 +761,9 @@ func (h *Handler) actorEmails(c *gin.Context, logs []store.AuditLog) (map[int64]
 	return result, nil
 }
 
+// recordAudit writes an audit entry, extracting the actor from session claims.
+//
+// Call chain: all mutating handlers → recordAudit → audit.Recorder.Record
 func (h *Handler) recordAudit(c *gin.Context, action, targetType, targetID string, metadata map[string]any) error {
 	actorUserID := int64(0)
 	if claims, ok := session.ClaimsFromContext(c); ok {

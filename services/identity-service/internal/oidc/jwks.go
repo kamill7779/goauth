@@ -13,6 +13,8 @@ import (
 // modulus and exponent are base64url-encoded big-endian per RFC 7518 §6.3.1.
 // jwks returns the JSON Web Key Set for token verification.
 //
+// Call chain: GET /oauth2/jwks → jwks → jwksPublicKeys → JSON response
+//
 // @Summary      JWKS
 // @Description  Returns the public keys used to verify token signatures.
 // @Tags         oidc

@@ -36,6 +36,9 @@ type permissionCacheEntry struct {
 	Permissions []string `json:"permissions"`
 }
 
+// NewService creates an RBAC Service. Pass nil for redisClient to disable caching.
+//
+// Call chain: main → NewService → Service
 func NewService(db *gorm.DB, redisClient *redis.Client) *Service {
 	return &Service{
 		db:    db,
@@ -43,6 +46,9 @@ func NewService(db *gorm.DB, redisClient *redis.Client) *Service {
 	}
 }
 
+// Can returns whether a user has a specific permission in a tenant.
+//
+// Call chain: check/checkBatch → Can → ListPermissions
 func (s *Service) Can(ctx context.Context, userID, tenantID int64, permission string) (bool, error) {
 	permissions, err := s.ListPermissions(ctx, userID, tenantID)
 	if err != nil {
@@ -100,6 +106,10 @@ func (s *Service) ListPermissions(ctx context.Context, userID, tenantID int64) (
 	return permissions, nil
 }
 
+// InvalidateUserTenantPermissions removes the cached permission entry for a
+// (user, tenant) pair. No-op when Redis is nil.
+//
+// Call chain: tenant service mutating methods → InvalidateUserTenantPermissions → redis.Del
 func (s *Service) InvalidateUserTenantPermissions(ctx context.Context, userID, tenantID int64) error {
 	if s.redis == nil {
 		return nil
@@ -108,6 +118,10 @@ func (s *Service) InvalidateUserTenantPermissions(ctx context.Context, userID, t
 	return nil
 }
 
+// InvalidateMemberPermissions resolves a member ID to (user, tenant) and
+// invalidates that pair's cache entry.
+//
+// Call chain: (external callers) → InvalidateMemberPermissions → db.First + InvalidateUserTenantPermissions
 func (s *Service) InvalidateMemberPermissions(ctx context.Context, memberID int64) error {
 	if s.redis == nil {
 		return nil
@@ -120,6 +134,10 @@ func (s *Service) InvalidateMemberPermissions(ctx context.Context, memberID int6
 	return s.InvalidateUserTenantPermissions(ctx, member.UserID, member.TenantID)
 }
 
+// InvalidateRolePermissions invalidates the cache for every member who holds
+// the given role, processing in batches of memberScopeBatchSize.
+//
+// Call chain: (external callers) → InvalidateRolePermissions → memberIDsForRole + memberScopesByIDs + InvalidateUserTenantPermissions
 func (s *Service) InvalidateRolePermissions(ctx context.Context, roleID int64) error {
 	if s.redis == nil {
 		return nil
@@ -147,6 +165,10 @@ func (s *Service) InvalidateRolePermissions(ctx context.Context, roleID int64) e
 	return nil
 }
 
+// InvalidateTenantPermissions invalidates the cache for every active member
+// of a tenant, processing in batches.
+//
+// Call chain: UpdateTenant → InvalidateTenantPermissions → db.Pluck + memberScopesByIDs + InvalidateUserTenantPermissions
 func (s *Service) InvalidateTenantPermissions(ctx context.Context, tenantID int64) error {
 	if s.redis == nil {
 		return nil
@@ -178,6 +200,10 @@ func (s *Service) InvalidateTenantPermissions(ctx context.Context, tenantID int6
 	return nil
 }
 
+// lookupPermissionCodes resolves a user's effective permission codes for a
+// tenant by walking: active member IDs → role IDs → permission IDs → codes.
+//
+// Call chain: ListPermissions → lookupPermissionCodes → activeMemberIDsForUserTenant → roleIDsForMembersInTenant → permissionIDsForRoles → permissionCodesByIDs
 func (s *Service) lookupPermissionCodes(ctx context.Context, userID, tenantID int64) ([]string, error) {
 	memberIDs, err := s.activeMemberIDsForUserTenant(ctx, userID, tenantID)
 	if err != nil || len(memberIDs) == 0 {
@@ -197,6 +223,10 @@ func (s *Service) lookupPermissionCodes(ctx context.Context, userID, tenantID in
 	return s.permissionCodesByIDs(ctx, permissionIDs)
 }
 
+// activeMemberIDsForUserTenant returns active member IDs for a user in a tenant.
+// Returns nil if the tenant or user is inactive/deleted.
+//
+// Call chain: lookupPermissionCodes → activeMemberIDsForUserTenant → db queries
 func (s *Service) activeMemberIDsForUserTenant(ctx context.Context, userID, tenantID int64) ([]int64, error) {
 	if !s.activeTenantExists(ctx, tenantID) {
 		return nil, nil
@@ -221,6 +251,7 @@ func (s *Service) activeMemberIDsForUserTenant(ctx context.Context, userID, tena
 	return memberIDs, err
 }
 
+// activeTenantExists returns true when a tenant exists, is active, and is not deleted.
 func (s *Service) activeTenantExists(ctx context.Context, tenantID int64) bool {
 	var count int64
 	err := s.db.WithContext(ctx).
@@ -230,6 +261,10 @@ func (s *Service) activeTenantExists(ctx context.Context, tenantID int64) bool {
 	return err == nil && count > 0
 }
 
+// permissionScopeVersion returns the max permission_version and whether any
+// active membership exists for a (user, tenant) pair.
+//
+// Call chain: ListPermissions → permissionScopeVersion → db queries
 func (s *Service) permissionScopeVersion(ctx context.Context, userID, tenantID int64) (int, bool, error) {
 	if !s.activeTenantExists(ctx, tenantID) {
 		return 0, false, nil
@@ -260,6 +295,10 @@ func (s *Service) permissionScopeVersion(ctx context.Context, userID, tenantID i
 	return scope.Version, scope.Count > 0, nil
 }
 
+// roleIDsForMembersInTenant returns distinct role IDs assigned to the given
+// members that also belong to the specified tenant.
+//
+// Call chain: lookupPermissionCodes → roleIDsForMembersInTenant → db queries
 func (s *Service) roleIDsForMembersInTenant(ctx context.Context, memberIDs []int64, tenantID int64) ([]int64, error) {
 	var assignedRoleIDs []int64
 	if err := s.db.WithContext(ctx).
@@ -281,6 +320,9 @@ func (s *Service) roleIDsForMembersInTenant(ctx context.Context, memberIDs []int
 	return roleIDs, err
 }
 
+// permissionIDsForRoles returns distinct permission IDs assigned to any of the given roles.
+//
+// Call chain: lookupPermissionCodes → permissionIDsForRoles → db.Pluck
 func (s *Service) permissionIDsForRoles(ctx context.Context, roleIDs []int64) ([]int64, error) {
 	var permissionIDs []int64
 	err := s.db.WithContext(ctx).
@@ -291,6 +333,9 @@ func (s *Service) permissionIDsForRoles(ctx context.Context, roleIDs []int64) ([
 	return permissionIDs, err
 }
 
+// permissionCodesByIDs returns distinct, sorted permission codes for the given IDs.
+//
+// Call chain: lookupPermissionCodes → permissionCodesByIDs → db.Pluck
 func (s *Service) permissionCodesByIDs(ctx context.Context, permissionIDs []int64) ([]string, error) {
 	permissions := []string{}
 	err := s.db.WithContext(ctx).
@@ -306,6 +351,9 @@ func (s *Service) permissionCodesByIDs(ctx context.Context, permissionIDs []int6
 	return permissions, nil
 }
 
+// memberIDsForRole returns member IDs that hold the given role.
+//
+// Call chain: InvalidateRolePermissions → memberIDsForRole → db.Pluck
 func (s *Service) memberIDsForRole(ctx context.Context, roleID int64) ([]int64, error) {
 	var memberIDs []int64
 	err := s.db.WithContext(ctx).
@@ -315,6 +363,9 @@ func (s *Service) memberIDsForRole(ctx context.Context, roleID int64) ([]int64, 
 	return memberIDs, err
 }
 
+// memberScopesByIDs returns (user_id, tenant_id) pairs for the given member IDs.
+//
+// Call chain: InvalidateRolePermissions/InvalidateTenantPermissions → memberScopesByIDs → db.Scan
 func (s *Service) memberScopesByIDs(ctx context.Context, memberIDs []int64) ([]memberScope, error) {
 	if len(memberIDs) == 0 {
 		return nil, nil
@@ -329,6 +380,10 @@ func (s *Service) memberScopesByIDs(ctx context.Context, memberIDs []int64) ([]m
 	return scopes, err
 }
 
+// loadCachedPermissions reads the Redis cache for a (user, tenant) pair.
+// Returns (permissions, version, found, error). No-op when Redis is nil.
+//
+// Call chain: ListPermissions → loadCachedPermissions → redis.Get
 func (s *Service) loadCachedPermissions(ctx context.Context, userID, tenantID int64) ([]string, int, bool, error) {
 	if s.redis == nil {
 		return nil, 0, false, nil
@@ -351,6 +406,10 @@ func (s *Service) loadCachedPermissions(ctx context.Context, userID, tenantID in
 	return permissions, entry.Version, true, nil
 }
 
+// storeCachedPermissions writes a permission snapshot to Redis with a TTL.
+// No-op when Redis is nil.
+//
+// Call chain: ListPermissions → storeCachedPermissions → redis.Set
 func (s *Service) storeCachedPermissions(ctx context.Context, userID, tenantID int64, version int, permissions []string) error {
 	if s.redis == nil {
 		return nil

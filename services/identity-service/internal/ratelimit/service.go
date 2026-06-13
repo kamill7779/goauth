@@ -23,6 +23,7 @@ type Service struct {
 	redis *redis.Client
 }
 
+// NewService creates a rate-limit Service backed by the given Redis client.
 func NewService(redisClient *redis.Client) *Service {
 	return &Service{redis: redisClient}
 }
@@ -30,6 +31,9 @@ func NewService(redisClient *redis.Client) *Service {
 // Allow checks whether the (scope, key) pair is within its rate limit.
 // Uses Redis INCR + EXPIRE: the first request in a window sets the TTL,
 // subsequent requests increment the counter until it exceeds limit.
+// A nil service or empty scope/key is a no-op (always allowed).
+//
+// Call chain: auth/oidc handler → ratelimit.Service.Allow → cache.RateLimitKey / Redis TxPipeline
 func (s *Service) Allow(ctx context.Context, scope, key string, limit int64, window time.Duration) (Result, error) {
 	if s == nil || s.redis == nil || limit <= 0 || window <= 0 {
 		return Result{Allowed: true}, nil
@@ -65,7 +69,10 @@ func (s *Service) Allow(ctx context.Context, scope, key string, limit int64, win
 	}, nil
 }
 
-// SetRetryAfterHeader writes a standard Retry-After header to the response.
+// SetRetryAfterHeader writes a standard Retry-After header (integer seconds,
+// minimum 1) to the HTTP response.
+//
+// Call chain: any rate-limited handler → ratelimit.SetRetryAfterHeader → gin.Context.Header
 func SetRetryAfterHeader(c *gin.Context, retryAfter time.Duration) {
 	seconds := int(retryAfter.Seconds())
 	if seconds < 1 {

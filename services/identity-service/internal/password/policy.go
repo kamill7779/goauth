@@ -22,7 +22,9 @@ type Policy struct {
 	HistoryCount     int
 }
 
-// LoadFromConfig builds a Policy from the service config.
+// LoadFromConfig builds a Policy from the service config with sensible defaults.
+//
+// Call chain: wire → LoadFromConfig → config.Config fields
 func LoadFromConfig(cfg config.Config) Policy {
 	minLen := cfg.PasswordMinLength
 	if minLen <= 0 {
@@ -44,6 +46,8 @@ func LoadFromConfig(cfg config.Config) Policy {
 
 // Validate checks the password against all configured rules.
 // Returns nil if valid, or a combined error listing all violations.
+//
+// Call chain: password-change handler → Validate → unicode checks
 func (p Policy) Validate(password string) error {
 	var violations []string
 
@@ -87,6 +91,8 @@ func (p Policy) Validate(password string) error {
 
 // CheckHistory returns an error if the new password matches any of the
 // provided bcrypt hashes (most recent first).
+//
+// Call chain: password-change handler → CheckHistory → bcrypt.CompareHashAndPassword
 func (p Policy) CheckHistory(newPassword string, hashes []string) error {
 	limit := p.HistoryCount
 	if limit <= 0 || len(hashes) == 0 {

@@ -21,6 +21,10 @@ func (h *Handler) SetRateLimiter(limiter *ratelimit.Service) {
 	h.rateLimiter = limiter
 }
 
+// allowRefreshRateLimit checks the refresh rate limit and writes a JSON error
+// response if exceeded. Returns true when the request may proceed.
+//
+// Call chain: handler.refresh → allowRefreshRateLimit → rateLimiter.Allow
 func (h *Handler) allowRefreshRateLimit(c *gin.Context) bool {
 	if h.rateLimiter == nil {
 		return true
@@ -40,6 +44,7 @@ func (h *Handler) allowRefreshRateLimit(c *gin.Context) bool {
 	return false
 }
 
+// refreshRateLimitKey builds a rate-limit key from the client IP.
 func refreshRateLimitKey(c *gin.Context) string {
 	ip := strings.TrimSpace(c.ClientIP())
 	if ip == "" {

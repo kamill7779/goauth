@@ -33,10 +33,18 @@ type readinessFailureResponse struct {
 	Data    any    `json:"data"`
 }
 
+// NewReadinessRegistrar creates a Registrar that serves GET /readyz, running
+// each supplied ReadinessCheck with a 2 s timeout. Any failure returns 503.
+//
+// Call chain: main.buildRouterWithServices → http.NewReadinessRegistrar → (no downstream)
 func NewReadinessRegistrar(checks ...ReadinessCheck) Registrar {
 	return readinessRegistrar{checks: checks}
 }
 
+// RegisterRoutes mounts the /readyz endpoint that runs all configured health
+// checks and returns 503 with per-check error details on failure.
+//
+// Call chain: http.NewRouter → readinessRegistrar.RegisterRoutes → ReadinessCheck.Check
 func (r readinessRegistrar) RegisterRoutes(router gin.IRouter) {
 	router.GET("/readyz", func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
@@ -75,6 +83,10 @@ func (r readinessRegistrar) RegisterRoutes(router gin.IRouter) {
 	})
 }
 
+// NewRouter creates a Gin engine with trusted-proxy, CORS, /healthz, and a
+// catch-all OPTIONS handler, then registers every supplied Registrar.
+//
+// Call chain: main.buildRouterWithServices → http.NewRouter → corsMiddleware / Registrar.RegisterRoutes
 func NewRouter(cfg config.Config, registrars ...Registrar) *gin.Engine {
 	router := gin.New()
 	trustedProxies := cfg.TrustedProxies
@@ -106,6 +118,11 @@ func NewRouter(cfg config.Config, registrars ...Registrar) *gin.Engine {
 	return router
 }
 
+// corsMiddleware returns a Gin middleware that sets Access-Control-Allow-Origin
+// (wildcard or explicit match), Methods, Headers, and optionally Credentials.
+// It aborts OPTIONS preflight requests with 204.
+//
+// Call chain: http.NewRouter → corsMiddleware → (no downstream)
 func corsMiddleware(cfg config.Config) gin.HandlerFunc {
 	allowedOrigins := make(map[string]struct{}, len(cfg.CORSAllowedOrigins))
 	allowWildcard := false
@@ -156,6 +173,10 @@ func corsMiddleware(cfg config.Config) gin.HandlerFunc {
 	}
 }
 
+// RegisterRoutes calls RegisterRoutes on every non-nil EngineRegistrar, wiring
+// handlers that need the concrete *gin.Engine (e.g. for group-less mounts).
+//
+// Call chain: main.registerRoutes → http.RegisterRoutes → EngineRegistrar.RegisterRoutes
 func RegisterRoutes(router *gin.Engine, registrars ...EngineRegistrar) {
 	for _, registrar := range registrars {
 		if registrar == nil {

@@ -49,6 +49,9 @@ const (
 	totpDigits                = 6
 )
 
+// NewHandler creates an account Handler with the given dependencies.
+//
+// Call chain: wire (DI) → NewHandler → registers account routes
 func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin.HandlerFunc, pwPolicy password.Policy, avatarDir string) *Handler {
 	return &Handler{
 		db:             db,
@@ -59,6 +62,9 @@ func NewHandler(db *gorm.DB, sessionService *session.Service, authMiddleware gin
 	}
 }
 
+// RegisterRoutes wires account management endpoints onto the gin engine.
+//
+// Call chain: HTTP router setup → RegisterRoutes → individual handlers
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	account := router.Group("/v1/account")
 	if h.authMiddleware != nil {
@@ -89,6 +95,9 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	}
 }
 
+// me returns the authenticated user's profile, session info, and admin flag.
+//
+// Call chain: GET /v1/account/me → me → loadActiveUser → sessionService.IsSystemUser
 func (h *Handler) me(c *gin.Context) {
 	userID, sessionID, tenantID, ok := currentUser(c)
 	if !ok {
@@ -133,6 +142,10 @@ func (h *Handler) me(c *gin.Context) {
 	})
 }
 
+// overview returns an aggregated dashboard view: user summary, stats
+// (active sessions, login methods, authorized apps), alerts, and recent activity.
+//
+// Call chain: GET /v1/account/overview → overview → loadActiveUser → DB queries (identities, sessions, audit)
 func (h *Handler) overview(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -203,6 +216,9 @@ func (h *Handler) overview(c *gin.Context) {
 	})
 }
 
+// profile returns the authenticated user's profile info.
+//
+// Call chain: GET /v1/account/profile → profile → loadActiveUser
 func (h *Handler) profile(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -224,6 +240,11 @@ func (h *Handler) profile(c *gin.Context) {
 	})
 }
 
+// updateProfile applies partial updates to the authenticated user's profile
+// fields (nickname, display name, avatar URL, locale). Email and username
+// changes are rejected.
+//
+// Call chain: PATCH /v1/account/profile → updateProfile → loadActiveUser → DB update → audit
 func (h *Handler) updateProfile(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -323,6 +344,10 @@ func (h *Handler) updateProfile(c *gin.Context) {
 	})
 }
 
+// uploadAvatar accepts an image upload (PNG, JPEG, GIF, WebP), writes it to
+// disk under data/avatars, and updates the user's avatar_url.
+//
+// Call chain: POST /v1/account/avatar → uploadAvatar → DB update → audit
 func (h *Handler) uploadAvatar(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -408,6 +433,10 @@ func (h *Handler) uploadAvatar(c *gin.Context) {
 	})
 }
 
+// loginMethods returns the list of login methods available to the
+// authenticated user: password, email, and any linked external identities.
+//
+// Call chain: GET /v1/account/login-methods → loginMethods → loadActiveUser → DB (identities)
 func (h *Handler) loginMethods(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -470,6 +499,11 @@ func (h *Handler) loginMethods(c *gin.Context) {
 	})
 }
 
+// changePassword validates the user's current password, checks the new
+// password against the policy and history, then atomically updates the hash
+// and logs the change.
+//
+// Call chain: POST /v1/account/password/change → changePassword → auth.CheckPassword → pwPolicy.Validate → DB transaction (update password + audit)
 func (h *Handler) changePassword(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -582,6 +616,10 @@ func (h *Handler) changePassword(c *gin.Context) {
 	})
 }
 
+// twoFactorStatus returns whether the user has two-factor authentication
+// enabled, which method is in use, and whether recovery codes are available.
+//
+// Call chain: GET /v1/account/2fa/status → twoFactorStatus → loadTwoFactorRecord
 func (h *Handler) twoFactorStatus(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -627,6 +665,10 @@ func (h *Handler) twoFactorStatus(c *gin.Context) {
 	})
 }
 
+// startTwoFactorSetup generates a new TOTP secret and stores it as a pending
+// setup (enabled=false) so the user can scan the QR code and verify.
+//
+// Call chain: POST /v1/account/2fa/setup/start → startTwoFactorSetup → generateTOTPSecret → DB (upsert record)
 func (h *Handler) startTwoFactorSetup(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -696,6 +738,10 @@ func (h *Handler) startTwoFactorSetup(c *gin.Context) {
 	})
 }
 
+// verifyTwoFactorSetup validates the provided TOTP code against the pending
+// secret, enables two-factor auth, and generates recovery codes.
+//
+// Call chain: POST /v1/account/2fa/verify → verifyTwoFactorSetup → verifyTOTPCode → generateRecoveryCodes → DB transaction (enable + audit)
 func (h *Handler) verifyTwoFactorSetup(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -783,6 +829,10 @@ func (h *Handler) verifyTwoFactorSetup(c *gin.Context) {
 	})
 }
 
+// disableTwoFactor requires a valid TOTP code, then clears the secret and
+// disables two-factor for the user.
+//
+// Call chain: POST /v1/account/2fa/disable → disableTwoFactor → requireEnabledTwoFactor → verifyTOTPCode → DB transaction (disable + audit)
 func (h *Handler) disableTwoFactor(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -843,6 +893,10 @@ func (h *Handler) disableTwoFactor(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"disabled": true})
 }
 
+// regenerateTwoFactorRecoveryCodes requires a valid TOTP code, then replaces
+// the stored recovery codes with new ones.
+//
+// Call chain: POST /v1/account/2fa/recovery-codes/regenerate → regenerateTwoFactorRecoveryCodes → requireEnabledTwoFactor → verifyTOTPCode → generateRecoveryCodes → DB update + audit
 func (h *Handler) regenerateTwoFactorRecoveryCodes(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -911,6 +965,10 @@ func (h *Handler) regenerateTwoFactorRecoveryCodes(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"recovery_codes": recoveryCodes})
 }
 
+// authorizedApps returns the list of OAuth applications the user has granted
+// access to, aggregated by client ID with active/inactive status.
+//
+// Call chain: GET /v1/account/authorized-apps → authorizedApps → authorizedAppRows → DB (refresh tokens + clients)
 func (h *Handler) authorizedApps(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -961,6 +1019,9 @@ func (h *Handler) authorizedApps(c *gin.Context) {
 	})
 }
 
+// activity returns recent audit-log entries for the authenticated user.
+//
+// Call chain: GET /v1/account/activity → activity → activityItems → DB (audit logs)
 func (h *Handler) activity(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -991,6 +1052,10 @@ func (h *Handler) activity(c *gin.Context) {
 	})
 }
 
+// revokeAuthorizedApp revokes all sessions and refresh tokens for the given
+// OAuth client, effectively removing the app's access.
+//
+// Call chain: DELETE /v1/account/authorized-apps/:client_id → revokeAuthorizedApp → DB transaction (revoke sessions + tokens) → audit
 func (h *Handler) revokeAuthorizedApp(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -1037,6 +1102,9 @@ func (h *Handler) revokeAuthorizedApp(c *gin.Context) {
 	})
 }
 
+// listSessions returns the user's login sessions with status and client info.
+//
+// Call chain: GET /v1/account/sessions → listSessions → DB (login_sessions + refresh_tokens)
 func (h *Handler) listSessions(c *gin.Context) {
 	userID, currentSessionID, _, ok := currentUser(c)
 	if !ok {
@@ -1083,6 +1151,10 @@ func (h *Handler) listSessions(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"sessions": items})
 }
 
+// revokeSession revokes a single login session by ID, after verifying
+// ownership.
+//
+// Call chain: POST /v1/account/sessions/:session_id/revoke → revokeSession → DB (verify ownership) → sessionService.Logout
 func (h *Handler) revokeSession(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -1117,6 +1189,9 @@ func (h *Handler) revokeSession(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
 }
 
+// logoutAll revokes every session belonging to the authenticated user.
+//
+// Call chain: POST /v1/account/logout-all → logoutAll → sessionService.LogoutAll
 func (h *Handler) logoutAll(c *gin.Context) {
 	userID, _, _, ok := currentUser(c)
 	if !ok {
@@ -1144,6 +1219,10 @@ type accountSessionRow struct {
 
 const maxAvatarUploadBytes int64 = 2 * 1024 * 1024
 
+// avatarFileExtension maps a MIME content type to a file extension.
+// Returns false for unsupported types.
+//
+// Call chain: uploadAvatar → avatarFileExtension
 func avatarFileExtension(contentType string) (string, bool) {
 	switch contentType {
 	case "image/png":
@@ -1159,6 +1238,9 @@ func avatarFileExtension(contentType string) (string, bool) {
 	}
 }
 
+// avatarFilename generates a unique filename: <userID>-<randomHex>.<ext>.
+//
+// Call chain: uploadAvatar → avatarFilename
 func avatarFilename(userID int64, ext string) (string, error) {
 	random := make([]byte, 16)
 	if _, err := cryptorand.Read(random); err != nil {
@@ -1167,6 +1249,11 @@ func avatarFilename(userID int64, ext string) (string, error) {
 	return fmt.Sprintf("%d-%s%s", userID, hex.EncodeToString(random), ext), nil
 }
 
+// currentUser extracts the authenticated user ID, session ID, and tenant ID
+// from session claims. Writes an error response and returns false when
+// authentication is missing or invalid.
+//
+// Call chain: every account handler → currentUser → session.ClaimsFromContext
 func currentUser(c *gin.Context) (int64, string, int64, bool) {
 	claims, ok := session.ClaimsFromContext(c)
 	if !ok {
@@ -1181,6 +1268,10 @@ func currentUser(c *gin.Context) (int64, string, int64, bool) {
 	return userID, claims.SessionID, claims.TenantID, true
 }
 
+// latestRefreshTokensBySession loads the most recent refresh token for each
+// session ID, returned as a map keyed by session ID.
+//
+// Call chain: listSessions → latestRefreshTokensBySession → DB (refresh tokens)
 func latestRefreshTokensBySession(c *gin.Context, db *gorm.DB, rows []accountSessionRow) (map[string]store.RefreshToken, error) {
 	result := map[string]store.RefreshToken{}
 	if len(rows) == 0 {
@@ -1207,6 +1298,9 @@ func latestRefreshTokensBySession(c *gin.Context, db *gorm.DB, rows []accountSes
 	return result, nil
 }
 
+// accountSessionClient returns the best client label for a session row.
+//
+// Call chain: listSessions → accountSessionClient
 func accountSessionClient(row accountSessionRow, token store.RefreshToken) string {
 	if strings.TrimSpace(row.ClientID) != "" {
 		return row.ClientID
@@ -1217,6 +1311,10 @@ func accountSessionClient(row accountSessionRow, token store.RefreshToken) strin
 	return "GoAuth"
 }
 
+// accountSessionStatus determines the session status: active, expired,
+// revoked, or inactive.
+//
+// Call chain: listSessions → accountSessionStatus
 func accountSessionStatus(row accountSessionRow, token store.RefreshToken, hasToken, active bool, now time.Time) string {
 	if row.RevokedAt != nil {
 		return "revoked"
@@ -1233,6 +1331,10 @@ func accountSessionStatus(row accountSessionRow, token store.RefreshToken, hasTo
 	return "inactive"
 }
 
+// userDisplayName picks the best display name from user fields:
+// Nickname > DisplayName > Username > Email > default.
+//
+// Call chain: me / overview → userDisplayName
 func userDisplayName(user store.User) string {
 	for _, value := range []string{user.Nickname, user.DisplayName, user.Username, user.Email} {
 		if text := strings.TrimSpace(value); text != "" {
@@ -1242,6 +1344,10 @@ func userDisplayName(user store.User) string {
 	return "GoAuth User"
 }
 
+// loadActiveUser fetches a non-deleted user by ID. Returns
+// gorm.ErrRecordNotFound when the user does not exist or is soft-deleted.
+//
+// Call chain: most account handlers → loadActiveUser → DB
 func (h *Handler) loadActiveUser(c *gin.Context, userID int64) (*store.User, error) {
 	var user store.User
 	if err := h.db.WithContext(c.Request.Context()).
@@ -1252,6 +1358,9 @@ func (h *Handler) loadActiveUser(c *gin.Context, userID int64) (*store.User, err
 	return &user, nil
 }
 
+// loadTwoFactorRecord fetches the two-factor record for a user.
+//
+// Call chain: two-factor handlers → loadTwoFactorRecord → DB
 func (h *Handler) loadTwoFactorRecord(c *gin.Context, userID int64) (*store.UserTwoFactor, error) {
 	var record store.UserTwoFactor
 	if err := h.db.WithContext(c.Request.Context()).
@@ -1262,6 +1371,11 @@ func (h *Handler) loadTwoFactorRecord(c *gin.Context, userID int64) (*store.User
 	return &record, nil
 }
 
+// requireEnabledTwoFactor loads the two-factor record and validates that it
+// is enabled with a non-empty secret. Writes an error response and returns
+// false when not satisfied.
+//
+// Call chain: disableTwoFactor / regenerateTwoFactorRecoveryCodes → requireEnabledTwoFactor → loadTwoFactorRecord
 func (h *Handler) requireEnabledTwoFactor(c *gin.Context, userID int64) (*store.UserTwoFactor, bool) {
 	record, err := h.loadTwoFactorRecord(c, userID)
 	if err != nil {
@@ -1279,6 +1393,10 @@ func (h *Handler) requireEnabledTwoFactor(c *gin.Context, userID int64) (*store.
 	return record, true
 }
 
+// twoFactorCodeFromRequest binds and validates the TOTP code JSON body.
+// Returns the normalised code and ok=false when binding or validation fails.
+//
+// Call chain: verifyTwoFactorSetup / disableTwoFactor / regenerateTwoFactorRecoveryCodes → twoFactorCodeFromRequest → normalizeTOTPCode
 func twoFactorCodeFromRequest(c *gin.Context) (string, bool) {
 	var request struct {
 		Code string `json:"code"`
@@ -1295,6 +1413,10 @@ func twoFactorCodeFromRequest(c *gin.Context) (string, bool) {
 	return code, true
 }
 
+// normalizeTOTPCode strips whitespace from a raw TOTP code and validates that
+// only digits remain and the length equals totpDigits.
+//
+// Call chain: twoFactorCodeFromRequest → normalizeTOTPCode
 func normalizeTOTPCode(raw string) (string, bool) {
 	var builder strings.Builder
 	for _, r := range raw {
@@ -1310,6 +1432,10 @@ func normalizeTOTPCode(raw string) (string, bool) {
 	return code, len(code) == totpDigits
 }
 
+// recordTwoFactorAudit writes an audit entry for a two-factor action within
+// the given transaction.
+//
+// Call chain: two-factor handlers → recordTwoFactorAudit → audit.Service.Record
 func recordTwoFactorAudit(c *gin.Context, tx *gorm.DB, userID int64, action string, metadata map[string]any) error {
 	return audit.NewService(tx).Record(c.Request.Context(), audit.Entry{
 		ActorUserID: userID,
@@ -1320,10 +1446,15 @@ func recordTwoFactorAudit(c *gin.Context, tx *gorm.DB, userID int64, action stri
 	})
 }
 
+// generateTOTPSecret returns a fresh base32-encoded TOTP secret (20 bytes, no padding).
 func generateTOTPSecret() (string, error) {
 	return randomBase32NoPadding(20)
 }
 
+// twoFactorOTPAuthURL builds an otpauth:// URL for the user's TOTP secret
+// that can be rendered as a QR code.
+//
+// Call chain: startTwoFactorSetup → twoFactorOTPAuthURL
 func twoFactorOTPAuthURL(user store.User, secret string) string {
 	account := strings.TrimSpace(user.Email)
 	if account == "" {
@@ -1339,6 +1470,10 @@ func twoFactorOTPAuthURL(user store.User, secret string) string {
 	return "otpauth://totp/" + label + "?" + query.Encode()
 }
 
+// verifyTOTPCode checks the given code against the secret, allowing one
+// period of clock drift in either direction.
+//
+// Call chain: verifyTwoFactorSetup / disableTwoFactor / regenerateTwoFactorRecoveryCodes → verifyTOTPCode → totpCodeAt
 func verifyTOTPCode(secret, code string, at time.Time) bool {
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
 	if err != nil {
@@ -1357,6 +1492,9 @@ func verifyTOTPCode(secret, code string, at time.Time) bool {
 	return false
 }
 
+// totpCodeAt computes the TOTP code for a given counter value using HMAC-SHA1.
+//
+// Call chain: verifyTOTPCode → totpCodeAt
 func totpCodeAt(key []byte, counter uint64) string {
 	var message [8]byte
 	binary.BigEndian.PutUint64(message[:], counter)
@@ -1368,6 +1506,10 @@ func totpCodeAt(key []byte, counter uint64) string {
 	return fmt.Sprintf("%06d", binaryCode%1000000)
 }
 
+// generateRecoveryCodes produces count recovery codes and their SHA-256
+// hashes for storage.
+//
+// Call chain: verifyTwoFactorSetup / regenerateTwoFactorRecoveryCodes → generateRecoveryCodes → generateRecoveryCode → hashRecoveryCode
 func generateRecoveryCodes(count int) ([]string, []string, error) {
 	codes := make([]string, 0, count)
 	hashes := make([]string, 0, count)
@@ -1382,6 +1524,9 @@ func generateRecoveryCodes(count int) ([]string, []string, error) {
 	return codes, hashes, nil
 }
 
+// generateRecoveryCode creates a single formatted recovery code (XXXX-XXXX-XXXX).
+//
+// Call chain: generateRecoveryCodes → generateRecoveryCode → randomBase32NoPadding
 func generateRecoveryCode() (string, error) {
 	token, err := randomBase32NoPadding(10)
 	if err != nil {
@@ -1391,12 +1536,17 @@ func generateRecoveryCode() (string, error) {
 	return token[0:4] + "-" + token[4:8] + "-" + token[8:12], nil
 }
 
+// hashRecoveryCode normalizes and hashes a recovery code with SHA-256.
 func hashRecoveryCode(code string) string {
 	normalized := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
 	sum := sha256.Sum256([]byte(normalized))
 	return hex.EncodeToString(sum[:])
 }
 
+// randomBase32NoPadding returns byteCount random bytes encoded as base32
+// without padding.
+//
+// Call chain: generateTOTPSecret / generateRecoveryCode → randomBase32NoPadding
 func randomBase32NoPadding(byteCount int) (string, error) {
 	raw := make([]byte, byteCount)
 	if _, err := cryptorand.Read(raw); err != nil {
@@ -1405,6 +1555,9 @@ func randomBase32NoPadding(byteCount int) (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
 }
 
+// accountProfilePayload converts a store.User to a gin.H response shape.
+//
+// Call chain: profile / updateProfile → accountProfilePayload
 func accountProfilePayload(user store.User) gin.H {
 	return gin.H{
 		"id":             user.ID,
@@ -1422,11 +1575,13 @@ func accountProfilePayload(user store.User) gin.H {
 	}
 }
 
+// accountHasLocalPassword returns true when the user has a non-external password hash.
 func accountHasLocalPassword(user store.User) bool {
 	hash := strings.TrimSpace(user.PasswordHash)
 	return hash != "" && !strings.HasPrefix(hash, "!external:")
 }
 
+// accountEmailStatus returns "verified" when EmailVerifiedAt is set, else "pending".
 func accountEmailStatus(user store.User) string {
 	if user.EmailVerifiedAt != nil {
 		return "verified"
@@ -1434,6 +1589,10 @@ func accountEmailStatus(user store.User) string {
 	return "pending"
 }
 
+// accountIdentityMethod converts an identity record to a gin.H response,
+// including provider label, identifier, and unbind-eligibility.
+//
+// Call chain: loginMethods → accountIdentityMethod → accountIdentityIdentifier
 func accountIdentityMethod(identityRecord store.UserIdentity, canUnbind bool) gin.H {
 	label := strings.TrimSpace(identityRecord.Provider)
 	if label == "" {
@@ -1454,6 +1613,10 @@ func accountIdentityMethod(identityRecord store.UserIdentity, canUnbind bool) gi
 	}
 }
 
+// accountIdentityIdentifier picks the best human-readable identifier from the
+// identity: Username > Email > ProviderUserID > Provider.
+//
+// Call chain: accountIdentityMethod → accountIdentityIdentifier
 func accountIdentityIdentifier(identityRecord store.UserIdentity) string {
 	for _, value := range []string{identityRecord.Username, identityRecord.Email, identityRecord.ProviderUserID} {
 		if text := strings.TrimSpace(value); text != "" {
@@ -1472,6 +1635,10 @@ type accountAuthorizedAppRow struct {
 	RevokedAt     *time.Time
 }
 
+// authorizedAppRows queries the user's refresh tokens and joins with OAuth
+// client metadata to produce a list of authorized applications.
+//
+// Call chain: authorizedApps / overview → authorizedAppRows → DB (refresh_tokens + oauth_clients)
 func (h *Handler) authorizedAppRows(c *gin.Context, userID int64) ([]accountAuthorizedAppRow, error) {
 	var tokens []struct {
 		ClientID  string
@@ -1531,6 +1698,10 @@ func (h *Handler) authorizedAppRows(c *gin.Context, userID int64) ([]accountAuth
 	return rows, nil
 }
 
+// parseJSONStringArray unmarshals a datatypes.JSON column into a []string.
+// Returns nil on parse error or empty input.
+//
+// Call chain: authorizedApps / twoFactorStatus → parseJSONStringArray
 func parseJSONStringArray(raw datatypes.JSON) []string {
 	if len(raw) == 0 {
 		return nil
@@ -1542,6 +1713,10 @@ func parseJSONStringArray(raw datatypes.JSON) []string {
 	return items
 }
 
+// parseJSONMap unmarshals a datatypes.JSON column into map[string]any.
+// Returns nil on parse error or empty input.
+//
+// Call chain: accountActivityPayload → parseJSONMap
 func parseJSONMap(raw datatypes.JSON) map[string]any {
 	if len(raw) == 0 {
 		return nil
@@ -1553,6 +1728,10 @@ func parseJSONMap(raw datatypes.JSON) map[string]any {
 	return payload
 }
 
+// activityItems queries the audit log for the user's recent activity, limited
+// to the given count.
+//
+// Call chain: activity / overview → activityItems → DB (audit_logs)
 func (h *Handler) activityItems(c *gin.Context, userID int64, limit int) ([]gin.H, error) {
 	var logs []store.AuditLog
 	if err := h.db.WithContext(c.Request.Context()).
@@ -1569,6 +1748,10 @@ func (h *Handler) activityItems(c *gin.Context, userID int64, limit int) ([]gin.
 	return items, nil
 }
 
+// accountActivityPayload converts an audit log record into a gin.H activity
+// item with category, title, and description resolved from the action.
+//
+// Call chain: activityItems → accountActivityPayload → accountActivityPresentation
 func accountActivityPayload(log store.AuditLog) gin.H {
 	metadata := parseJSONMap(log.Metadata)
 	category, title, description := accountActivityPresentation(log.Action, metadata)
@@ -1584,6 +1767,10 @@ func accountActivityPayload(log store.AuditLog) gin.H {
 	}
 }
 
+// accountActivityPresentation maps an audit action + metadata to a
+// human-readable category, title, and description for the activity feed.
+//
+// Call chain: accountActivityPayload → accountActivityPresentation
 func accountActivityPresentation(action string, metadata map[string]any) (string, string, string) {
 	switch action {
 	case audit.ActionUserUpdated:
@@ -1635,6 +1822,9 @@ func accountActivityPresentation(action string, metadata map[string]any) (string
 	}
 }
 
+// accountProviderLabel returns a human-friendly provider name from a slug.
+//
+// Call chain: accountActivityPresentation → accountProviderLabel
 func accountProviderLabel(provider string) string {
 	provider = strings.TrimSpace(provider)
 	if provider == "" {
@@ -1648,6 +1838,10 @@ func accountProviderLabel(provider string) string {
 	}
 }
 
+// jsonStringValue extracts a trimmed string from a metadata map.
+// Returns "" when the key is missing or not a string.
+//
+// Call chain: accountActivityPresentation → jsonStringValue
 func jsonStringValue(metadata map[string]any, key string) string {
 	if metadata == nil {
 		return ""
@@ -1658,6 +1852,10 @@ func jsonStringValue(metadata map[string]any, key string) string {
 	return ""
 }
 
+// jsonStringArrayValue extracts a []string from a metadata map key that
+// stores a JSON array of strings.
+//
+// Call chain: accountActivityPresentation → jsonStringArrayValue
 func jsonStringArrayValue(metadata map[string]any, key string) []string {
 	if metadata == nil {
 		return nil
@@ -1681,6 +1879,9 @@ func jsonStringArrayValue(metadata map[string]any, key string) []string {
 	return result
 }
 
+// activeSessionCount returns the number of non-revoked login sessions for the user.
+//
+// Call chain: overview → activeSessionCount → DB (COUNT login_sessions)
 func (h *Handler) activeSessionCount(c *gin.Context, userID int64) (int64, error) {
 	var count int64
 	err := h.db.WithContext(c.Request.Context()).
@@ -1690,6 +1891,9 @@ func (h *Handler) activeSessionCount(c *gin.Context, userID int64) (int64, error
 	return count, err
 }
 
+// uniqueAuthorizedAppCount counts distinct client IDs in the given rows.
+//
+// Call chain: overview → uniqueAuthorizedAppCount
 func uniqueAuthorizedAppCount(rows []accountAuthorizedAppRow) int {
 	if len(rows) == 0 {
 		return 0
@@ -1702,6 +1906,10 @@ func uniqueAuthorizedAppCount(rows []accountAuthorizedAppRow) int {
 }
 
 
+// accountOverviewAlerts returns contextual alerts for the account overview:
+// email-unverified warning and single-login-method info.
+//
+// Call chain: overview → accountOverviewAlerts
 func accountOverviewAlerts(user store.User, signInMethodCount int) []gin.H {
 	alerts := make([]gin.H, 0, 2)
 	if user.EmailVerifiedAt == nil {

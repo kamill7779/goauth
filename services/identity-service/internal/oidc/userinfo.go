@@ -9,6 +9,8 @@ import (
 
 // userInfo returns OIDC claims about the authenticated user.
 //
+// Call chain: GET /oauth2/userinfo → userInfo → parseAccessToken + validateAccessClaims + scope-based response
+//
 // @Summary      OIDC UserInfo
 // @Description  Returns standard OIDC claims for the authenticated user.
 // @Tags         oidc

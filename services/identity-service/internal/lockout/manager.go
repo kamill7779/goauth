@@ -57,6 +57,9 @@ end
 return {0, 0}
 `)
 
+// NewManager creates a lockout Manager with sensible defaults.
+//
+// Call chain: auth handler → NewManager (wire) → (Redis client passed in at construction)
 func NewManager(redisClient *redis.Client, threshold int64, duration time.Duration) *Manager {
 	if threshold <= 0 {
 		threshold = 5
@@ -72,7 +75,9 @@ func NewManager(redisClient *redis.Client, threshold int64, duration time.Durati
 	}
 }
 
-// IsLocked returns (locked, remainingSeconds, error).
+// IsLocked reports whether the account is currently locked, and if so returns the remaining TTL in seconds.
+//
+// Call chain: auth middleware → IsLocked → Redis TTL
 func (m *Manager) IsLocked(ctx context.Context, userID int64) (bool, int64, error) {
 	if m == nil || m.redis == nil {
 		return false, 0, nil
@@ -87,8 +92,10 @@ func (m *Manager) IsLocked(ctx context.Context, userID int64) (bool, int64, erro
 	return true, int64(ttl.Seconds()), nil
 }
 
-// RecordFailure increments the failure counter. If the threshold is reached,
-// it sets the lockout key. Returns (nowLocked, remainingLockSeconds, error).
+// RecordFailure atomically increments the sliding-window failure counter and
+// sets the lockout key when the threshold is reached.
+//
+// Call chain: login handler → RecordFailure → recordFailureScript (Lua) → Redis INCR / SETNX
 func (m *Manager) RecordFailure(ctx context.Context, userID int64) (bool, int64, error) {
 	if m == nil || m.redis == nil {
 		return false, 0, nil
@@ -118,6 +125,8 @@ func (m *Manager) RecordFailure(ctx context.Context, userID int64) (bool, int64,
 }
 
 // Reset clears the failure counter after a successful login.
+//
+// Call chain: login handler (success) → Reset → Redis DEL
 func (m *Manager) Reset(ctx context.Context, userID int64) error {
 	if m == nil || m.redis == nil {
 		return nil
@@ -125,7 +134,9 @@ func (m *Manager) Reset(ctx context.Context, userID int64) error {
 	return m.redis.Del(ctx, cache.LockoutFailuresKey(userID)).Err()
 }
 
-// Unlock manually removes the lockout (admin action).
+// Unlock removes both the lockout and failure keys (admin override).
+//
+// Call chain: admin API → Unlock → Redis DEL (2 keys)
 func (m *Manager) Unlock(ctx context.Context, userID int64) error {
 	if m == nil || m.redis == nil {
 		return nil

@@ -1,3 +1,8 @@
+// Package tenant manages multi-tenant lifecycle via HTTP: tenant CRUD, membership,
+// role CRUD, permission grant/revoke, and role assignment/removal.
+//
+// All admin routes are mounted under /v1/admin and are gated behind auth
+// and system middleware.
 package tenant
 
 import (
@@ -10,12 +15,16 @@ import (
 	"goauth/services/identity-service/internal/store"
 )
 
+// Handler serves admin HTTP endpoints for tenant and role management.
 type Handler struct {
 	service          *Service
 	authMiddleware   gin.HandlerFunc
 	systemMiddleware gin.HandlerFunc
 }
 
+// NewHandler creates a tenant Handler with injected service and middleware.
+//
+// Call chain: main → NewHandler → Handler
 func NewHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFunc) *Handler {
 	return &Handler{
 		service:          service,
@@ -24,6 +33,10 @@ func NewHandler(service *Service, authMiddleware, systemMiddleware gin.HandlerFu
 	}
 }
 
+// RegisterRoutes mounts tenant and role admin endpoints under /v1/admin with
+// auth and system middleware when configured.
+//
+// Call chain: main → router setup → RegisterRoutes → gin router
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin := router.Group("/v1/admin")
 	if h.authMiddleware != nil {
@@ -49,6 +62,10 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	admin.DELETE("/members/:member_id/roles/:role_id", h.removeRole)
 }
 
+// listTenants returns a paginated, searchable, filterable list of tenants
+// enriched with member, role, and OAuth client counts.
+//
+// Call chain: HTTP GET /v1/admin/tenants → listTenants → db + tenantPayloads
 func (h *Handler) listTenants(c *gin.Context) {
 	page, pageSize := pagination(c)
 	query := h.service.DB().WithContext(c.Request.Context()).Model(&store.Tenant{})
@@ -89,6 +106,9 @@ func (h *Handler) listTenants(c *gin.Context) {
 	})
 }
 
+// createTenant creates a tenant from JSON body.
+//
+// Call chain: HTTP POST /v1/admin/tenants → createTenant → service.CreateTenant + singleTenantPayload
 func (h *Handler) createTenant(c *gin.Context) {
 	var request CreateTenantInput
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -109,6 +129,9 @@ func (h *Handler) createTenant(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusCreated, item)
 }
 
+// updateTenant patch-updates a tenant by ID.
+//
+// Call chain: HTTP PATCH /v1/admin/tenants/:id → updateTenant → service.UpdateTenant + singleTenantPayload
 func (h *Handler) updateTenant(c *gin.Context) {
 	id, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -134,6 +157,9 @@ func (h *Handler) updateTenant(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, item)
 }
 
+// addMember adds a user as a member of a tenant.
+//
+// Call chain: HTTP POST /v1/admin/tenants/:id/members → addMember → service.AddMember
 func (h *Handler) addMember(c *gin.Context) {
 	tenantID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -161,6 +187,9 @@ func (h *Handler) addMember(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusCreated, member)
 }
 
+// removeMember removes a user from a tenant by tenant ID and user ID.
+//
+// Call chain: HTTP DELETE /v1/admin/tenants/:id/members/:user_id → removeMember → service.RemoveMember
 func (h *Handler) removeMember(c *gin.Context) {
 	tenantID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -178,6 +207,10 @@ func (h *Handler) removeMember(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"removed": true})
 }
 
+// listRoles returns a paginated, searchable list of roles optionally filtered
+// by tenant, enriched with permissions and user counts.
+//
+// Call chain: HTTP GET /v1/admin/roles → listRoles → db + rolePayloads
 func (h *Handler) listRoles(c *gin.Context) {
 	tenantID := int64(0)
 	if raw := c.Query("tenant_id"); raw != "" {
@@ -226,6 +259,9 @@ func (h *Handler) listRoles(c *gin.Context) {
 	})
 }
 
+// createRole creates a role from JSON body.
+//
+// Call chain: HTTP POST /v1/admin/roles → createRole → service.CreateRole + singleRolePayload
 func (h *Handler) createRole(c *gin.Context) {
 	var request CreateRoleInput
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -246,6 +282,9 @@ func (h *Handler) createRole(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusCreated, item)
 }
 
+// updateRole patch-updates a role by ID.
+//
+// Call chain: HTTP PATCH /v1/admin/roles/:id → updateRole → service.UpdateRole + singleRolePayload
 func (h *Handler) updateRole(c *gin.Context) {
 	roleID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -271,6 +310,9 @@ func (h *Handler) updateRole(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, item)
 }
 
+// deleteRole deletes a role by ID.
+//
+// Call chain: HTTP DELETE /v1/admin/roles/:id → deleteRole → service.DeleteRole
 func (h *Handler) deleteRole(c *gin.Context) {
 	roleID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -284,6 +326,9 @@ func (h *Handler) deleteRole(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"deleted": true})
 }
 
+// grantPermissions assigns permissions to a role.
+//
+// Call chain: HTTP POST /v1/admin/roles/:id/permissions → grantPermissions → service.GrantPermissions
 func (h *Handler) grantPermissions(c *gin.Context) {
 	roleID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -305,6 +350,9 @@ func (h *Handler) grantPermissions(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
 }
 
+// revokePermission removes a single permission from a role.
+//
+// Call chain: HTTP DELETE /v1/admin/roles/:id/permissions/:permission_id → revokePermission → service.RevokePermission
 func (h *Handler) revokePermission(c *gin.Context) {
 	roleID, err := parseInt64Param(c, "id")
 	if err != nil {
@@ -322,6 +370,9 @@ func (h *Handler) revokePermission(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
 }
 
+// assignRoles assigns roles to a tenant member.
+//
+// Call chain: HTTP POST /v1/admin/members/:member_id/roles → assignRoles → service.AssignRoles
 func (h *Handler) assignRoles(c *gin.Context) {
 	memberID, err := parseInt64Param(c, "member_id")
 	if err != nil {
@@ -343,6 +394,9 @@ func (h *Handler) assignRoles(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
 }
 
+// removeRole removes a single role from a tenant member.
+//
+// Call chain: HTTP DELETE /v1/admin/members/:member_id/roles/:role_id → removeRole → service.RemoveRole
 func (h *Handler) removeRole(c *gin.Context) {
 	memberID, err := parseInt64Param(c, "member_id")
 	if err != nil {
@@ -360,6 +414,7 @@ func (h *Handler) removeRole(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, gin.H{"updated": true})
 }
 
+// parseInt64Param parses a URL path parameter as int64 and writes a 400 error on failure.
 func parseInt64Param(c *gin.Context, name string) (int64, error) {
 	value, err := strconv.ParseInt(c.Param(name), 10, 64)
 	if err != nil {
@@ -384,6 +439,7 @@ type rolePermissionIDsRow struct {
 	PermissionID int64
 }
 
+// singleTenantPayload wraps tenantPayloads for a single tenant record.
 func (h *Handler) singleTenantPayload(c *gin.Context, tenantRecord store.Tenant) (gin.H, error) {
 	items, err := h.tenantPayloads(c, []store.Tenant{tenantRecord})
 	if err != nil {
@@ -392,6 +448,9 @@ func (h *Handler) singleTenantPayload(c *gin.Context, tenantRecord store.Tenant)
 	return items[0], nil
 }
 
+// tenantPayloads enriches tenant records with member, role, and OAuth client counts.
+//
+// Call chain: listTenants → tenantPayloads → groupCounts + oauthClientCounts
 func (h *Handler) tenantPayloads(c *gin.Context, tenants []store.Tenant) ([]gin.H, error) {
 	if len(tenants) == 0 {
 		return []gin.H{}, nil
@@ -431,6 +490,7 @@ func (h *Handler) tenantPayloads(c *gin.Context, tenants []store.Tenant) ([]gin.
 	return items, nil
 }
 
+// singleRolePayload wraps rolePayloads for a single role record.
 func (h *Handler) singleRolePayload(c *gin.Context, role store.Role) (gin.H, error) {
 	items, err := h.rolePayloads(c, []store.Role{role})
 	if err != nil {
@@ -439,6 +499,9 @@ func (h *Handler) singleRolePayload(c *gin.Context, role store.Role) (gin.H, err
 	return items[0], nil
 }
 
+// rolePayloads enriches role records with tenant name, permission IDs, and user counts.
+//
+// Call chain: listRoles → rolePayloads → tenantLookup + rolePermissionIDs + roleUserCounts
 func (h *Handler) rolePayloads(c *gin.Context, roles []store.Role) ([]gin.H, error) {
 	if len(roles) == 0 {
 		return []gin.H{}, nil
@@ -487,6 +550,9 @@ func (h *Handler) rolePayloads(c *gin.Context, roles []store.Role) ([]gin.H, err
 	return items, nil
 }
 
+// tenantLookup returns a map of tenant ID → tenant record for deduplicated IDs.
+//
+// Call chain: rolePayloads → tenantLookup → db.Find
 func (h *Handler) tenantLookup(c *gin.Context, tenantIDs []int64) (map[int64]store.Tenant, error) {
 	var tenants []store.Tenant
 	if err := h.service.DB().WithContext(c.Request.Context()).Where("id IN ?", uniqueInt64s(tenantIDs)).Find(&tenants).Error; err != nil {
@@ -499,6 +565,9 @@ func (h *Handler) tenantLookup(c *gin.Context, tenantIDs []int64) (map[int64]sto
 	return result, nil
 }
 
+// rolePermissionIDs returns permission IDs grouped by role ID.
+//
+// Call chain: rolePayloads → rolePermissionIDs → db query role_permissions
 func (h *Handler) rolePermissionIDs(c *gin.Context, roleIDs []int64) (map[int64][]int64, error) {
 	var rows []rolePermissionIDsRow
 	if err := h.service.DB().WithContext(c.Request.Context()).
@@ -521,6 +590,9 @@ func (h *Handler) rolePermissionIDs(c *gin.Context, roleIDs []int64) (map[int64]
 	return result, nil
 }
 
+// roleUserCounts returns distinct user counts per role via member_roles join.
+//
+// Call chain: rolePayloads → roleUserCounts → db query member_roles + tenant_members
 func (h *Handler) roleUserCounts(c *gin.Context, roleIDs []int64) (map[int64]int64, error) {
 	var rows []roleCountRow
 	if err := h.service.DB().WithContext(c.Request.Context()).
@@ -539,6 +611,9 @@ func (h *Handler) roleUserCounts(c *gin.Context, roleIDs []int64) (map[int64]int
 	return result, nil
 }
 
+// groupCounts runs a generic COUNT(*) … GROUP BY query and returns results keyed by tenant_id.
+//
+// Call chain: tenantPayloads → groupCounts → db query
 func (h *Handler) groupCounts(c *gin.Context, table, groupColumn, where string, ids []int64) (map[int64]int64, error) {
 	var rows []tenantCountRow
 	if err := h.service.DB().WithContext(c.Request.Context()).
@@ -556,6 +631,9 @@ func (h *Handler) groupCounts(c *gin.Context, table, groupColumn, where string, 
 	return result, nil
 }
 
+// oauthClientCounts returns OAuth client counts grouped by tenant ID.
+//
+// Call chain: tenantPayloads → oauthClientCounts → db query OAuthClient
 func (h *Handler) oauthClientCounts(c *gin.Context, tenantIDs []int64) (map[int64]int64, error) {
 	var rows []tenantCountRow
 	if err := h.service.DB().WithContext(c.Request.Context()).
@@ -573,6 +651,7 @@ func (h *Handler) oauthClientCounts(c *gin.Context, tenantIDs []int64) (map[int6
 	return result, nil
 }
 
+// pagination extracts page and page_size query parameters with safe defaults (1-100).
 func pagination(c *gin.Context) (int, int) {
 	page, _ := strconv.Atoi(c.Query("page"))
 	if page < 1 {
@@ -588,6 +667,7 @@ func pagination(c *gin.Context) (int, int) {
 	return page, pageSize
 }
 
+// tenantListOrder returns an ORDER BY clause for tenant listing, defaulting to name ASC.
 func tenantListOrder(sort string) string {
 	switch strings.TrimSpace(sort) {
 	case "name_desc":
@@ -605,6 +685,7 @@ func tenantListOrder(sort string) string {
 	}
 }
 
+// roleListOrder returns an ORDER BY clause for role listing, defaulting to name ASC.
 func roleListOrder(sort string) string {
 	switch strings.TrimSpace(sort) {
 	case "name_desc":
@@ -622,6 +703,7 @@ func roleListOrder(sort string) string {
 	}
 }
 
+// uniqueInt64s returns a deduplicated copy of the input slice, preserving order.
 func uniqueInt64s(values []int64) []int64 {
 	seen := map[int64]struct{}{}
 	result := make([]int64, 0, len(values))

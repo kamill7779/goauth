@@ -33,7 +33,9 @@ type Coordinator struct {
 	httpClient *http.Client
 }
 
-// NewCoordinator creates a Coordinator with a 5-second HTTP timeout.
+// NewCoordinator creates a Coordinator from a raw RSA key, building an internal keyring.
+//
+// Call chain: wire → NewCoordinator → NewCoordinatorWithKeyring
 func NewCoordinator(db *gorm.DB, key *rsa.PrivateKey, issuer, keyID string) *Coordinator {
 	var keyring *jwtkey.Keyring
 	if key != nil {
@@ -42,6 +44,9 @@ func NewCoordinator(db *gorm.DB, key *rsa.PrivateKey, issuer, keyID string) *Coo
 	return NewCoordinatorWithKeyring(db, keyring, issuer)
 }
 
+// NewCoordinatorWithKeyring creates a Coordinator using a pre-built keyring.
+//
+// Call chain: wire → NewCoordinatorWithKeyring
 func NewCoordinatorWithKeyring(db *gorm.DB, keyring *jwtkey.Keyring, issuer string) *Coordinator {
 	privateKey := (*rsa.PrivateKey)(nil)
 	keyID := ""
@@ -60,7 +65,9 @@ func NewCoordinatorWithKeyring(db *gorm.DB, keyring *jwtkey.Keyring, issuer stri
 	}
 }
 
-// SetDependencies injects optional collaborators.
+// SetDependencies injects the audit recorder (optional; defaults to noop).
+//
+// Call chain: wire → SetDependencies
 func (c *Coordinator) SetDependencies(r audit.Recorder) {
 	c.audit = r
 	if c.audit == nil {
@@ -68,7 +75,11 @@ func (c *Coordinator) SetDependencies(r audit.Recorder) {
 	}
 }
 
+// SetAuditRecorder sets the audit recorder.
+//
 // Deprecated: use SetDependencies.
+//
+// Call chain: wire → SetAuditRecorder → audit.Recorder
 func (c *Coordinator) SetAuditRecorder(r audit.Recorder) {
 	if r == nil {
 		c.audit = audit.NoopRecorder{}
@@ -82,6 +93,8 @@ func (c *Coordinator) SetAuditRecorder(r audit.Recorder) {
 //   - have an active session for the user.
 //
 // Best-effort: failures are logged and do not block.
+//
+// Call chain: logout handler → NotifyClients → notifyClient (per client) → HTTP POST
 func (c *Coordinator) NotifyClients(ctx context.Context, userID int64, sessionID string) error {
 	if c == nil || c.db == nil || c.privateKey == nil {
 		return nil
@@ -111,6 +124,9 @@ func (c *Coordinator) NotifyClients(ctx context.Context, userID int64, sessionID
 	return nil
 }
 
+// notifyClient builds and POSTs a single logout token to one relying party.
+//
+// Call chain: NotifyClients → notifyClient → buildLogoutToken → HTTP POST → audit.Record
 func (c *Coordinator) notifyClient(ctx context.Context, client store.OAuthClient, userID int64, sessionID string) error {
 	logoutToken, err := c.buildLogoutToken(client, userID, sessionID)
 	if err != nil {
@@ -156,6 +172,10 @@ type logoutTokenClaims struct {
 	Events    map[string]any `json:"events"`
 }
 
+// buildLogoutToken creates a signed RS256 logout_token JWT with the required
+// backchannel-logout event claim.
+//
+// Call chain: notifyClient → buildLogoutToken → jwt.SigningMethodRS256.Sign
 func (c *Coordinator) buildLogoutToken(client store.OAuthClient, userID int64, sessionID string) (string, error) {
 	jti, err := randomHex(16)
 	if err != nil {
@@ -186,6 +206,9 @@ func (c *Coordinator) buildLogoutToken(client store.OAuthClient, userID int64, s
 	return token.SignedString(c.privateKey)
 }
 
+// randomHex returns n random bytes encoded as hex.
+//
+// Call chain: buildLogoutToken → randomHex → crypto/rand.Read
 func randomHex(n int) (string, error) {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {

@@ -9,6 +9,9 @@ import (
 
 // StructuredLogger replaces the default Gin logger with a slog JSON logger.
 // It logs method, path, status, latency, client IP, and request ID per request.
+// Errors (≥500) log at ERROR, warnings (≥400) at WARN, everything else at INFO.
+//
+// Call chain: main.buildRouterWithServices → middleware.StructuredLogger → slog
 func StructuredLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()

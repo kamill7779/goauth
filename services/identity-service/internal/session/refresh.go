@@ -151,6 +151,10 @@ func (s *Service) rejectRefreshTokenReuse(ctx context.Context, token store.Refre
 	return ErrRefreshTokenReuse
 }
 
+// lockActiveSessionWithDB takes a SELECT FOR UPDATE on the login session to
+// serialise concurrent refresh attempts for the same session.
+//
+// Call chain: Refresh → lockActiveSessionWithDB → DB SELECT FOR UPDATE
 func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) error {
 	var loginSession store.LoginSession
 	return db.WithContext(ctx).
@@ -159,6 +163,10 @@ func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, user
 		First(&loginSession).Error
 }
 
+// wasRefreshTokenReplaced checks whether a racing transaction already rotated
+// this token (revoked_at IS NOT NULL AND replaced_by_token_id IS NOT NULL).
+//
+// Call chain: Refresh → wasRefreshTokenReplaced → DB query RefreshToken
 func (s *Service) wasRefreshTokenReplaced(ctx context.Context, db *gorm.DB, tokenID int64) bool {
 	var token store.RefreshToken
 	err := db.WithContext(ctx).
@@ -168,6 +176,10 @@ func (s *Service) wasRefreshTokenReplaced(ctx context.Context, db *gorm.DB, toke
 	return err == nil && token.RevokedAt != nil && token.ReplacedByTokenID != nil
 }
 
+// issueTokenPairWithDB signs an access token and creates a refresh-token row in a
+// single DB context, returning the raw tokens for the caller to hand to the client.
+//
+// Call chain: IssueTokens / Refresh / exchangeAuthorizationCode → issueTokenPairWithDB → signAccessToken + DB Create
 func (s *Service) issueTokenPairWithDB(ctx context.Context, db *gorm.DB, user store.User, tenantID int64, clientID, sessionID, familyID string) (*TokenPair, error) {
 	accessToken, err := s.signAccessToken(user, tenantID, clientID, sessionID)
 	if err != nil {
@@ -287,6 +299,7 @@ func (s *Service) LogoutAll(ctx context.Context, userID int64) error {
 	return nil
 }
 
+// revokeFamily sets revoked_at on every non-revoked refresh token in the family.
 func (s *Service) revokeFamily(ctx context.Context, familyID string) error {
 	now := s.now()
 	return s.db.WithContext(ctx).
@@ -295,6 +308,7 @@ func (s *Service) revokeFamily(ctx context.Context, familyID string) error {
 		Update("revoked_at", now).Error
 }
 
+// revokeLoginSession sets revoked_at on a single login session.
 func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) error {
 	if sessionID == "" {
 		return nil
@@ -306,6 +320,9 @@ func (s *Service) revokeLoginSession(ctx context.Context, sessionID string) erro
 		Update("revoked_at", now).Error
 }
 
+// revokeLoginSessionWithDB locks and revokes a login session within a transaction.
+//
+// Call chain: rejectRefreshTokenReuse → revokeLoginSessionWithDB → DB SELECT FOR UPDATE + UPDATE
 func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, sessionID string, now time.Time) error {
 	if err := db.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -321,6 +338,8 @@ func (s *Service) revokeLoginSessionWithDB(ctx context.Context, db *gorm.DB, ses
 		Update("revoked_at", now).Error
 }
 
+// isSQLiteWriteLock detects SQLite "database table is locked" errors so callers
+// can treat them as concurrency conflicts rather than hard failures.
 func isSQLiteWriteLock(err error) bool {
 	if err == nil {
 		return false
@@ -329,6 +348,7 @@ func isSQLiteWriteLock(err error) bool {
 	return strings.Contains(message, "database table is locked") || strings.Contains(message, "database is locked")
 }
 
+// recordAuditBestEffort writes an audit entry and logs a warning on failure.
 func (s *Service) recordAuditBestEffort(ctx context.Context, entry audit.Entry) {
 	if err := s.audit.Record(ctx, entry); err != nil {
 		slog.Warn("session audit record failed",

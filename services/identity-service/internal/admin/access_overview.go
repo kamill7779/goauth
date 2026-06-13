@@ -54,6 +54,10 @@ type accessOverviewRisk struct {
 	Target   string `json:"target"`
 }
 
+// accessOverview returns a comprehensive summary of tenants, roles, permissions,
+// OAuth clients, default memberships, and detected risks.
+//
+// Call chain: HTTP GET /v1/admin/access-overview → accessOverview → db queries + buildAccessOverview + buildDefaultMemberships
 func (h *Handler) accessOverview(c *gin.Context) {
 	ctx := c.Request.Context()
 	var tenants []store.Tenant
@@ -99,6 +103,11 @@ func (h *Handler) accessOverview(c *gin.Context) {
 	})
 }
 
+// buildAccessOverview aggregates pre-fetched data into summary, tenant rows,
+// OAuth client rows, and a risk list (roles without permissions, auto-provision
+// on inactive tenants, active tenants without roles).
+//
+// Call chain: accessOverview → buildAccessOverview (pure data transformation)
 func buildAccessOverview(defaultSlugs []string, tenants []store.Tenant, members []store.TenantMember, roles []store.Role, rolePermissions []store.RolePermission, clients []store.OAuthClient, permissions int) (accessOverviewSummary, []accessOverviewTenant, []accessOverviewOAuthClient, []accessOverviewRisk) {
 	tenantsByID := make(map[int64]store.Tenant, len(tenants))
 	tenantRowsByID := make(map[int64]*accessOverviewTenant, len(tenants))
@@ -216,6 +225,10 @@ func buildAccessOverview(defaultSlugs []string, tenants []store.Tenant, members 
 	return summary, tenantRows, clientRows, risks
 }
 
+// buildDefaultMemberships checks each configured default-membership slug against
+// the existing tenants and appends risks for missing or inactive tenants.
+//
+// Call chain: accessOverview → buildDefaultMemberships (pure data transformation)
 func buildDefaultMemberships(defaultSlugs []string, tenants []store.Tenant, risks *[]accessOverviewRisk) []accessOverviewDefaultMembership {
 	tenantsBySlug := make(map[string]store.Tenant, len(tenants))
 	for _, tenant := range tenants {
@@ -255,6 +268,7 @@ func buildDefaultMemberships(defaultSlugs []string, tenants []store.Tenant, risk
 	return memberships
 }
 
+// parseJSONStrings unmarshals a JSON array of strings, returning nil on failure.
 func parseJSONStrings(raw []byte) []string {
 	var values []string
 	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {

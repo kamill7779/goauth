@@ -33,6 +33,9 @@ type SMTPSender struct {
 	cfg SMTPConfig
 }
 
+// NewSMTPSender creates an SMTPSender with defaults for Port (587) and Timeout.
+//
+// Call chain: wire → NewSMTPSender
 func NewSMTPSender(cfg SMTPConfig) *SMTPSender {
 	if cfg.Port == 0 {
 		cfg.Port = 587
@@ -43,6 +46,9 @@ func NewSMTPSender(cfg SMTPConfig) *SMTPSender {
 	return &SMTPSender{cfg: cfg}
 }
 
+// Send delivers a single email via SMTP using the configured auth mechanism.
+//
+// Call chain: email dispatch → Send → validate → client (dial) → SMTP MAIL/RCPT/DATA → buildRFC822Message
 func (s *SMTPSender) Send(ctx context.Context, message Message) error {
 	if s == nil {
 		return errors.New("smtp sender is nil")
@@ -105,6 +111,9 @@ func (s *SMTPSender) Send(ctx context.Context, message Message) error {
 	return nil
 }
 
+// validate checks that host, from, and recipient are set.
+//
+// Call chain: Send → validate
 func (s *SMTPSender) validate(message Message) error {
 	if strings.TrimSpace(s.cfg.Host) == "" {
 		return errors.New("smtp host is required")
@@ -118,6 +127,9 @@ func (s *SMTPSender) validate(message Message) error {
 	return nil
 }
 
+// client establishes an SMTP connection, using implicit TLS when SSL is configured.
+//
+// Call chain: Send → client → net.Dialer / tls.Dialer → smtp.NewClient
 func (s *SMTPSender) client(ctx context.Context) (*smtp.Client, error) {
 	address := net.JoinHostPort(strings.TrimSpace(s.cfg.Host), fmt.Sprintf("%d", s.cfg.Port))
 	var conn net.Conn
@@ -145,6 +157,9 @@ func (s *SMTPSender) client(ctx context.Context) (*smtp.Client, error) {
 	return client, nil
 }
 
+// envelopeAddress parses an RFC 5322 address and returns the bare addr-spec.
+//
+// Call chain: Send → envelopeAddress → mail.ParseAddress
 func envelopeAddress(value string) (string, error) {
 	address, err := mail.ParseAddress(strings.TrimSpace(value))
 	if err != nil {
@@ -153,6 +168,9 @@ func envelopeAddress(value string) (string, error) {
 	return address.Address, nil
 }
 
+// buildRFC822Message constructs a plain-text MIME message with standard headers.
+//
+// Call chain: Send → buildRFC822Message → (pure string builder)
 func buildRFC822Message(from string, message Message) string {
 	headers := []string{
 		"From: " + strings.TrimSpace(from),
@@ -170,10 +188,14 @@ type loginAuth struct {
 	password string
 }
 
+// Start begins the LOGIN auth exchange by sending the username.
 func (a loginAuth) Start(*smtp.ServerInfo) (string, []byte, error) {
 	return "LOGIN", []byte(a.username), nil
 }
 
+// Next responds to server challenges during the LOGIN auth exchange.
+//
+// Call chain: smtp.Client.Auth → loginAuth.Start → loginAuth.Next
 func (a loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 	if !more {
 		return nil, nil

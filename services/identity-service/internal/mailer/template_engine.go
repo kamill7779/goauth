@@ -28,6 +28,9 @@ type TemplateEngine struct {
 }
 
 // NewTemplateEngine creates a TemplateEngine and pre-parses all embedded templates.
+// Panics if the embedded template filesystem cannot be loaded.
+//
+// Call chain: wire → NewTemplateEngine → loadAllFromFS → embed.FS + text/template
 func NewTemplateEngine(defaultLocale string) *TemplateEngine {
 	if defaultLocale == "" {
 		defaultLocale = "en"
@@ -42,6 +45,9 @@ func NewTemplateEngine(defaultLocale string) *TemplateEngine {
 	return e
 }
 
+// loadAllFromFS walks templates/<locale>/*.txt and compiles each into a cached template.
+//
+// Call chain: NewTemplateEngine → loadAllFromFS → fs.ReadDir / fs.ReadFile / template.Parse
 func (e *TemplateEngine) loadAllFromFS(fsys fs.FS) error {
 	entries, err := fs.ReadDir(fsys, "templates")
 	if err != nil {
@@ -85,6 +91,9 @@ func (e *TemplateEngine) loadAllFromFS(fsys fs.FS) error {
 
 // Render returns (subject, body, error) for the given template type and locale.
 // Falls back to defaultLocale if the requested locale is not found.
+// The first line of the rendered output is the subject; the rest after a blank line is the body.
+//
+// Call chain: email dispatch → Render → template.Execute
 func (e *TemplateEngine) Render(templateType, locale string, data TemplateData) (subject, body string, err error) {
 	if locale == "" {
 		locale = e.defaultLocale

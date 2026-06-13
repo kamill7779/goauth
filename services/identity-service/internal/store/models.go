@@ -39,6 +39,8 @@ type User struct {
 
 // ToDomain converts a store.User to a pure domain.User, stripping all
 // persistence annotations and sensitive fields.
+//
+// Call chain: any service → store.User.ToDomain → (no downstream)
 func (u *User) ToDomain() domain.User {
 	return domain.User{
 		ID:          u.ID,
@@ -55,6 +57,8 @@ func (u *User) ToDomain() domain.User {
 // migrated to the new contract (Task 3+) still get valid, unique usernames and
 // nicknames. The migration backfill uses the same helpers, so the two paths
 // stay in sync.
+//
+// Call chain: GORM → User.BeforeCreate → deriveNicknameForUser / ensureUniqueUsername
 func (u *User) BeforeCreate(tx *gorm.DB) error {
 	if u.Nickname == "" {
 		u.Nickname = deriveNicknameForUser(u)

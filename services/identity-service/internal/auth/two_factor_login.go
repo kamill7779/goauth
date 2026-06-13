@@ -53,6 +53,10 @@ type loginTwoFactorChallengePayload struct {
 	Attempts int   `json:"attempts"`
 }
 
+// startLoginTwoFactorChallengeIfRequired checks whether the user has 2FA enabled
+// and, if so, creates a time-limited challenge for them to complete.
+//
+// Call chain: completeLogin → startLoginTwoFactorChallengeIfRequired → createLoginTwoFactorChallenge
 func (h *Handler) startLoginTwoFactorChallengeIfRequired(ctx context.Context, userID int64) (*loginTwoFactorChallenge, error) {
 	required, err := h.loginTwoFactorRequired(ctx, userID)
 	if err != nil || !required {
@@ -61,6 +65,9 @@ func (h *Handler) startLoginTwoFactorChallengeIfRequired(ctx context.Context, us
 	return h.createLoginTwoFactorChallenge(ctx, userID)
 }
 
+// loginTwoFactorRequired reports whether the user has an enabled 2FA record.
+//
+// Call chain: startLoginTwoFactorChallengeIfRequired → loginTwoFactorRequired → DB query UserTwoFactor
 func (h *Handler) loginTwoFactorRequired(ctx context.Context, userID int64) (bool, error) {
 	var record store.UserTwoFactor
 	if err := h.service.db.WithContext(ctx).
@@ -74,6 +81,10 @@ func (h *Handler) loginTwoFactorRequired(ctx context.Context, userID int64) (boo
 	return strings.TrimSpace(record.Secret) != "", nil
 }
 
+// createLoginTwoFactorChallenge persists a new 2FA challenge in Redis and
+// returns its ID and TTL so the caller can relay them to the client.
+//
+// Call chain: startLoginTwoFactorChallengeIfRequired → createLoginTwoFactorChallenge → Redis SET
 func (h *Handler) createLoginTwoFactorChallenge(ctx context.Context, userID int64) (*loginTwoFactorChallenge, error) {
 	if h.service.redis == nil {
 		return nil, errors.New("two-factor challenge store unavailable")
@@ -95,6 +106,10 @@ func (h *Handler) createLoginTwoFactorChallenge(ctx context.Context, userID int6
 	}, nil
 }
 
+// loginTwoFactorVerify validates a 2FA TOTP code or recovery code against a
+// pending challenge, then issues login tokens on success.
+//
+// Call chain: POST /login/2fa/verify → loginTwoFactorVerify → verifyLoginTwoFactorCredential + issueLoginTokens
 func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 	if h.session == nil {
 		httpserver.Error(c, stdhttp.StatusServiceUnavailable, "session service unavailable")
@@ -176,6 +191,10 @@ func (h *Handler) loginTwoFactorVerify(c *gin.Context) {
 	httpserver.Success(c, stdhttp.StatusOK, pair)
 }
 
+// acquireLoginTwoFactorChallengeLock obtains a short-lived distributed lock on a
+// challenge to prevent concurrent verification attempts.
+//
+// Call chain: loginTwoFactorVerify → acquireLoginTwoFactorChallengeLock → Redis SETNX
 func (h *Handler) acquireLoginTwoFactorChallengeLock(ctx context.Context, challengeID string) (string, bool, error) {
 	if h.service.redis == nil {
 		return "", false, errors.New("two-factor challenge store unavailable")
@@ -191,6 +210,9 @@ func (h *Handler) acquireLoginTwoFactorChallengeLock(ctx context.Context, challe
 	return token, locked, nil
 }
 
+// releaseLoginTwoFactorChallengeLock releases the lock if the caller still owns it.
+//
+// Call chain: loginTwoFactorVerify (defer) → releaseLoginTwoFactorChallengeLock → Redis DEL via Watch
 func (h *Handler) releaseLoginTwoFactorChallengeLock(ctx context.Context, challengeID, token string) {
 	if h.service.redis == nil || token == "" {
 		return
@@ -212,6 +234,9 @@ func (h *Handler) releaseLoginTwoFactorChallengeLock(ctx context.Context, challe
 	}, key)
 }
 
+// loadLoginTwoFactorChallenge fetches and unmarshals a challenge payload from Redis.
+//
+// Call chain: loginTwoFactorVerify → loadLoginTwoFactorChallenge → Redis GET
 func (h *Handler) loadLoginTwoFactorChallenge(ctx context.Context, challengeID string) (*loginTwoFactorChallengePayload, error) {
 	if h.service.redis == nil {
 		return nil, errors.New("two-factor challenge store unavailable")
@@ -230,6 +255,10 @@ func (h *Handler) loadLoginTwoFactorChallenge(ctx context.Context, challengeID s
 	return &payload, nil
 }
 
+// recordFailedLoginTwoFactorChallenge increments the attempt counter; after the
+// max it deletes the challenge to prevent brute-force.
+//
+// Call chain: loginTwoFactorVerify → recordFailedLoginTwoFactorChallenge → Redis SET/DEL
 func (h *Handler) recordFailedLoginTwoFactorChallenge(ctx context.Context, challengeID string, payload *loginTwoFactorChallengePayload) error {
 	payload.Attempts++
 	key := cache.LoginTwoFactorChallengeKey(challengeID)
@@ -247,6 +276,9 @@ func (h *Handler) recordFailedLoginTwoFactorChallenge(ctx context.Context, chall
 	return h.service.redis.Set(ctx, key, raw, ttl).Err()
 }
 
+// deleteLoginTwoFactorChallenge removes both the challenge payload and its lock.
+//
+// Call chain: loginTwoFactorVerify → deleteLoginTwoFactorChallenge → Redis DEL
 func (h *Handler) deleteLoginTwoFactorChallenge(ctx context.Context, challengeID string) error {
 	if h.service.redis == nil {
 		return nil
@@ -254,6 +286,10 @@ func (h *Handler) deleteLoginTwoFactorChallenge(ctx context.Context, challengeID
 	return h.service.redis.Del(ctx, cache.LoginTwoFactorChallengeKey(challengeID), cache.LoginTwoFactorChallengeLockKey(challengeID)).Err()
 }
 
+// loadLoginTwoFactorUser loads the user and their enabled 2FA record, validating
+// both are in a usable state.
+//
+// Call chain: loginTwoFactorVerify → loadLoginTwoFactorUser → DB queries User + UserTwoFactor
 func (h *Handler) loadLoginTwoFactorUser(ctx context.Context, userID int64) (*store.User, *store.UserTwoFactor, error) {
 	var user store.User
 	if err := h.service.db.WithContext(ctx).Where("id = ?", userID).First(&user).Error; err != nil {
@@ -281,6 +317,9 @@ func (h *Handler) loadLoginTwoFactorUser(ctx context.Context, userID int64) (*st
 	return &user, &record, nil
 }
 
+// verifyLoginTwoFactorCredential dispatches to TOTP or recovery-code verification.
+//
+// Call chain: loginTwoFactorVerify → verifyLoginTwoFactorCredential → verifyLoginTOTPCode / consumeLoginRecoveryCode
 func (h *Handler) verifyLoginTwoFactorCredential(ctx context.Context, record *store.UserTwoFactor, rawCode, rawRecoveryCode string) (bool, error) {
 	if code := strings.TrimSpace(rawCode); code != "" {
 		normalized, ok := normalizeLoginTOTPCode(code)
@@ -298,6 +337,9 @@ func (h *Handler) verifyLoginTwoFactorCredential(ctx context.Context, record *st
 	return false, errLoginTwoFactorCodeRequired
 }
 
+// touchLoginTwoFactorVerified updates the last_verified_at timestamp on the 2FA record.
+//
+// Call chain: verifyLoginTwoFactorCredential → touchLoginTwoFactorVerified → DB UPDATE UserTwoFactor
 func (h *Handler) touchLoginTwoFactorVerified(ctx context.Context, userID int64) error {
 	now := time.Now().UTC()
 	return h.service.db.WithContext(ctx).Model(&store.UserTwoFactor{}).
@@ -308,6 +350,10 @@ func (h *Handler) touchLoginTwoFactorVerified(ctx context.Context, userID int64)
 		}).Error
 }
 
+// consumeLoginRecoveryCode validates a recovery code against the stored hashes,
+// removes it atomically on match, and updates the last-verified timestamp.
+//
+// Call chain: verifyLoginTwoFactorCredential → consumeLoginRecoveryCode → DB query + UPDATE UserTwoFactor
 func (h *Handler) consumeLoginRecoveryCode(ctx context.Context, userID int64, rawCode string) (bool, error) {
 	var record store.UserTwoFactor
 	if err := h.service.db.WithContext(ctx).
@@ -353,6 +399,8 @@ func (h *Handler) consumeLoginRecoveryCode(ctx context.Context, userID int64, ra
 	return true, nil
 }
 
+// normalizeLoginTOTPCode strips whitespace and validates that the input is exactly
+// loginTwoFactorTOTPDigits digits, returning the cleaned code.
 func normalizeLoginTOTPCode(raw string) (string, bool) {
 	var builder strings.Builder
 	for _, r := range raw {
@@ -368,6 +416,7 @@ func normalizeLoginTOTPCode(raw string) (string, bool) {
 	return code, len(code) == loginTwoFactorTOTPDigits
 }
 
+// verifyLoginTOTPCode checks the TOTP code with a ±1 time-step window.
 func verifyLoginTOTPCode(secret, code string, at time.Time) bool {
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(strings.TrimSpace(secret)))
 	if err != nil {
@@ -386,6 +435,7 @@ func verifyLoginTOTPCode(secret, code string, at time.Time) bool {
 	return false
 }
 
+// loginTOTPCodeAt computes the RFC 6238 TOTP value at a given counter step.
 func loginTOTPCodeAt(key []byte, counter uint64) string {
 	var message [8]byte
 	binary.BigEndian.PutUint64(message[:], counter)
@@ -397,6 +447,7 @@ func loginTOTPCodeAt(key []byte, counter uint64) string {
 	return fmt.Sprintf("%06d", binaryCode%1000000)
 }
 
+// parseLoginRecoveryCodeHashes unmarshals the JSON array of recovery-code hashes.
 func parseLoginRecoveryCodeHashes(raw datatypes.JSON) []string {
 	if len(raw) == 0 {
 		raw = datatypes.JSON([]byte(loginTwoFactorRecoveryCodeJSONNull))
@@ -408,12 +459,14 @@ func parseLoginRecoveryCodeHashes(raw datatypes.JSON) []string {
 	return hashes
 }
 
+// hashLoginRecoveryCode canonicalizes and hashes a recovery code with SHA-256.
 func hashLoginRecoveryCode(code string) string {
 	normalized := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
 	sum := sha256.Sum256([]byte(normalized))
 	return hex.EncodeToString(sum[:])
 }
 
+// randomLoginTwoFactorChallengeID generates a 16-byte random hex ID.
 func randomLoginTwoFactorChallengeID() (string, error) {
 	raw := make([]byte, 16)
 	if _, err := cryptorand.Read(raw); err != nil {

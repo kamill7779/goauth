@@ -215,6 +215,9 @@ func (s *Service) randomID(size int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// loadUser fetches a user by primary key (may return soft-deleted or disabled).
+//
+// Call chain: authorize / exchangeAuthorizationCode → loadUser → DB First
 func (s *Service) loadUser(ctx context.Context, userID int64) (*store.User, error) {
 	var user store.User
 	if err := s.db.WithContext(ctx).First(&user, userID).Error; err != nil {
@@ -223,6 +226,9 @@ func (s *Service) loadUser(ctx context.Context, userID int64) (*store.User, erro
 	return &user, nil
 }
 
+// loadActiveUser fetches a user that is active and not soft-deleted.
+//
+// Call chain: refreshToken / validateAccessClaims → loadActiveUser → DB query
 func (s *Service) loadActiveUser(ctx context.Context, userID int64) (*store.User, error) {
 	var user store.User
 	if err := s.db.WithContext(ctx).
@@ -233,6 +239,10 @@ func (s *Service) loadActiveUser(ctx context.Context, userID int64) (*store.User
 	return &user, nil
 }
 
+// hasActiveSession checks whether the user has at least one non-revoked refresh
+// token for the given session, joined through the login_sessions table.
+//
+// Call chain: validateAccessClaims / exchangeAuthorizationCode → hasActiveSession → hasActiveSessionWithDB
 func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	if userID == 0 || sessionID == "" {
@@ -241,6 +251,10 @@ func (s *Service) hasActiveSession(ctx context.Context, userID int64, sessionID 
 	return s.hasActiveSessionWithDB(ctx, s.db, userID, sessionID)
 }
 
+// hasActiveSessionWithDB is the DB-backed check for an active session row +
+// non-revoked refresh token with matching token version.
+//
+// Call chain: hasActiveSession / exchangeAuthorizationCode → hasActiveSessionWithDB → DB Count
 func (s *Service) hasActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) bool {
 	var count int64
 	err := db.WithContext(ctx).
@@ -254,6 +268,10 @@ func (s *Service) hasActiveSessionWithDB(ctx context.Context, db *gorm.DB, userI
 	return err == nil && count > 0
 }
 
+// lockActiveSessionWithDB takes a SELECT FOR UPDATE on the login session to
+// serialise concurrent token exchanges.
+//
+// Call chain: exchangeAuthorizationCode / refreshToken → lockActiveSessionWithDB → DB SELECT FOR UPDATE
 func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) error {
 	var loginSession store.LoginSession
 	return db.WithContext(ctx).
@@ -262,6 +280,7 @@ func (s *Service) lockActiveSessionWithDB(ctx context.Context, db *gorm.DB, user
 		First(&loginSession).Error
 }
 
+// hasActiveLoginSessionWithDB checks for a non-revoked login session row.
 func (s *Service) hasActiveLoginSessionWithDB(ctx context.Context, db *gorm.DB, userID int64, sessionID string) bool {
 	var count int64
 	err := db.WithContext(ctx).
@@ -271,6 +290,7 @@ func (s *Service) hasActiveLoginSessionWithDB(ctx context.Context, db *gorm.DB, 
 	return err == nil && count > 0
 }
 
+// hasActiveTenantMembership checks for an active tenant membership.
 func (s *Service) hasActiveTenantMembership(ctx context.Context, userID, tenantID int64) bool {
 	if userID == 0 || tenantID == 0 {
 		return false
@@ -347,6 +367,7 @@ func (s *Service) ensureClientTenantMembership(ctx context.Context, userID int64
 	return true, nil
 }
 
+// hasActiveTenant checks for an active, non-deleted tenant.
 func (s *Service) hasActiveTenant(ctx context.Context, tenantID int64) bool {
 	var count int64
 	err := s.db.WithContext(ctx).
@@ -356,6 +377,11 @@ func (s *Service) hasActiveTenant(ctx context.Context, tenantID int64) bool {
 	return err == nil && count > 0
 }
 
+// validateAccessClaims performs live state checks on an OIDC access token:
+// issuer, audience, token_use, user active, token_version, session, membership,
+// and client status.
+//
+// Call chain: userInfo / introspect → validateAccessClaims → loadActiveUser + hasActiveSession + hasActiveTenantMembership
 func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims) error {
 	if claims.Issuer != s.issuer {
 		return gorm.ErrRecordNotFound
@@ -395,6 +421,7 @@ func (s *Service) validateAccessClaims(ctx context.Context, claims accessClaims)
 	return nil
 }
 
+// validateRefreshToken validates a refresh token row against live user/session state.
 func (s *Service) validateRefreshToken(ctx context.Context, token store.RefreshToken) bool {
 	if token.RevokedAt != nil || token.ExpiresAt.Before(s.now()) {
 		return false
@@ -419,6 +446,7 @@ func (s *Service) validateRefreshToken(ctx context.Context, token store.RefreshT
 	return true
 }
 
+// resolvePostLogoutRedirectURI validates the client and redirect URI for RP-initiated logout.
 func (s *Service) resolvePostLogoutRedirectURI(ctx context.Context, clientID, redirectURI string) (string, error) {
 	redirectURI = strings.TrimSpace(redirectURI)
 	if redirectURI == "" {
@@ -439,6 +467,10 @@ func (s *Service) resolvePostLogoutRedirectURI(ctx context.Context, clientID, re
 	return redirectURI, nil
 }
 
+// parseAccessToken verifies and decodes a JWT access token, supporting both
+// single-key and keyring verification.
+//
+// Call chain: userInfo / introspect → parseAccessToken → jwt.ParseWithClaims
 func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 	if s.keyring == nil && s.publicKey == nil {
 		return nil, errors.New("missing public key")
@@ -467,6 +499,7 @@ func (s *Service) parseAccessToken(rawToken string) (*accessClaims, error) {
 	return claims, nil
 }
 
+// audienceContains reports whether a JWT audience claim includes the given value.
 func audienceContains(audience jwt.ClaimStrings, value string) bool {
 	for _, item := range audience {
 		if item == value {
@@ -476,6 +509,7 @@ func audienceContains(audience jwt.ClaimStrings, value string) bool {
 	return false
 }
 
+// scopeSet converts a space-delimited scope string into a set for O(1) lookups.
 func scopeSet(scope string) map[string]struct{} {
 	values := splitScope(scope)
 	result := make(map[string]struct{}, len(values))
@@ -485,6 +519,7 @@ func scopeSet(scope string) map[string]struct{} {
 	return result
 }
 
+// hasScope reports whether a scope set contains the given value.
 func hasScope(scopes map[string]struct{}, value string) bool {
 	_, ok := scopes[value]
 	return ok

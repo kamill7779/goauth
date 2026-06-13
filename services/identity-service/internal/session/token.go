@@ -1,5 +1,13 @@
 // Package session manages JWT access/refresh token issuance, rotation,
 // revocation, and the AuthMiddleware that validates tokens on every request.
+//
+// Call chain overview:
+//
+//	handler.go          token.go               refresh.go             store
+//	──────────          ────────               ──────────             ─────
+//	refresh       ──→  Refresh          ──→  IssueTokens      ──→  SessionRepository
+//	logout        ──→  Logout           ──→  repo.Revoke       ──→  DB
+//	logoutAll     ──→  LogoutAll        ──→  repo + version bump
 package session
 
 import (
@@ -85,6 +93,9 @@ type Dependencies struct {
 	LogoutCoordinator *logout.Coordinator
 }
 
+// NewService creates a session Service from a DB, config, and a single RSA private key.
+//
+// Call chain: main → NewService → NewServiceWithKeyringAndDeps
 func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Service {
 	var keyring *jwtkey.Keyring
 	if privateKey != nil {
@@ -93,6 +104,9 @@ func NewService(db *gorm.DB, cfg config.Config, privateKey *rsa.PrivateKey) *Ser
 	return NewServiceWithKeyringAndDeps(db, cfg, keyring, Dependencies{})
 }
 
+// NewServiceWithKeyring creates a session Service backed by a keyring for key rotation.
+//
+// Call chain: main → NewServiceWithKeyring → NewServiceWithKeyringAndDeps
 func NewServiceWithKeyring(db *gorm.DB, cfg config.Config, keyring *jwtkey.Keyring) *Service {
 	return NewServiceWithKeyringAndDeps(db, cfg, keyring, Dependencies{})
 }
@@ -133,6 +147,7 @@ func (s *Service) SetSessionRepository(repo store.SessionRepository) {
 	s.sessions = repo
 }
 
+// SetAuditRecorder injects an audit recorder, defaulting to noop on nil.
 func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	if recorder == nil {
 		s.audit = audit.NoopRecorder{}
@@ -141,6 +156,7 @@ func (s *Service) SetAuditRecorder(recorder audit.Recorder) {
 	s.audit = recorder
 }
 
+// SetLogoutCoordinator injects a logout coordinator for back-channel propagation.
 func (s *Service) SetLogoutCoordinator(c *logout.Coordinator) {
 	s.logoutCoordinator = c
 }
@@ -218,6 +234,9 @@ func (s *Service) IssueTokens(ctx context.Context, input IssueTokensInput) (*Tok
 	return pair, nil
 }
 
+// signAccessToken signs a session-scoped JWT access token with RS256.
+//
+// Call chain: IssueTokens → issueTokenPairWithDB → signAccessToken → jwt.SignedString
 func (s *Service) signAccessToken(user store.User, tenantID int64, clientID, sessionID string) (string, error) {
 	issuedAt := s.now()
 	jti, err := randomID(16)
@@ -249,6 +268,7 @@ func (s *Service) signAccessToken(user store.User, tenantID int64, clientID, ses
 	return token.SignedString(s.privateKey)
 }
 
+// randomID generates a hex-encoded random byte string of the given size.
 func randomID(size int) (string, error) {
 	bytes := make([]byte, size)
 	if _, err := rand.Read(bytes); err != nil {
@@ -257,11 +277,13 @@ func randomID(size int) (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// hashToken returns the hex-encoded SHA-256 hash of a token string.
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
 }
 
+// RefreshTokenTTL returns the configured refresh token lifetime.
 func (s *Service) RefreshTokenTTL() time.Duration {
 	return s.refreshTokenTTL
 }

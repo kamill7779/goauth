@@ -49,6 +49,9 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	v1.POST("/invites/redeem", h.redeemInvite)
 }
 
+// createInvite creates a tenant invitation for a target email and role.
+//
+// Call chain: POST /v1/admin/tenants/:id/invites → createInvite → service.Create
 func (h *Handler) createInvite(c *gin.Context) {
 	tenantID, err := parseTenantID(c)
 	if err != nil {
@@ -84,6 +87,9 @@ func (h *Handler) createInvite(c *gin.Context) {
 	httpserver.Success(c, http.StatusCreated, invitePayload(inv))
 }
 
+// listInvites returns paginated invites for a tenant.
+//
+// Call chain: GET /v1/admin/tenants/:id/invites → listInvites → service.List
 func (h *Handler) listInvites(c *gin.Context) {
 	tenantID, err := parseTenantID(c)
 	if err != nil {
@@ -111,6 +117,9 @@ func (h *Handler) listInvites(c *gin.Context) {
 	})
 }
 
+// revokeInvite marks a pending invite as revoked.
+//
+// Call chain: DELETE /v1/admin/invites/:invite_id → revokeInvite → service.Revoke
 func (h *Handler) revokeInvite(c *gin.Context) {
 	inviteID, err := strconv.ParseInt(c.Param("invite_id"), 10, 64)
 	if err != nil {
@@ -129,6 +138,10 @@ func (h *Handler) revokeInvite(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"revoked": true})
 }
 
+// redeemInvite accepts an invite token, validates it, and adds the
+// authenticated user to the tenant with the granted role.
+//
+// Call chain: POST /v1/invites/redeem → redeemInvite → service.Redeem
 func (h *Handler) redeemInvite(c *gin.Context) {
 	var req struct {
 		Token string `json:"token"`
@@ -168,6 +181,10 @@ func (h *Handler) redeemInvite(c *gin.Context) {
 	httpserver.Success(c, http.StatusOK, gin.H{"redeemed": true})
 }
 
+// parseTenantID extracts and validates the tenant ID route parameter.
+// On error it writes the HTTP response and returns 0.
+//
+// Call chain: createInvite / listInvites → parseTenantID
 func parseTenantID(c *gin.Context) (int64, error) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -177,6 +194,9 @@ func parseTenantID(c *gin.Context) (int64, error) {
 	return id, nil
 }
 
+// invitePayload converts a store.Invite to a gin.H response payload.
+//
+// Call chain: createInvite / listInvites → invitePayload
 func invitePayload(inv *store.Invite) gin.H {
 	return gin.H{
 		"id":           inv.ID,
