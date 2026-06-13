@@ -16,7 +16,7 @@ npm run dev
 
 Open `http://127.0.0.1:3000/login`.
 
-Production fix: serve `frontend/dist` through a static server and reverse proxy API paths to identity-service. See [Docker Compose Deployment](deployment/docker-compose.md).
+Production fix: serve `frontend/dist` through a static server and reverse proxy API paths to identity-service. See [Docker Compose Deployment](../deployment/docker-compose.md).
 
 ## `/readyz` Fails
 
@@ -149,7 +149,7 @@ Check:
 
 GoAuth currently does not perform STARTTLS upgrade for port `587`, so providers that require STARTTLS need that code change first.
 
-See [SMTP Configuration](config/smtp.md).
+See [SMTP Configuration](../deployment/smtp.md).
 
 ## CORS Fails
 
@@ -188,8 +188,8 @@ Restart the service, sign in, create real administrators, then remove the bootst
 
 ## Where To Look Next
 
-- [Quickstart](quickstart.md)
-- [SSO Quickstart](integration/sso-quickstart.md)
-- [Docker Compose Deployment](deployment/docker-compose.md)
-- [Configuration Matrix](configuration.md)
+- [Quickstart](../development/quickstart.md)
+- [SSO Quickstart](../integration/sso-quickstart.md)
+- [Docker Compose Deployment](../deployment/docker-compose.md)
+- [Configuration Matrix](../deployment/configuration.md)
 - [Production Checklist](production-checklist.md)

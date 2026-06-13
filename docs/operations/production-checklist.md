@@ -73,7 +73,7 @@ CAPTCHA_ACTIONS=login,register,email_code,password_forgot
 - Verify a real password reset email.
 - Store SMTP password or authorization code in a secret manager.
 
-See [SMTP Configuration](config/smtp.md).
+See [SMTP Configuration](../deployment/smtp.md).
 
 ## Bootstrap Admin
 
@@ -119,7 +119,7 @@ Serve the frontend static app for:
 - `/admin`
 - `/external/callback`
 
-See [Docker Compose Deployment](deployment/docker-compose.md).
+See [Docker Compose Deployment](../deployment/docker-compose.md).
 
 ## Runtime Diagnostics
 

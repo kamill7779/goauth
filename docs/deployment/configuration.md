@@ -4,12 +4,12 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 
 ## Related Guides
 
-- [Quickstart](quickstart.md)
-- [Docker Compose Deployment](deployment/docker-compose.md)
-- [SSO Quickstart](integration/sso-quickstart.md)
-- [SMTP Configuration](config/smtp.md)
-- [Production Checklist](production-checklist.md)
-- [Troubleshooting](troubleshooting.md)
+- [Quickstart](../development/quickstart.md)
+- [Docker Compose Deployment](docker-compose.md)
+- [SSO Quickstart](../integration/sso-quickstart.md)
+- [SMTP Configuration](smtp.md)
+- [Production Checklist](../operations/production-checklist.md)
+- [Troubleshooting](../operations/troubleshooting.md)
 
 ## Rules
 
