@@ -37,7 +37,7 @@ func EnvDefinitions() []EnvDefinition {
 		env("SMTP_AUTH_LOGIN", "mailer", "false", false, false, false, "Use SMTP AUTH LOGIN instead of AUTH PLAIN."),
 		env("CORS_ALLOWED_ORIGINS", "network", "", false, false, false, "Allowed browser origins."),
 		env("CORS_ALLOWED_METHODS", "network", "GET,POST,PUT,PATCH,DELETE", false, false, false, "Allowed CORS methods."),
-		env("CORS_ALLOWED_HEADERS", "network", "Authorization,Content-Type,X-Captcha-Token", false, false, false, "Allowed CORS headers."),
+		env("CORS_ALLOWED_HEADERS", "network", "Authorization,Content-Type,X-Captcha-Token,X-Human-Token", false, false, false, "Allowed CORS headers."),
 		env("CORS_ALLOW_CREDENTIALS", "network", "derived", false, false, false, "Allow browser credentials in CORS."),
 		env("REGISTRATION_MODE", "auth_entry", "open", false, false, true, "Self-service registration mode."),
 		env("LOCAL_PASSWORD_LOGIN_ENABLED", "auth_entry", "true", false, false, true, "Enable local password login."),
@@ -71,6 +71,11 @@ func EnvDefinitions() []EnvDefinition {
 		env("CAPTCHA_SECRET_KEY", "captcha", "", false, true, false, "CAPTCHA server-side secret key."),
 		env("CAPTCHA_SITE_KEY", "captcha", "", false, false, true, "CAPTCHA public site key."),
 		env("CAPTCHA_ACTIONS", "captcha", "login,register,email_code,password_forgot", false, false, true, "CAPTCHA-protected actions."),
+		env("HUMAN_CHECK_PROVIDER", "human_check", "", false, false, true, "Self-hosted human check provider."),
+		env("HUMAN_CHECK_ACTIONS", "human_check", "register", false, false, true, "Human-check protected actions."),
+		env("HUMAN_CHECK_CHALLENGE_TTL", "human_check", "2m", false, false, false, "Human check challenge lifetime."),
+		env("HUMAN_CHECK_TOKEN_TTL", "human_check", "3m", false, false, false, "Human check one-time token lifetime."),
+		env("HUMAN_CHECK_SLIDER_TOLERANCE_PX", "human_check", "4", false, false, false, "Accepted slider answer tolerance in pixels."),
 	}
 }
 

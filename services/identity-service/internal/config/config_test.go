@@ -56,7 +56,7 @@ func TestLoadUsesDefaults(t *testing.T) {
 	if len(cfg.CORSAllowedMethods) != 5 {
 		t.Fatalf("CORSAllowedMethods len = %d, want 5", len(cfg.CORSAllowedMethods))
 	}
-	assertStringSlice(t, cfg.CORSAllowedHeaders, []string{"Authorization", "Content-Type", "X-Captcha-Token"})
+	assertStringSlice(t, cfg.CORSAllowedHeaders, []string{"Authorization", "Content-Type", "X-Captcha-Token", "X-Human-Token"})
 	if cfg.CORSAllowCredentials {
 		t.Fatal("CORSAllowCredentials = true, want false when no origins are configured")
 	}
@@ -107,6 +107,43 @@ func TestLoadCaptchaActionsAndDefaultGitHubRedirect(t *testing.T) {
 	assertStringSlice(t, cfg.CaptchaActions, []string{"login", "register", "email_code"})
 	if cfg.GitHubRedirectURI != "https://auth.example.com/v1/external/github/callback" {
 		t.Fatalf("GitHubRedirectURI = %q", cfg.GitHubRedirectURI)
+	}
+}
+
+func TestLoadHumanCheckConfig(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("HUMAN_CHECK_PROVIDER", "slider")
+	t.Setenv("HUMAN_CHECK_ACTIONS", "Register, REGISTER")
+	t.Setenv("HUMAN_CHECK_CHALLENGE_TTL", "90s")
+	t.Setenv("HUMAN_CHECK_TOKEN_TTL", "4m")
+	t.Setenv("HUMAN_CHECK_SLIDER_TOLERANCE_PX", "6")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.HumanCheckProvider != "slider" {
+		t.Fatalf("HumanCheckProvider = %q, want slider", cfg.HumanCheckProvider)
+	}
+	assertStringSlice(t, cfg.HumanCheckActions, []string{"register"})
+	if cfg.HumanCheckChallengeTTL != 90*time.Second {
+		t.Fatalf("HumanCheckChallengeTTL = %v, want 90s", cfg.HumanCheckChallengeTTL)
+	}
+	if cfg.HumanCheckTokenTTL != 4*time.Minute {
+		t.Fatalf("HumanCheckTokenTTL = %v, want 4m", cfg.HumanCheckTokenTTL)
+	}
+	if cfg.HumanCheckSliderTolerancePX != 6 {
+		t.Fatalf("HumanCheckSliderTolerancePX = %d, want 6", cfg.HumanCheckSliderTolerancePX)
+	}
+}
+
+func TestLoadRejectsInvalidHumanCheckProvider(t *testing.T) {
+	resetConfigEnv(t)
+	t.Setenv("HUMAN_CHECK_PROVIDER", "unknown")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("Load() error = nil, want error for invalid human check provider")
 	}
 }
 
@@ -332,6 +369,11 @@ func resetConfigEnv(t *testing.T) {
 		"CAPTCHA_SECRET_KEY",
 		"CAPTCHA_SITE_KEY",
 		"CAPTCHA_ACTIONS",
+		"HUMAN_CHECK_PROVIDER",
+		"HUMAN_CHECK_ACTIONS",
+		"HUMAN_CHECK_CHALLENGE_TTL",
+		"HUMAN_CHECK_TOKEN_TTL",
+		"HUMAN_CHECK_SLIDER_TOLERANCE_PX",
 		"REGISTRATION_MODE",
 		"LOCAL_PASSWORD_LOGIN_ENABLED",
 		"MAILER_PROVIDER",

@@ -46,6 +46,7 @@ import (
 	"goauth/services/identity-service/internal/captcha"
 	"goauth/services/identity-service/internal/config"
 	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/humancheck"
 	"goauth/services/identity-service/internal/idp"
 	githubidp "goauth/services/identity-service/internal/idp/github"
 	"goauth/services/identity-service/internal/invite"
@@ -223,25 +224,26 @@ func buildRouterWithKeyring(cfg config.Config, db *gorm.DB, redisClient *redis.C
 // services holds all shared dependencies wired at startup — a manual DI
 // container that avoids package-level globals.
 type services struct {
-	session     *session.Service
-	sessionH    *session.Handler
-	oidc        *oidc.Service
-	audit       *audit.Service
-	rateLimiter *ratelimit.Service
-	lockout     *lockout.Manager
-	pwPolicy    password.Policy
-	captcha     *captcha.Verifier
-	logoutCoord *logout.Coordinator
-	tmplEngine  *mailer.TemplateEngine
-	rbac        *rbac.Service
-	tenant      *tenant.Service
-	user        *user.Service
-	userH       *user.Handler
+	session      *session.Service
+	sessionH     *session.Handler
+	oidc         *oidc.Service
+	audit        *audit.Service
+	rateLimiter  *ratelimit.Service
+	lockout      *lockout.Manager
+	pwPolicy     password.Policy
+	captcha      *captcha.Verifier
+	humanCheck   *humancheck.Service
+	logoutCoord  *logout.Coordinator
+	tmplEngine   *mailer.TemplateEngine
+	rbac         *rbac.Service
+	tenant       *tenant.Service
+	user         *user.Service
+	userH        *user.Handler
 	provisioning *provisioning.DefaultMembershipPolicy
-	idp         *idp.Service
-	idpH        *idp.Handler
+	idp          *idp.Service
+	idpH         *idp.Handler
 
-	authMiddleware  gin.HandlerFunc
+	authMiddleware   gin.HandlerFunc
 	systemMiddleware gin.HandlerFunc
 }
 
@@ -278,6 +280,13 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	lockoutMgr := lockout.NewManager(redisClient, cfg.LockoutThreshold, cfg.LockoutDuration, 0)
 	pwPolicy := password.LoadFromConfig(cfg)
 	captchaVerifier := captcha.NewVerifier(captcha.Provider(cfg.CaptchaProvider), cfg.CaptchaSecretKey)
+	humanCheckService := humancheck.NewService(redisClient, humancheck.Config{
+		Provider:     cfg.HumanCheckProvider,
+		Actions:      cfg.HumanCheckActions,
+		ChallengeTTL: cfg.HumanCheckChallengeTTL,
+		TokenTTL:     cfg.HumanCheckTokenTTL,
+		TolerancePX:  cfg.HumanCheckSliderTolerancePX,
+	})
 
 	tmplEngine := mailer.NewTemplateEngine(cfg.DefaultLocale)
 
@@ -321,24 +330,25 @@ func buildServices(cfg config.Config, db *gorm.DB, redisClient *redis.Client, ke
 	}
 
 	return &services{
-		session:        sessionService,
-		sessionH:       sessionHandler,
-		oidc:           oidcService,
-		audit:          auditService,
-		rateLimiter:    rateLimiter,
-		lockout:        lockoutMgr,
-		pwPolicy:       pwPolicy,
-		captcha:        captchaVerifier,
-		logoutCoord:    logoutCoord,
-		tmplEngine:     tmplEngine,
-		rbac:           rbacService,
-		tenant:         tenantService,
-		user:           userService,
-		userH:          userHandler,
-		provisioning:   defaultPolicy,
-		idp:            idpService,
-		idpH:           idpHandler,
-		authMiddleware:  authMW,
+		session:          sessionService,
+		sessionH:         sessionHandler,
+		oidc:             oidcService,
+		audit:            auditService,
+		rateLimiter:      rateLimiter,
+		lockout:          lockoutMgr,
+		pwPolicy:         pwPolicy,
+		captcha:          captchaVerifier,
+		humanCheck:       humanCheckService,
+		logoutCoord:      logoutCoord,
+		tmplEngine:       tmplEngine,
+		rbac:             rbacService,
+		tenant:           tenantService,
+		user:             userService,
+		userH:            userHandler,
+		provisioning:     defaultPolicy,
+		idp:              idpService,
+		idpH:             idpHandler,
+		authMiddleware:   authMW,
 		systemMiddleware: sysMW,
 	}
 }
@@ -377,6 +387,9 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 	privateKey := keyring.ActivePrivateKey()
 	authGroup := router.Group("/v1/auth")
 	auth.NewPublicConfigHandler(cfg).RegisterRoutes(authGroup)
+	if strings.TrimSpace(cfg.HumanCheckProvider) != "" && redisClient != nil {
+		humancheck.NewHandler(svc.humanCheck).RegisterRoutes(authGroup)
+	}
 	svc.sessionH.RegisterRoutes(authGroup)
 
 	oidc.RegisterRoutes(router, svc.oidc)
@@ -411,6 +424,7 @@ func registerRoutes(router *gin.Engine, cfg config.Config, db *gorm.DB, redisCli
 			RateLimiter:               svc.rateLimiter,
 			CaptchaVerifier:           svc.captcha,
 			CaptchaActions:            cfg.CaptchaActions,
+			HumanCheck:                svc.humanCheck,
 			RegistrationMode:          cfg.RegistrationMode,
 			LocalPasswordLoginEnabled: &cfg.LocalPasswordLoginEnabled,
 		})
@@ -496,7 +510,6 @@ func buildReadinessChecks(db *gorm.DB, redisClient *redis.Client) []httpserver.R
 	}
 }
 
-
 // frontendCallbackURLFromBrowserLoginURL derives the external IDP callback URL
 // from the configured browser login URL by replacing the path with /external/callback.
 // If parsing fails it falls back to a relative path.
@@ -509,4 +522,3 @@ func frontendCallbackURLFromBrowserLoginURL(browserLoginURL string) string {
 	}
 	return parsed.Scheme + "://" + parsed.Host + "/external/callback"
 }
-

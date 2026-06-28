@@ -21,11 +21,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"goauth/services/identity-service/internal/audit"
 	"goauth/services/identity-service/internal/cache"
 	"goauth/services/identity-service/internal/captcha"
 	"goauth/services/identity-service/internal/config"
+	"goauth/services/identity-service/internal/humancheck"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/session"
 	"goauth/services/identity-service/internal/store"
@@ -706,5 +709,31 @@ func TestLoginRateLimitUsesTrustedForwardedIP(t *testing.T) {
 
 	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusTooManyRequests, recorder.Body.String())
+	}
+}
+
+func TestRegisterRequiresHumanCheckTokenWhenEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { _ = redisClient.Close() })
+
+	humanSvc := humancheck.NewService(redisClient, humancheck.Config{Provider: humancheck.ProviderSlider, Actions: []string{humancheck.ActionRegister}, ChallengeTTL: 2 * time.Minute, TokenTTL: 3 * time.Minute})
+	handler := NewHandler(nil, nil)
+	handler.SetDeps(HandlerDeps{HumanCheck: humanSvc})
+
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/v1/auth"))
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/register", strings.NewReader(`{"email":"member@example.com","password":"p@ssw0rd!","email_code":"123456"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 body=%s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "human check") {
+		t.Fatalf("expected human check error, got %s", recorder.Body.String())
 	}
 }

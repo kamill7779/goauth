@@ -41,6 +41,10 @@ func (h *PublicConfigHandler) get(c *gin.Context) {
 			"site_key": publicCaptchaSiteKey(h.cfg),
 			"actions":  h.cfg.CaptchaActions,
 		},
+		"human_check": gin.H{
+			"provider": publicHumanCheckProvider(h.cfg),
+			"actions":  publicHumanCheckActions(h.cfg),
+		},
 		"external_providers": h.externalProviders(),
 		"password_policy": gin.H{
 			"min_length":        h.cfg.PasswordMinLength,
@@ -76,7 +80,6 @@ func (h *PublicConfigHandler) externalProviders() []gin.H {
 	}
 }
 
-
 // publicCaptchaProvider returns the CAPTCHA provider name when CAPTCHA is enabled.
 func publicCaptchaProvider(cfg config.Config) string {
 	if !publicCaptchaEnabled(cfg) {
@@ -100,3 +103,23 @@ func publicCaptchaEnabled(cfg config.Config) bool {
 		strings.TrimSpace(cfg.CaptchaSecretKey) != ""
 }
 
+// publicHumanCheckProvider returns the browser-safe human check provider name.
+func publicHumanCheckProvider(cfg config.Config) string {
+	if !publicHumanCheckEnabled(cfg) {
+		return ""
+	}
+	return cfg.HumanCheckProvider
+}
+
+// publicHumanCheckActions returns the human-check action allowlist when enabled.
+func publicHumanCheckActions(cfg config.Config) []string {
+	if !publicHumanCheckEnabled(cfg) {
+		return []string{}
+	}
+	return cfg.HumanCheckActions
+}
+
+// publicHumanCheckEnabled reports whether self-hosted human check is configured.
+func publicHumanCheckEnabled(cfg config.Config) bool {
+	return strings.TrimSpace(cfg.HumanCheckProvider) != "" && len(cfg.HumanCheckActions) > 0
+}
