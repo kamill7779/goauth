@@ -84,6 +84,13 @@ type Config struct {
 	CaptchaSiteKey   string
 	CaptchaActions   []string
 
+	// Human check
+	HumanCheckProvider          string
+	HumanCheckActions           []string
+	HumanCheckChallengeTTL      time.Duration
+	HumanCheckTokenTTL          time.Duration
+	HumanCheckSliderTolerancePX int
+
 	ConfiguredEnv map[string]bool `json:"-"`
 }
 
@@ -91,13 +98,13 @@ type Config struct {
 
 // TokenConfig groups JWT signing and token lifetime settings.
 type TokenConfig struct {
-	KeyID              string
-	ActiveKeyID        string
-	KeysetDir          string
-	PrivateKeyPath     string
-	AccessTokenTTL     time.Duration
-	RefreshTokenTTL    time.Duration
-	BrowserSessionTTL  time.Duration
+	KeyID               string
+	ActiveKeyID         string
+	KeysetDir           string
+	PrivateKeyPath      string
+	AccessTokenTTL      time.Duration
+	RefreshTokenTTL     time.Duration
+	BrowserSessionTTL   time.Duration
 	BrowserCookieSecure bool
 }
 
@@ -144,10 +151,10 @@ type LockoutConfig struct {
 
 // GitHubOAuthConfig groups GitHub OAuth provider settings.
 type GitHubOAuthConfig struct {
-	Enabled     bool
-	ClientID    string
+	Enabled      bool
+	ClientID     string
 	ClientSecret string
-	RedirectURI string
+	RedirectURI  string
 }
 
 // Token returns the JWT signing and token-lifetime sub-config.
@@ -155,13 +162,13 @@ type GitHubOAuthConfig struct {
 // Call chain: any service constructor → Config.Token → (no downstream)
 func (c Config) Token() TokenConfig {
 	return TokenConfig{
-		KeyID:              c.JWTKeyID,
-		ActiveKeyID:        c.JWTActiveKeyID,
-		KeysetDir:          c.JWTKeysetDir,
-		PrivateKeyPath:     c.JWTPrivateKeyPath,
-		AccessTokenTTL:     c.AccessTokenTTL,
-		RefreshTokenTTL:    c.RefreshTokenTTL,
-		BrowserSessionTTL:  c.BrowserSessionTTL,
+		KeyID:               c.JWTKeyID,
+		ActiveKeyID:         c.JWTActiveKeyID,
+		KeysetDir:           c.JWTKeysetDir,
+		PrivateKeyPath:      c.JWTPrivateKeyPath,
+		AccessTokenTTL:      c.AccessTokenTTL,
+		RefreshTokenTTL:     c.RefreshTokenTTL,
+		BrowserSessionTTL:   c.BrowserSessionTTL,
 		BrowserCookieSecure: c.BrowserCookieSecure,
 	}
 }
@@ -353,6 +360,22 @@ func Load() (Config, error) {
 	if err := validateCaptchaConfig(captchaProvider, captchaSiteKey, captchaSecretKey); err != nil {
 		return Config{}, err
 	}
+	humanCheckProvider := strings.ToLower(strings.TrimSpace(os.Getenv("HUMAN_CHECK_PROVIDER")))
+	if err := validateHumanCheckProvider(humanCheckProvider); err != nil {
+		return Config{}, err
+	}
+	humanCheckChallengeTTL, err := parseDurationEnv("HUMAN_CHECK_CHALLENGE_TTL", 2*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	humanCheckTokenTTL, err := parseDurationEnv("HUMAN_CHECK_TOKEN_TTL", 3*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	humanCheckSliderTolerancePX, err := parseIntEnv("HUMAN_CHECK_SLIDER_TOLERANCE_PX", 4)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		AppEnv:                    envOrDefault("APP_ENV", "development"),
@@ -380,7 +403,7 @@ func Load() (Config, error) {
 		SMTPAuthLogin:             smtpAuthLogin,
 		CORSAllowedOrigins:        corsAllowedOrigins,
 		CORSAllowedMethods:        splitCSV(envOrDefault("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE")),
-		CORSAllowedHeaders:        splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Captcha-Token")),
+		CORSAllowedHeaders:        splitCSV(envOrDefault("CORS_ALLOWED_HEADERS", "Authorization,Content-Type,X-Captcha-Token,X-Human-Token")),
 		CORSAllowCredentials:      corsAllowCredentials,
 		RegistrationMode:          registrationMode,
 		LocalPasswordLoginEnabled: localPasswordLoginEnabled,
@@ -419,12 +442,31 @@ func Load() (Config, error) {
 		CaptchaSecretKey: captchaSecretKey,
 		CaptchaSiteKey:   captchaSiteKey,
 		CaptchaActions:   splitUniqueLowerCSV(envOrDefault("CAPTCHA_ACTIONS", "login,register,email_code,password_forgot")),
-		ConfiguredEnv:    configuredEnvKeys(),
+
+		HumanCheckProvider:          humanCheckProvider,
+		HumanCheckActions:           splitUniqueLowerCSV(envOrDefault("HUMAN_CHECK_ACTIONS", "register")),
+		HumanCheckChallengeTTL:      humanCheckChallengeTTL,
+		HumanCheckTokenTTL:          humanCheckTokenTTL,
+		HumanCheckSliderTolerancePX: humanCheckSliderTolerancePX,
+		ConfiguredEnv:               configuredEnvKeys(),
 	}
 	if err := validateProductionConfig(cfg); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// validateHumanCheckProvider ensures optional self-hosted human checks use a
+// known provider name. Empty disables the feature.
+//
+// Call chain: config.Load → validateHumanCheckProvider → (no downstream)
+func validateHumanCheckProvider(provider string) error {
+	switch strings.TrimSpace(provider) {
+	case "", "slider":
+		return nil
+	default:
+		return fmt.Errorf("invalid HUMAN_CHECK_PROVIDER: %s", provider)
+	}
 }
 
 // validateCaptchaConfig ensures CAPTCHA_PROVIDER, CAPTCHA_SITE_KEY, and

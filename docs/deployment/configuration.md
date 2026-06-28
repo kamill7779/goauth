@@ -41,7 +41,7 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 | `TRUSTED_PROXIES` | network | empty | conditional | no | no | Required behind controlled proxies when real client IP matters. |
 | `CORS_ALLOWED_ORIGINS` | network | empty | conditional | no | no | Required for separated frontend origins. |
 | `CORS_ALLOWED_METHODS` | network | `GET,POST,PUT,PATCH,DELETE` | optional | no | no | CORS methods. |
-| `CORS_ALLOWED_HEADERS` | network | `Authorization,Content-Type,X-Captcha-Token` | optional | no | no | Must include `X-Captcha-Token` when CAPTCHA is used cross-origin. |
+| `CORS_ALLOWED_HEADERS` | network | `Authorization,Content-Type,X-Captcha-Token,X-Human-Token` | optional | no | no | Must include `X-Captcha-Token` and `X-Human-Token` when browser protections are used cross-origin. |
 | `CORS_ALLOW_CREDENTIALS` | network | derived | optional | no | no | Defaults true for explicit origins, false for wildcard/empty. |
 | `MAILER_PROVIDER` | mailer | `console` | required | no | yes | `console`, `smtp`, or `noop`; production should use `smtp`. |
 | `SMTP_HOST` | mailer | empty | conditional | no | no | Required when `MAILER_PROVIDER=smtp`. |
@@ -65,6 +65,11 @@ GoAuth reads runtime configuration from environment variables at startup. This p
 | `CAPTCHA_SITE_KEY` | captcha | empty | conditional | no | yes | Public CAPTCHA site key. |
 | `CAPTCHA_SECRET_KEY` | captcha | empty | conditional | yes | no | Required with provider and site key. |
 | `CAPTCHA_ACTIONS` | captcha | `login,register,email_code,password_forgot` | optional | no | yes | Lowercase action allowlist. |
+| `HUMAN_CHECK_PROVIDER` | human_check | empty | optional | no | yes | Self-hosted human check provider. Set `slider` to require the slider challenge on configured actions. |
+| `HUMAN_CHECK_ACTIONS` | human_check | `register` | optional | no | yes | Lowercase human-check action allowlist. |
+| `HUMAN_CHECK_CHALLENGE_TTL` | human_check | `2m` | optional | no | no | Challenge lifetime before the slider answer expires. |
+| `HUMAN_CHECK_TOKEN_TTL` | human_check | `3m` | optional | no | no | One-time token lifetime after a slider is solved. |
+| `HUMAN_CHECK_SLIDER_TOLERANCE_PX` | human_check | `4` | optional | no | no | Accepted slider answer tolerance in pixels. |
 | `DEFAULT_MEMBER_TENANT_SLUGS` | tenancy | empty | optional | no | no | Auto-join slugs for newly created users. |
 | `BOOTSTRAP_ADMIN_EMAIL` | bootstrap | empty | optional | no | no | Must be paired with bootstrap password. |
 | `BOOTSTRAP_ADMIN_PASSWORD` | bootstrap | empty | optional | yes | no | Remove after first admin is created. |

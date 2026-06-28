@@ -13,6 +13,7 @@ export const API_BASE_URL =
 
 export interface ApiRequestOptions {
   captchaToken?: string;
+  humanToken?: string;
 }
 
 type TokenStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -227,25 +228,32 @@ const { authClient: client, v1Client } = createApiHttpClients({
 });
 
 export async function apiPost<T>(path: string, data?: unknown, options?: ApiRequestOptions): Promise<T> {
-  const response = await client.post<ApiSuccessResponse<T>>(path, data, {
-    headers: options?.captchaToken
-      ? {
-          'X-Captcha-Token': options.captchaToken,
-        }
-      : undefined,
+  return apiPostWithClient<T>(client, path, data, options);
+}
+
+export async function apiPostWithClient<T>(httpClient: AxiosInstance, path: string, data?: unknown, options?: ApiRequestOptions): Promise<T> {
+  const response = await httpClient.post<ApiSuccessResponse<T>>(path, data, {
+    headers: requestOptionHeaders(options),
   });
   return response.data.data;
 }
 
 export async function apiPostV1<T>(path: string, data?: unknown, options?: ApiRequestOptions): Promise<T> {
   const response = await v1Client.post<ApiSuccessResponse<T>>(path, data, {
-    headers: options?.captchaToken
-      ? {
-          'X-Captcha-Token': options.captchaToken,
-        }
-      : undefined,
+    headers: requestOptionHeaders(options),
   });
   return response.data.data;
+}
+
+function requestOptionHeaders(options?: ApiRequestOptions): Record<string, string> | undefined {
+  const headers: Record<string, string> = {};
+  if (options?.captchaToken) {
+    headers['X-Captcha-Token'] = options.captchaToken;
+  }
+  if (options?.humanToken) {
+    headers['X-Human-Token'] = options.humanToken;
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 export async function apiPostFormV1<T>(path: string, data: FormData): Promise<T> {

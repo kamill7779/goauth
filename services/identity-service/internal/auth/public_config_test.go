@@ -22,6 +22,8 @@ func TestPublicConfigDoesNotExposeSecrets(t *testing.T) {
 		CaptchaSiteKey:            "site-key",
 		CaptchaSecretKey:          "secret-key",
 		CaptchaActions:            []string{"login", "register"},
+		HumanCheckProvider:        "slider",
+		HumanCheckActions:         []string{"register"},
 		PublicIssuerURL:           "https://auth.example.com",
 		GitHubOAuthEnabled:        true,
 		GitHubClientID:            "client-id",
@@ -57,6 +59,45 @@ func TestPublicConfigDoesNotExposeSecrets(t *testing.T) {
 	}
 	if !strings.Contains(body, "https://auth.example.com") {
 		t.Fatalf("public config omitted public issuer URL: %s", body)
+	}
+	if !strings.Contains(body, "human_check") || !strings.Contains(body, "slider") {
+		t.Fatalf("public config omitted human check capability: %s", body)
+	}
+}
+
+func TestPublicConfigHumanCheckEnabledOnlyWithProviderAndActions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	h := NewPublicConfigHandler(config.Config{
+		HumanCheckProvider: "slider",
+		HumanCheckActions:  []string{"register"},
+	})
+
+	router := gin.New()
+	h.RegisterRoutes(router.Group("/v1/auth"))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/public-config", nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var response struct {
+		HumanCheck struct {
+			Provider string   `json:"provider"`
+			Actions  []string `json:"actions"`
+		} `json:"human_check"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.HumanCheck.Provider != "slider" {
+		t.Fatalf("human_check.provider = %q, want slider", response.HumanCheck.Provider)
+	}
+	if len(response.HumanCheck.Actions) != 1 || response.HumanCheck.Actions[0] != "register" {
+		t.Fatalf("human_check.actions = %v, want [register]", response.HumanCheck.Actions)
 	}
 }
 

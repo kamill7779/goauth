@@ -125,7 +125,7 @@ globalThis.window = {
   localStorage: { getItem: () => null },
 };
 
-const { exchangeGitHubLogin, forgotPassword, resetPassword, startGitHubLogin, verifyLogin2FA } = await importAuthModule('src/api/auth.ts');
+const { exchangeGitHubLogin, forgotPassword, register, resetPassword, startGitHubLogin, verifyLogin2FA } = await importAuthModule('src/api/auth.ts');
 const account = await importAuthModule('src/api/account.ts');
 
 test('forgotPassword posts email to forgot-password endpoint', async () => {
@@ -177,6 +177,33 @@ test('forgotPassword forwards captcha token when provided', async () => {
       path: '/password/forgot',
       data: { email: 'member@example.com' },
       options: { captchaToken: 'captcha-proof' },
+    },
+  ]);
+});
+
+test('register forwards captcha and human check tokens when provided', async () => {
+  globalThis.__authClientCalls.length = 0;
+
+  await register({
+    username: 'member',
+    nickname: 'Member',
+    email: 'member@example.com',
+    password: 'password-123',
+    email_code: '493021',
+  }, { captchaToken: 'captcha-proof', humanToken: 'human-proof' });
+
+  assert.deepEqual(globalThis.__authClientCalls, [
+    {
+      method: 'post',
+      path: '/register',
+      data: {
+        username: 'member',
+        nickname: 'Member',
+        email: 'member@example.com',
+        password: 'password-123',
+        email_code: '493021',
+      },
+      options: { captchaToken: 'captcha-proof', humanToken: 'human-proof' },
     },
   ]);
 });

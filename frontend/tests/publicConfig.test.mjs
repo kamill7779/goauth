@@ -26,7 +26,7 @@ async function importPublicConfigModule(relativePath) {
   return import(pathToFileURL(outFile).href);
 }
 
-const { normalizePublicConfig, captchaEnabledForAction } = await importPublicConfigModule('src/api/publicConfig.ts');
+const { normalizePublicConfig, captchaEnabledForAction, humanCheckEnabledForAction } = await importPublicConfigModule('src/api/publicConfig.ts');
 
 test('normalizePublicConfig fills safe defaults', () => {
   const cfg = normalizePublicConfig({});
@@ -36,6 +36,7 @@ test('normalizePublicConfig fills safe defaults', () => {
   assert.equal(cfg.local_login.enabled, true);
   assert.deepEqual(cfg.external_providers, []);
   assert.equal(cfg.mailer.provider, 'console');
+  assert.deepEqual(cfg.human_check, { provider: '', actions: [] });
   assert.deepEqual(cfg.brand, {
     name: 'GoAuth',
     tagline: '',
@@ -75,4 +76,18 @@ test('captchaEnabledForAction follows runtime actions', () => {
   assert.equal(captchaEnabledForAction(cfg, 'LOGIN'), true);
   assert.deepEqual(cfg.captcha.actions, ['login']);
   assert.equal(captchaEnabledForAction(cfg, 'register'), false);
+});
+
+test('humanCheckEnabledForAction follows runtime actions', () => {
+  const cfg = normalizePublicConfig({
+    human_check: {
+      provider: 'slider',
+      actions: ['Register', 'REGISTER'],
+    },
+  });
+
+  assert.equal(humanCheckEnabledForAction(cfg, 'register'), true);
+  assert.equal(humanCheckEnabledForAction(cfg, 'REGISTER'), true);
+  assert.deepEqual(cfg.human_check.actions, ['register']);
+  assert.equal(humanCheckEnabledForAction(cfg, 'login'), false);
 });

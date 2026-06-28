@@ -65,6 +65,15 @@ CAPTCHA_SECRET_KEY=<secret-key>
 CAPTCHA_ACTIONS=login,register,email_code,password_forgot
 ```
 
+- Enable the self-hosted slider human check for open registration:
+
+```env
+HUMAN_CHECK_PROVIDER=slider
+HUMAN_CHECK_ACTIONS=register
+HUMAN_CHECK_CHALLENGE_TTL=2m
+HUMAN_CHECK_TOKEN_TTL=3m
+```
+
 ## Email
 
 - Set `MAILER_PROVIDER=smtp`.

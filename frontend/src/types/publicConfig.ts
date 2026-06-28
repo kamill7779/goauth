@@ -21,6 +21,10 @@ export interface PublicAuthConfig {
     site_key: string;
     actions: string[];
   };
+  human_check: {
+    provider: string;
+    actions: string[];
+  };
   external_providers: Array<{
     slug: string;
     display_name: string;

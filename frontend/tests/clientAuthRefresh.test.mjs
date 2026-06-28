@@ -137,3 +137,34 @@ test('public auth login 401 does not trigger token refresh', async () => {
     refresh_token: 'old-refresh',
   });
 });
+
+test('apiPost attaches captcha and human check headers', async () => {
+  const calls = [];
+  const { apiPostWithClient } = await importBundledTs('src/api/client.ts');
+  const { authClient } = createApiHttpClients({
+    apiBaseUrl: 'http://goauth.test',
+    storage: memoryStorage(),
+    adapter: async (config) => {
+      calls.push({
+        url: config.url,
+        captcha: config.headers?.['X-Captcha-Token'],
+        human: config.headers?.['X-Human-Token'],
+      });
+      return ok(config, { success: true, data: { registered: true } });
+    },
+  });
+
+  const response = await apiPostWithClient(authClient, '/register', { email: 'member@example.com' }, {
+    captchaToken: 'captcha-proof',
+    humanToken: 'human-proof',
+  });
+
+  assert.deepEqual(response, { registered: true });
+  assert.deepEqual(calls, [
+    {
+      url: '/register',
+      captcha: 'captcha-proof',
+      human: 'human-proof',
+    },
+  ]);
+});

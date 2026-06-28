@@ -16,6 +16,7 @@ export const defaultPublicConfig: PublicAuthConfig = {
   registration: { mode: 'open' },
   local_login: { enabled: true },
   captcha: { provider: '', site_key: '', actions: [] },
+  human_check: { provider: '', actions: [] },
   external_providers: [],
   password_policy: {
     min_length: 8,
@@ -37,6 +38,7 @@ export function normalizePublicConfig(input: unknown): PublicAuthConfig {
   const registration = asRecord(record.registration);
   const localLogin = asRecord(record.local_login);
   const captcha = asRecord(record.captcha);
+  const humanCheck = asRecord(record.human_check);
   const passwordPolicy = asRecord(record.password_policy);
   const mailer = asRecord(record.mailer);
   const brand = asRecord(record.brand);
@@ -60,6 +62,10 @@ export function normalizePublicConfig(input: unknown): PublicAuthConfig {
       site_key: stringValue(captcha.site_key),
       actions: captchaActions(captcha.actions),
     },
+    human_check: {
+      provider: stringValue(humanCheck.provider),
+      actions: captchaActions(humanCheck.actions),
+    },
     external_providers: externalProviders(record.external_providers),
     password_policy: {
       min_length: numberValue(passwordPolicy.min_length, defaultPublicConfig.password_policy.min_length),
@@ -82,6 +88,14 @@ export function captchaEnabledForAction(config: PublicAuthConfig | null | undefi
   const provider = config.captcha.provider.trim();
   const siteKey = config.captcha.site_key.trim();
   return Boolean(provider && siteKey && config.captcha.actions.includes(action.trim().toLowerCase()));
+}
+
+export function humanCheckEnabledForAction(config: PublicAuthConfig | null | undefined, action: string): boolean {
+  if (!config) {
+    return false;
+  }
+  const provider = config.human_check.provider.trim();
+  return Boolean(provider && config.human_check.actions.includes(action.trim().toLowerCase()));
 }
 
 function unwrapPublicConfig(body: unknown): unknown {

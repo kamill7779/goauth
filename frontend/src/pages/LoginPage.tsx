@@ -2,9 +2,10 @@ import { useState, useCallback, useEffect, FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { forgotPassword, login, register, resetPassword, sendEmailCode, startGitHubLogin, verifyLogin2FA } from '../api/auth'
 import { API_BASE_URL } from '../api/client'
-import { captchaEnabledForAction, defaultPublicConfig, getPublicConfig, normalizePublicConfig } from '../api/publicConfig'
+import { captchaEnabledForAction, defaultPublicConfig, getPublicConfig, humanCheckEnabledForAction, normalizePublicConfig } from '../api/publicConfig'
 import ThemeToggle from '../components/admin/ThemeToggle'
 import BrandMark from '../components/BrandMark'
+import SliderHumanCheck from '../components/auth/SliderHumanCheck'
 import TurnstileCaptcha from '../components/auth/TurnstileCaptcha'
 import type { LoginResponse, LoginTokenResponse, LoginTwoFactorChallengeResponse } from '../types/auth'
 import type { PublicAuthConfig } from '../types/publicConfig'
@@ -252,6 +253,7 @@ export default function LoginPage() {
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState('')
   const [pendingTwoFactor, setPendingTwoFactor] = useState<PendingTwoFactor | null>(null)
+  const [registerHumanToken, setRegisterHumanToken] = useState('')
 
   const authConfigState = buildAuthConfigViewState(authConfig, configLoading, configError)
   const visibility = authConfigState.visibility
@@ -345,6 +347,8 @@ export default function LoginPage() {
     }
   }, [authConfig, form.email])
 
+  const registerNeedsHumanCheck = authConfig ? humanCheckEnabledForAction(authConfig, 'register') : false
+
   const sendResetCode = useCallback(async () => {
     if (!authConfig) {
       setError('认证运行配置不可用，请稍后重试')
@@ -425,22 +429,30 @@ export default function LoginPage() {
 
     try {
       const captchaToken = await getCaptchaToken(authConfig, 'register')
+      const humanToken = registerNeedsHumanCheck ? registerHumanToken.trim() : undefined
+      if (registerNeedsHumanCheck && !humanToken) {
+        throw new Error('请先完成拖动安全验证')
+      }
       await register({
         username: form.username,
         nickname: form.nickname,
         email: form.email,
         password: form.password,
         email_code: form.emailCode,
-      }, { captchaToken })
+      }, { captchaToken, humanToken })
       setSuccess(isSSOLogin ? '注册成功，请使用新账户登录后继续' : '注册成功，请登录')
       setTab('login')
       setForm(prev => ({ ...initialForm, email: prev.email }))
+      setRegisterHumanToken('')
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
+      if (registerNeedsHumanCheck) {
+        setRegisterHumanToken('')
+      }
     } finally {
       setLoading(false)
     }
-  }, [authConfig, form, isSSOLogin])
+  }, [authConfig, form, isSSOLogin, registerHumanToken, registerNeedsHumanCheck])
 
   const handleForgotSubmit = useCallback(async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -527,6 +539,7 @@ export default function LoginPage() {
     setError('')
     setSuccess('')
     setPendingTwoFactor(null)
+    setRegisterHumanToken('')
     setForm({ ...initialForm, email: form.email })
   }, [form.email])
 
@@ -977,6 +990,16 @@ export default function LoginPage() {
                   </button>
                 </div>
               </div>
+
+              <SliderHumanCheck
+                enabled={registerNeedsHumanCheck}
+                token={registerHumanToken}
+                onToken={(token) => {
+                  setRegisterHumanToken(token)
+                  setError('')
+                }}
+                onError={setError}
+              />
 
               <button type="submit" disabled={authActionDisabled} style={btnPrimaryStyle(authActionDisabled)}>
                 {loading ? <><Spinner /> 创建中...</> : '创建账户'}

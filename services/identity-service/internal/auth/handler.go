@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"goauth/services/identity-service/internal/captcha"
 	httpserver "goauth/services/identity-service/internal/http"
+	"goauth/services/identity-service/internal/humancheck"
 	"goauth/services/identity-service/internal/ratelimit"
 	"goauth/services/identity-service/internal/session"
 )
@@ -25,6 +26,7 @@ type Handler struct {
 	rateLimiter     *ratelimit.Service
 	captchaVerifier *captcha.Verifier
 	captchaActions  map[string]struct{}
+	humanCheck      *humancheck.Service
 
 	registrationMode          string
 	localPasswordLoginEnabled bool
@@ -35,6 +37,7 @@ type HandlerDeps struct {
 	RateLimiter               *ratelimit.Service
 	CaptchaVerifier           *captcha.Verifier
 	CaptchaActions            []string
+	HumanCheck                *humancheck.Service
 	RegistrationMode          string
 	LocalPasswordLoginEnabled *bool
 }
@@ -43,6 +46,7 @@ type HandlerDeps struct {
 func (h *Handler) SetDeps(d HandlerDeps) {
 	h.rateLimiter = d.RateLimiter
 	h.captchaVerifier = d.CaptchaVerifier
+	h.humanCheck = d.HumanCheck
 	if len(d.CaptchaActions) > 0 {
 		h.captchaActions = captcha.ActionSet(d.CaptchaActions)
 	}
@@ -113,6 +117,21 @@ func (h *Handler) captchaMWFor(action string) gin.HandlerFunc {
 	return h.captchaMW()
 }
 
+func (h *Handler) humanMWFor(action string) gin.HandlerFunc {
+	if h.humanCheck == nil || !h.humanCheck.EnabledFor(action) {
+		return func(c *gin.Context) { c.Next() }
+	}
+	return func(c *gin.Context) {
+		token := strings.TrimSpace(c.GetHeader("X-Human-Token"))
+		if err := h.humanCheck.ConsumeToken(c.Request.Context(), token, action); err != nil {
+			httpserver.Error(c, stdhttp.StatusForbidden, err.Error())
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 // captchaActionEnabled reports whether CAPTCHA is active for the given action.
 func (h *Handler) captchaActionEnabled(action string) bool {
 	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
@@ -127,13 +146,12 @@ func (h *Handler) captchaActionEnabled(action string) bool {
 // Call chain: main → RegisterRoutes → captchaMWFor → handler methods
 func (h *Handler) RegisterRoutes(router gin.IRoutes) {
 	router.POST("/email/send-code", h.captchaMWFor("email_code"), h.sendCode)
-	router.POST("/register", h.captchaMWFor("register"), h.register)
+	router.POST("/register", h.captchaMWFor("register"), h.humanMWFor("register"), h.register)
 	router.POST("/login", h.captchaMWFor("login"), h.login)
 	router.POST("/login/2fa/verify", h.loginTwoFactorVerify)
 	router.POST("/password/forgot", h.captchaMWFor("password_forgot"), h.forgotPassword)
 	router.POST("/password/reset", h.resetPassword)
 }
-
 
 // sendCode sends a one-time verification code to the specified email address.
 //

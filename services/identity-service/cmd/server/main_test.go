@@ -210,6 +210,48 @@ func TestReadyzChecksDBAndRedisClients(t *testing.T) {
 	}
 }
 
+func TestBuildRouterRegistersHumanCheckRoutesWhenConfigured(t *testing.T) {
+	db, err := store.OpenDB(config.Config{})
+	if err != nil {
+		t.Fatalf("store.OpenDB() error = %v", err)
+	}
+	if err := store.AutoMigrate(db); err != nil {
+		t.Fatalf("store.AutoMigrate() error = %v", err)
+	}
+
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey() error = %v", err)
+	}
+	mini := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() {
+		_ = redisClient.Close()
+	})
+
+	router := buildRouter(config.Config{
+		JWTKeyID:                    "test-key",
+		AccessTokenTTL:              15 * time.Minute,
+		RefreshTokenTTL:             30 * 24 * time.Hour,
+		HumanCheckProvider:          "slider",
+		HumanCheckActions:           []string{"register"},
+		HumanCheckChallengeTTL:      2 * time.Minute,
+		HumanCheckTokenTTL:          3 * time.Minute,
+		HumanCheckSliderTolerancePX: 4,
+	}, db, redisClient, privateKey)
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/auth/human-check/slider", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "challenge") && !strings.Contains(recorder.Body.String(), "nonce") {
+		t.Fatalf("human check challenge response missing public fields: %s", recorder.Body.String())
+	}
+}
+
 func TestRequireRedisFailsWhenUnavailable(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
