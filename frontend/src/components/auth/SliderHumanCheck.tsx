@@ -20,11 +20,19 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
   const [loading, setLoading] = useState(false)
   const [verifying, setVerifying] = useState(false)
   const [offset, setOffset] = useState(0)
+  const [renderedWidth, setRenderedWidth] = useState(0)
   const [drag, setDrag] = useState<DragState | null>(null)
+  const imageFrameRef = useRef<HTMLDivElement | null>(null)
+  const offsetRef = useRef(0)
   const trackRef = useRef<SliderTrackPoint[]>([])
 
-  const maxOffset = Math.max(1, (challenge?.width ?? 320) - (challenge?.thumb_width ?? 42))
+  const challengeWidth = challenge?.width ?? 320
+  const safeRenderedWidth = renderedWidth > 0 ? renderedWidth : challengeWidth
+  const maxOffset = Math.max(1, challengeXToDisplayOffset((challenge?.width ?? 320) - (challenge?.thumb_width ?? 42), safeRenderedWidth, challengeWidth))
   const progress = token ? 100 : Math.round((offset / maxOffset) * 100)
+  const thumbDisplayWidth = challenge ? challengeXToDisplayOffset(challenge.thumb_width, safeRenderedWidth, challenge.width) : 42
+  const thumbDisplayHeight = challenge ? challengeXToDisplayOffset(challenge.thumb_height, safeRenderedWidth, challenge.width) : 42
+  const thumbDisplayY = challenge ? challengeXToDisplayOffset(challenge.thumb_y, safeRenderedWidth, challenge.width) : 0
 
   const resetChallenge = useCallback(async () => {
     if (!enabled) {
@@ -32,6 +40,7 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
     }
     setLoading(true)
     setOffset(0)
+    offsetRef.current = 0
     trackRef.current = []
     try {
       const next = await getSliderChallenge()
@@ -47,12 +56,35 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
     if (!enabled) {
       setChallenge(null)
       setOffset(0)
+      offsetRef.current = 0
       return
     }
     if (!token) {
       void resetChallenge()
     }
   }, [enabled, resetChallenge, token])
+
+  useEffect(() => {
+    if (!challenge || !imageFrameRef.current) {
+      setRenderedWidth(0)
+      return
+    }
+
+    const frame = imageFrameRef.current
+    const updateRenderedWidth = () => {
+      setRenderedWidth(frame.getBoundingClientRect().width)
+    }
+
+    updateRenderedWidth()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateRenderedWidth)
+      return () => window.removeEventListener('resize', updateRenderedWidth)
+    }
+
+    const observer = new ResizeObserver(updateRenderedWidth)
+    observer.observe(frame)
+    return () => observer.disconnect()
+  }, [challenge])
 
   const complete = useCallback(async (finalOffset: number) => {
     if (!challenge || token) {
@@ -64,7 +96,7 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
       const result = await verifySliderChallenge({
         challenge_id: challenge.id,
         nonce: challenge.nonce,
-        x: Math.round(finalOffset),
+        x: displayOffsetToChallengeX(finalOffset, safeRenderedWidth, challenge.width),
         y: challenge.thumb_y,
         elapsed_ms: elapsed,
         track: trackRef.current,
@@ -72,6 +104,7 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
       onToken(result.token)
     } catch (err) {
       setOffset(0)
+      offsetRef.current = 0
       trackRef.current = []
       onError(err instanceof Error ? err.message : '安全验证失败，请重试')
       void resetChallenge()
@@ -91,9 +124,14 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
       startClientY: event.clientY,
       startTime: startedAt,
     })
-    trackRef.current = [{ x: Math.round(offset), y: challenge.thumb_y, t: 0 }]
+    offsetRef.current = offset
+    trackRef.current = [{
+      x: displayOffsetToChallengeX(offset, safeRenderedWidth, challenge.width),
+      y: challenge.thumb_y,
+      t: 0,
+    }]
     event.currentTarget.setPointerCapture(event.pointerId)
-  }, [challenge, loading, offset, token, verifying])
+  }, [challenge, loading, offset, safeRenderedWidth, token, verifying])
 
   const onPointerMove = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     if (!drag || !challenge || event.pointerId !== drag.pointerId) {
@@ -101,12 +139,13 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
     }
     const nextOffset = clamp(event.clientX - drag.startClientX, 0, maxOffset)
     setOffset(nextOffset)
+    offsetRef.current = nextOffset
     trackRef.current.push({
-      x: Math.round(nextOffset),
-      y: Math.round(challenge.thumb_y + event.clientY - drag.startClientY),
+      x: displayOffsetToChallengeX(nextOffset, safeRenderedWidth, challenge.width),
+      y: Math.round(challenge.thumb_y + (event.clientY - drag.startClientY) / displayScale(safeRenderedWidth, challenge.width)),
       t: Math.round(performance.now() - drag.startTime),
     })
-  }, [challenge, drag, maxOffset])
+  }, [challenge, drag, maxOffset, safeRenderedWidth])
 
   const onPointerUp = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     if (!drag || event.pointerId !== drag.pointerId) {
@@ -114,8 +153,8 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
     }
     setDrag(null)
     event.currentTarget.releasePointerCapture(event.pointerId)
-    void complete(lastTrackPoint(trackRef.current)?.x ?? offset)
-  }, [complete, drag, offset])
+    void complete(offsetRef.current)
+  }, [complete, drag])
 
   if (!enabled) {
     return null
@@ -133,7 +172,7 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
         </button>
       </div>
 
-      <div style={{ ...imageFrameStyle, aspectRatio: challenge ? `${challenge.width} / ${challenge.height}` : '2 / 1' }}>
+      <div ref={imageFrameRef} style={{ ...imageFrameStyle, aspectRatio: challenge ? `${challenge.width} / ${challenge.height}` : '2 / 1' }}>
         {challenge ? (
           <>
             <img src={challenge.image} alt="" draggable={false} style={imageStyle} />
@@ -143,9 +182,9 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
               draggable={false}
               style={{
                 ...thumbImageStyle,
-                width: `${challenge.thumb_width}px`,
-                height: `${challenge.thumb_height}px`,
-                transform: `translate(${offset}px, ${challenge.thumb_y}px)`,
+                width: `${thumbDisplayWidth}px`,
+                height: `${thumbDisplayHeight}px`,
+                transform: `translate(${offset}px, ${thumbDisplayY}px)`,
               }}
             />
           </>
@@ -185,6 +224,21 @@ export default function SliderHumanCheck({ enabled, token, onToken, onError }: S
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
+}
+
+function displayScale(renderedWidth: number, challengeWidth: number): number {
+  if (renderedWidth <= 0 || challengeWidth <= 0) {
+    return 1
+  }
+  return renderedWidth / challengeWidth
+}
+
+export function displayOffsetToChallengeX(displayOffset: number, renderedWidth: number, challengeWidth: number): number {
+  return Math.round(displayOffset / displayScale(renderedWidth, challengeWidth))
+}
+
+export function challengeXToDisplayOffset(challengeX: number, renderedWidth: number, challengeWidth: number): number {
+  return challengeX * displayScale(renderedWidth, challengeWidth)
 }
 
 function lastTrackPoint(track: SliderTrackPoint[]): SliderTrackPoint | undefined {

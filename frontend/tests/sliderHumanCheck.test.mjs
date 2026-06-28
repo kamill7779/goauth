@@ -64,6 +64,11 @@ async function importSlider(relativePath) {
 const sliderModule = await importSlider('src/components/auth/SliderHumanCheck.tsx');
 const SliderHumanCheck = sliderModule.default?.default ?? sliderModule.default;
 
+test('displayOffsetToChallengeX maps rendered CSS pixels back to challenge coordinates', () => {
+  assert.equal(sliderModule.displayOffsetToChallengeX(188, 376, 320), 160);
+  assert.notEqual(sliderModule.displayOffsetToChallengeX(188, 376, 320), 188);
+});
+
 test('SliderHumanCheck renders an accessible verification control', () => {
   const html = renderToStaticMarkup(React.createElement(SliderHumanCheck, {
     enabled: true,
